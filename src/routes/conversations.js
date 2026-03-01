@@ -67,7 +67,7 @@ router.post('/:id/messages', async (req, res) => {
   const msgIndex = conv.messages.length - 1;
 
   const abortController = new AbortController();
-  req.on('close', () => abortController.abort());
+  res.on('close', () => abortController.abort());
 
   let accumulated = '';
 

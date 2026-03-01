@@ -95,10 +95,9 @@ function renderSidebar() {
     const title = document.createElement('span');
     title.className = 'flex-1 text-sm truncate ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
     title.textContent = conv.title;
-    title.addEventListener('click', () => switchConversation(conv.id));
 
     const delBtn = document.createElement('button');
-    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     delBtn.textContent = '✕';
     let confirmTimeout = null;
     delBtn.addEventListener('click', (e) => {
@@ -108,16 +107,17 @@ function renderSidebar() {
         deleteConversation(conv.id);
       } else {
         delBtn.dataset.confirm = '1';
-        delBtn.textContent = '?';
-        delBtn.className = 'text-red-400 text-xs shrink-0 font-bold';
+        delBtn.textContent = 'Delete?';
+        delBtn.className = 'text-red-400 text-xs px-2 py-0.5 rounded bg-red-400/10 shrink-0 font-medium';
         confirmTimeout = setTimeout(() => {
           delete delBtn.dataset.confirm;
           delBtn.textContent = '✕';
-          delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
-        }, 2000);
+          delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+        }, 3000);
       }
     });
 
+    item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
     item.appendChild(delBtn);
     sidebar.appendChild(item);
@@ -282,6 +282,7 @@ async function sendMessage(content) {
 
 // ── Context bar ───────────────────────────────────────
 function updateContextBar(tokens) {
+  state.lastTokenCount = tokens;
   const pct = Math.min(100, (tokens / state.maxContext) * 100);
   contextBar.style.width = pct + '%';
 
@@ -326,6 +327,13 @@ async function refreshSlots() {
     slotsToggle.classList.remove('hidden');
     const idle = slotsData.filter(s => s.state === 0).length;
     slotsSummary.textContent = `${idle}/${slotsData.length} idle`;
+
+    // Update max context from actual slot data
+    const maxCtx = slotsData[0]?.n_ctx;
+    if (maxCtx && maxCtx !== state.maxContext) {
+      state.maxContext = maxCtx;
+      updateContextBar(state.lastTokenCount || 0);
+    }
 
     if (slotPanelOpen) renderSlotCards(slotsData);
   } catch {
@@ -414,7 +422,14 @@ newChatBtn.addEventListener('click', async () => {
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const content = input.value.trim();
-  if (!content || !state.currentConversationId) return;
+  if (!content) return;
+  if (!state.currentConversationId) {
+    const conv = await api.createConversation();
+    state.currentConversationId = conv.id;
+    await refreshSidebar();
+    renderMessages([]);
+    updateContextBar(0);
+  }
   input.value = '';
   input.style.height = 'auto';
   await sendMessage(content);
