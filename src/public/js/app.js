@@ -153,6 +153,159 @@ function showEmptyState() {
   updateContextBar(0);
 }
 
+// ── Code block rendering ─────────────────────────────
+function langToExtension(lang) {
+  const map = {
+    rust: 'rs', python: 'py', javascript: 'js', typescript: 'ts',
+    ruby: 'rb', golang: 'go', go: 'go', csharp: 'cs', cpp: 'cpp',
+    c: 'c', java: 'java', kotlin: 'kt', swift: 'swift', bash: 'sh',
+    shell: 'sh', zsh: 'sh', html: 'html', css: 'css', json: 'json',
+    yaml: 'yaml', yml: 'yaml', toml: 'toml', sql: 'sql', lua: 'lua',
+    perl: 'pl', php: 'php', r: 'r', scala: 'scala', zig: 'zig',
+    elixir: 'ex', erlang: 'erl', haskell: 'hs', ocaml: 'ml',
+    markdown: 'md', xml: 'xml', dockerfile: 'Dockerfile', make: 'Makefile',
+  };
+  return map[lang?.toLowerCase()] || lang || 'txt';
+}
+
+function parseSegments(text) {
+  const segments = [];
+  const re = /^```(\w*)\s*$/gm;
+  let lastIndex = 0;
+  let openMatch = null;
+
+  for (const match of text.matchAll(re)) {
+    if (!openMatch) {
+      // Opening fence
+      if (match.index > lastIndex) {
+        segments.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+      }
+      openMatch = match;
+    } else {
+      // Closing fence
+      const code = text.slice(openMatch.index + openMatch[0].length + 1, match.index);
+      segments.push({ type: 'code', lang: openMatch[1] || '', content: code });
+      openMatch = null;
+    }
+    lastIndex = match.index + match[0].length + 1;
+  }
+
+  // Unclosed fence = pending
+  if (openMatch) {
+    const code = text.slice(openMatch.index + openMatch[0].length + 1);
+    segments.push({ type: 'code-pending', lang: openMatch[1] || '', content: code });
+  } else if (lastIndex < text.length) {
+    segments.push({ type: 'text', content: text.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
+function renderFormattedContent(text, container) {
+  container.innerHTML = '';
+  const segments = parseSegments(text);
+
+  for (const seg of segments) {
+    if (seg.type === 'text') {
+      const span = document.createElement('span');
+      span.textContent = seg.content;
+      container.appendChild(span);
+    } else {
+      const isPending = seg.type === 'code-pending';
+      const wrapper = document.createElement('div');
+      wrapper.className = 'code-block-wrapper' + (isPending ? ' code-block-pending' : '');
+
+      // Toolbar
+      const toolbar = document.createElement('div');
+      toolbar.className = 'code-block-toolbar';
+
+      const langLabel = document.createElement('span');
+      langLabel.textContent = (seg.lang || 'code') + (isPending ? ' (streaming…)' : '');
+      toolbar.appendChild(langLabel);
+
+      if (!isPending) {
+        const btnGroup = document.createElement('span');
+        btnGroup.className = 'flex gap-1';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(seg.content).then(() => {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+          });
+        });
+
+        const saveBtn = document.createElement('button');
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', () => {
+          const ext = langToExtension(seg.lang);
+          const blob = new Blob([seg.content], { type: 'text/plain' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `code.${ext}`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        });
+
+        btnGroup.appendChild(copyBtn);
+        btnGroup.appendChild(saveBtn);
+        toolbar.appendChild(btnGroup);
+      }
+
+      wrapper.appendChild(toolbar);
+
+      // Code block
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      if (seg.lang) code.className = `language-${seg.lang}`;
+
+      if (!isPending && typeof hljs !== 'undefined' && seg.lang) {
+        try {
+          const result = hljs.highlight(seg.content, { language: seg.lang, ignoreIllegals: true });
+          code.innerHTML = result.value;
+          code.classList.add('hljs');
+        } catch {
+          code.textContent = seg.content;
+        }
+      } else if (!isPending && typeof hljs !== 'undefined') {
+        try {
+          const result = hljs.highlightAuto(seg.content);
+          code.innerHTML = result.value;
+          code.classList.add('hljs');
+        } catch {
+          code.textContent = seg.content;
+        }
+      } else {
+        code.textContent = seg.content;
+        if (!isPending) code.classList.add('hljs');
+      }
+
+      pre.appendChild(code);
+      wrapper.appendChild(pre);
+      container.appendChild(wrapper);
+    }
+  }
+}
+
+let _renderTimer = null;
+let _lastRenderTime = 0;
+const RENDER_INTERVAL = 80;
+
+function scheduleRender(text, container) {
+  const now = Date.now();
+  if (now - _lastRenderTime >= RENDER_INTERVAL) {
+    _lastRenderTime = now;
+    renderFormattedContent(text, container);
+    return;
+  }
+  clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(() => {
+    _lastRenderTime = Date.now();
+    renderFormattedContent(text, container);
+  }, RENDER_INTERVAL - (now - _lastRenderTime));
+}
+
 // ── Messages ──────────────────────────────────────────
 function renderMessages(messages) {
   responseArea.innerHTML = '';
@@ -173,10 +326,14 @@ function appendMessage(role, text) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words';
   }
 
-  bubble.textContent = text;
+  if (role === 'assistant' && text) {
+    renderFormattedContent(text, bubble);
+  } else {
+    bubble.textContent = text;
+  }
   wrapper.appendChild(bubble);
   responseArea.appendChild(wrapper);
   responseArea.scrollTop = responseArea.scrollHeight;
@@ -211,6 +368,8 @@ async function sendMessage(content) {
   state.abortController = new AbortController();
   let accumulated = '';
   let accumulatedReasoning = '';
+  _lastRenderTime = 0;
+  clearTimeout(_renderTimer);
 
   try {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/messages`, {
@@ -219,6 +378,9 @@ async function sendMessage(content) {
       body: JSON.stringify({ content }),
       signal: state.abortController.signal,
     });
+
+    // Refresh slots shortly after backend assigns slot
+    setTimeout(refreshSlots, 500);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -251,7 +413,7 @@ async function sendMessage(content) {
             if (data.content) {
               if (hasReasoning) reasoningSummary.textContent = 'Thought process';
               accumulated += data.content;
-              contentSpan.textContent = accumulated;
+              scheduleRender(accumulated, contentSpan);
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.usage) {
@@ -272,11 +434,14 @@ async function sendMessage(content) {
       bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
+    clearTimeout(_renderTimer);
+    if (accumulated) renderFormattedContent(accumulated, contentSpan);
     state.abortController = null;
     sendBtn.disabled = false;
     input.focus();
-    // Refresh sidebar to pick up auto-title
+    // Refresh sidebar to pick up auto-title, slots to clear active state
     refreshSidebar();
+    refreshSlots();
   }
 }
 
@@ -325,8 +490,13 @@ async function refreshSlots() {
       return;
     }
     slotsToggle.classList.remove('hidden');
-    const idle = slotsData.filter(s => s.state === 0).length;
-    slotsSummary.textContent = `${idle}/${slotsData.length} idle`;
+    const active = slotsData.filter(s => s.is_processing);
+    if (active.length === 0) {
+      slotsSummary.textContent = 'all idle';
+    } else {
+      const ids = active.map(s => `#${s.id}`).join(', ');
+      slotsSummary.textContent = `${ids} active`;
+    }
 
     // Update max context from actual slot data
     const maxCtx = slotsData[0]?.n_ctx;
@@ -347,8 +517,8 @@ function renderSlotCards(slotsData) {
     const card = document.createElement('div');
     card.className = 'bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-xs min-w-[160px]';
 
-    const stateLabel = slot.state === 0 ? 'Idle' : 'Processing';
-    const stateColor = slot.state === 0 ? 'text-green-400' : 'text-amber-400';
+    const stateLabel = !slot.is_processing ? 'Idle' : 'Processing';
+    const stateColor = !slot.is_processing ? 'text-green-400' : 'text-amber-400';
 
     let cacheHtml = '';
     if (slot.n_ctx) {

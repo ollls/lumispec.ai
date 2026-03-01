@@ -47,7 +47,7 @@ function assignSlot(convId) {
 
   // Find an idle slot not currently mapped
   for (const slot of cachedSlots) {
-    if (!slotConversationMap.has(slot.id) && slot.state === 0) {
+    if (!slotConversationMap.has(slot.id) && !slot.is_processing) {
       conversationSlotMap.set(convId, slot.id);
       slotConversationMap.set(slot.id, convId);
       return slot.id;
