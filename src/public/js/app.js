@@ -1,48 +1,395 @@
+// ── State ──────────────────────────────────────────────
+const state = {
+  currentConversationId: null,
+  conversations: [],
+  abortController: null,
+  healthy: false,
+  maxContext: 131072,
+};
+
+// ── DOM refs ──────────────────────────────────────────
+const sidebar = document.getElementById('conversation-list');
+const newChatBtn = document.getElementById('new-chat-btn');
+const responseArea = document.getElementById('response-area');
+const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
 const input = document.getElementById('prompt-input');
-const modelSelect = document.getElementById('model-select');
-const responseArea = document.getElementById('response-area');
+const sendBtn = document.getElementById('send-btn');
+const healthDot = document.getElementById('health-dot');
+const healthLabel = document.getElementById('health-label');
+const slotsToggle = document.getElementById('slots-toggle');
+const slotsSummary = document.getElementById('slots-summary');
+const slotPanel = document.getElementById('slot-panel');
+const slotCards = document.getElementById('slot-cards');
+const contextBar = document.getElementById('context-bar');
+const contextLabel = document.getElementById('context-label');
 
-let firstMessage = true;
+// ── API layer ─────────────────────────────────────────
+const api = {
+  async listConversations() {
+    const res = await fetch('/api/conversations');
+    return res.json();
+  },
+  async createConversation(title) {
+    const res = await fetch('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return res.json();
+  },
+  async getConversation(id) {
+    const res = await fetch(`/api/conversations/${id}`);
+    return res.json();
+  },
+  async deleteConversation(id) {
+    await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+  },
+  async updateTitle(id, title) {
+    const res = await fetch(`/api/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return res.json();
+  },
+  async checkHealth() {
+    const res = await fetch('/api/health');
+    return { ok: res.ok, data: await res.json() };
+  },
+  async fetchSlots() {
+    const res = await fetch('/api/slots');
+    return res.json();
+  },
+  async pinSlot(conversationId, slotId) {
+    await fetch('/api/slots/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId, slotId }),
+    });
+  },
+  async unpinSlot(conversationId) {
+    await fetch('/api/slots/unpin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId }),
+    });
+  },
+};
+
+// ── Sidebar ───────────────────────────────────────────
+async function refreshSidebar() {
+  state.conversations = await api.listConversations();
+  renderSidebar();
+}
+
+function renderSidebar() {
+  sidebar.innerHTML = '';
+  for (const conv of state.conversations) {
+    const item = document.createElement('div');
+    const isActive = conv.id === state.currentConversationId;
+    item.className = `group flex items-center gap-2 px-4 py-3 cursor-pointer border-b border-zinc-800/50 transition-colors ${
+      isActive ? 'bg-zinc-800/70' : 'hover:bg-zinc-900'
+    }`;
+
+    const title = document.createElement('span');
+    title.className = 'flex-1 text-sm truncate ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
+    title.textContent = conv.title;
+    title.addEventListener('click', () => switchConversation(conv.id));
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    let confirmTimeout = null;
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (delBtn.dataset.confirm) {
+        clearTimeout(confirmTimeout);
+        deleteConversation(conv.id);
+      } else {
+        delBtn.dataset.confirm = '1';
+        delBtn.textContent = '?';
+        delBtn.className = 'text-red-400 text-xs shrink-0 font-bold';
+        confirmTimeout = setTimeout(() => {
+          delete delBtn.dataset.confirm;
+          delBtn.textContent = '✕';
+          delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+        }, 2000);
+      }
+    });
+
+    item.appendChild(title);
+    item.appendChild(delBtn);
+    sidebar.appendChild(item);
+  }
+}
+
+async function switchConversation(id) {
+  if (id === state.currentConversationId) return;
+  // Abort any in-flight stream
+  if (state.abortController) state.abortController.abort();
+
+  state.currentConversationId = id;
+  renderSidebar();
+
+  const conv = await api.getConversation(id);
+  renderMessages(conv.messages);
+  updateContextBar(conv.tokenCount);
+}
+
+async function deleteConversation(id) {
+  await api.deleteConversation(id);
+  if (state.currentConversationId === id) {
+    state.currentConversationId = null;
+    showEmptyState();
+  }
+  refreshSidebar();
+}
+
+function showEmptyState() {
+  responseArea.innerHTML = '';
+  responseArea.appendChild(emptyState);
+  emptyState.classList.remove('hidden');
+  updateContextBar(0);
+}
+
+// ── Messages ──────────────────────────────────────────
+function renderMessages(messages) {
+  responseArea.innerHTML = '';
+  emptyState.classList.add('hidden');
+  for (const msg of messages) {
+    appendMessage(msg.role, msg.content);
+  }
+}
+
+function appendMessage(role, text) {
+  emptyState.classList.add('hidden');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+
+  const bubble = document.createElement('div');
+  if (role === 'user') {
+    bubble.className = 'max-w-[80%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+  } else if (role === 'error') {
+    bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+  } else {
+    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+  }
+
+  bubble.textContent = text;
+  wrapper.appendChild(bubble);
+  responseArea.appendChild(wrapper);
+  responseArea.scrollTop = responseArea.scrollHeight;
+  return bubble;
+}
+
+// ── Streaming ─────────────────────────────────────────
+async function sendMessage(content) {
+  if (!state.currentConversationId) return;
+
+  appendMessage('user', content);
+  const bubble = appendMessage('assistant', '');
+  sendBtn.disabled = true;
+
+  state.abortController = new AbortController();
+  let accumulated = '';
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+      signal: state.abortController.signal,
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const data = JSON.parse(payload);
+            if (data.content) {
+              accumulated += data.content;
+              bubble.textContent = accumulated;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+            if (data.usage) {
+              const total = data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
+              updateContextBar(total);
+            }
+            if (data.error) {
+              bubble.textContent = `[Error: ${data.error}]`;
+              bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      bubble.textContent = `[Error: ${err.message}]`;
+      bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+    }
+  } finally {
+    state.abortController = null;
+    sendBtn.disabled = false;
+    input.focus();
+    // Refresh sidebar to pick up auto-title
+    refreshSidebar();
+  }
+}
+
+// ── Context bar ───────────────────────────────────────
+function updateContextBar(tokens) {
+  const pct = Math.min(100, (tokens / state.maxContext) * 100);
+  contextBar.style.width = pct + '%';
+
+  // Format token count
+  const fmt = tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'K' : String(tokens);
+  const max = (state.maxContext / 1000).toFixed(0) + 'K';
+  contextLabel.textContent = `${fmt} / ${max}`;
+
+  // Color shift
+  contextBar.classList.remove('bg-indigo-500', 'bg-amber-500', 'bg-red-500');
+  if (pct > 90) contextBar.classList.add('bg-red-500');
+  else if (pct > 75) contextBar.classList.add('bg-amber-500');
+  else contextBar.classList.add('bg-indigo-500');
+}
+
+// ── Health polling ────────────────────────────────────
+async function pollHealth() {
+  try {
+    const { ok, data } = await api.checkHealth();
+    state.healthy = ok;
+    healthDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    healthLabel.textContent = ok ? 'Connected' : 'Disconnected';
+    healthLabel.className = ok ? 'text-green-500' : 'text-red-400';
+  } catch {
+    state.healthy = false;
+    healthDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
+    healthLabel.textContent = 'Disconnected';
+    healthLabel.className = 'text-red-400';
+  }
+}
+
+// ── Slot panel ────────────────────────────────────────
+let slotPanelOpen = false;
+
+async function refreshSlots() {
+  try {
+    const slotsData = await api.fetchSlots();
+    if (slotsData.length === 0) {
+      slotsToggle.classList.add('hidden');
+      return;
+    }
+    slotsToggle.classList.remove('hidden');
+    const idle = slotsData.filter(s => s.state === 0).length;
+    slotsSummary.textContent = `${idle}/${slotsData.length} idle`;
+
+    if (slotPanelOpen) renderSlotCards(slotsData);
+  } catch {
+    slotsToggle.classList.add('hidden');
+  }
+}
+
+function renderSlotCards(slotsData) {
+  slotCards.innerHTML = '';
+  for (const slot of slotsData) {
+    const card = document.createElement('div');
+    card.className = 'bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-xs min-w-[160px]';
+
+    const stateLabel = slot.state === 0 ? 'Idle' : 'Processing';
+    const stateColor = slot.state === 0 ? 'text-green-400' : 'text-amber-400';
+
+    let cacheHtml = '';
+    if (slot.n_ctx) {
+      const used = slot.n_past || 0;
+      const pct = Math.min(100, (used / slot.n_ctx) * 100);
+      cacheHtml = `
+        <div class="mt-2">
+          <div class="flex justify-between text-zinc-500 mb-1">
+            <span>Cache</span><span>${used}/${slot.n_ctx}</span>
+          </div>
+          <div class="w-full h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+            <div class="h-full bg-indigo-500 rounded-full" style="width:${pct}%"></div>
+          </div>
+        </div>`;
+    }
+
+    const convName = slot.conversationId
+      ? (state.conversations.find(c => c.id === slot.conversationId)?.title || 'Unknown')
+      : 'None';
+
+    card.innerHTML = `
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-medium text-zinc-300">Slot ${slot.id}</span>
+        <span class="${stateColor}">${stateLabel}</span>
+      </div>
+      <div class="text-zinc-500">Conv: <span class="text-zinc-400">${convName}</span></div>
+      ${cacheHtml}
+      <div class="mt-2 flex gap-1">
+        ${slot.conversationId
+          ? `<button data-action="unpin" data-conv="${slot.conversationId}" class="text-zinc-500 hover:text-zinc-300 transition-colors">Unpin</button>`
+          : state.currentConversationId
+            ? `<button data-action="pin" data-slot="${slot.id}" class="text-zinc-500 hover:text-zinc-300 transition-colors">Pin current</button>`
+            : ''
+        }
+      </div>`;
+
+    slotCards.appendChild(card);
+  }
+
+  // Attach pin/unpin handlers
+  slotCards.querySelectorAll('[data-action="pin"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api.pinSlot(state.currentConversationId, parseInt(btn.dataset.slot));
+      refreshSlots();
+    });
+  });
+  slotCards.querySelectorAll('[data-action="unpin"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api.unpinSlot(btn.dataset.conv);
+      refreshSlots();
+    });
+  });
+}
+
+slotsToggle.addEventListener('click', () => {
+  slotPanelOpen = !slotPanelOpen;
+  slotPanel.classList.toggle('hidden', !slotPanelOpen);
+  if (slotPanelOpen) refreshSlots();
+});
+
+// ── Event handlers ────────────────────────────────────
+newChatBtn.addEventListener('click', async () => {
+  const conv = await api.createConversation();
+  state.currentConversationId = conv.id;
+  await refreshSidebar();
+  renderMessages([]);
+  updateContextBar(0);
+  input.focus();
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-
-  const prompt = input.value.trim();
-  if (!prompt) return;
-
-  if (firstMessage) {
-    responseArea.innerHTML = '';
-    firstMessage = false;
-  }
-
-  appendMessage('user', prompt);
+  const content = input.value.trim();
+  if (!content || !state.currentConversationId) return;
   input.value = '';
   input.style.height = 'auto';
-
-  const sendBtn = form.querySelector('button[type="submit"]');
-  sendBtn.disabled = true;
-
-  try {
-    const res = await fetch('/api/prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, model: modelSelect.value }),
-    });
-
-    const data = await res.json();
-
-    if (res.ok) {
-      appendMessage('assistant', data.response);
-    } else {
-      appendMessage('error', data.error || 'Something went wrong.');
-    }
-  } catch (err) {
-    appendMessage('error', 'Failed to connect to server.');
-  } finally {
-    sendBtn.disabled = false;
-    input.focus();
-  }
+  await sendMessage(content);
 });
 
 // Auto-resize textarea
@@ -59,24 +406,11 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-function appendMessage(role, text) {
-  const wrapper = document.createElement('div');
-  wrapper.className = role === 'user'
-    ? 'flex justify-end'
-    : 'flex justify-start';
-
-  const bubble = document.createElement('div');
-
-  if (role === 'user') {
-    bubble.className = 'max-w-[80%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed';
-  } else if (role === 'error') {
-    bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
-  } else {
-    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed';
-  }
-
-  bubble.textContent = text;
-  wrapper.appendChild(bubble);
-  responseArea.appendChild(wrapper);
-  responseArea.scrollTop = responseArea.scrollHeight;
-}
+// ── Init ──────────────────────────────────────────────
+(async function init() {
+  await refreshSidebar();
+  pollHealth();
+  setInterval(pollHealth, 5000);
+  refreshSlots();
+  setInterval(refreshSlots, 5000);
+})();

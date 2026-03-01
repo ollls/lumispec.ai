@@ -6,53 +6,73 @@
   <title>LLM Workbench</title>
   <link rel="stylesheet" href="/css/output.css">
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col">
+<body class="bg-zinc-950 text-zinc-100 h-screen flex overflow-hidden">
 
-  <!-- Header -->
-  <header class="border-b border-zinc-800 px-6 py-4">
-    <div class="max-w-4xl mx-auto flex items-center justify-between">
-      <h1 class="text-lg font-semibold tracking-tight">LLM Workbench</h1>
-      <span class="text-xs text-zinc-500">v0.1.0</span>
+  <!-- Sidebar -->
+  <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
+    <div class="px-4 py-4 border-b border-zinc-800">
+      <button id="new-chat-btn"
+        class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+        + New Chat
+      </button>
     </div>
-  </header>
+    <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
+    </div>
+  </aside>
 
-  <!-- Main content -->
-  <main class="flex-1 flex flex-col max-w-4xl w-full mx-auto px-6 py-8">
+  <!-- Main area -->
+  <div class="flex-1 flex flex-col min-w-0">
 
-    <!-- Response area -->
-    <div id="response-area" class="flex-1 mb-6 space-y-4 overflow-y-auto">
-      <div class="text-zinc-500 text-sm text-center py-20">
-        Send a prompt to get started.
+    <!-- Status bar -->
+    <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs">
+      <div class="flex items-center gap-2">
+        <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
+        <span id="health-label" class="text-zinc-500">Connecting…</span>
+      </div>
+      <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
+        Slots: <span id="slots-summary">—</span>
+      </button>
+      <div class="ml-auto flex items-center gap-2">
+        <span class="text-zinc-500">Context:</span>
+        <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
+          <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
+        </div>
+        <span id="context-label" class="text-zinc-500">0 / 131K</span>
+      </div>
+    </header>
+
+    <!-- Slot panel (collapsible) -->
+    <div id="slot-panel" class="border-b border-zinc-800 px-4 py-3 hidden">
+      <div id="slot-cards" class="flex gap-3 flex-wrap"></div>
+    </div>
+
+    <!-- Chat area -->
+    <div id="response-area" class="flex-1 overflow-y-auto px-6 py-6 space-y-4 slim-scrollbar">
+      <div id="empty-state" class="text-zinc-500 text-sm text-center py-20">
+        Create or select a conversation to get started.
       </div>
     </div>
 
-    <!-- Prompt input -->
-    <form id="prompt-form" class="border border-zinc-800 rounded-xl bg-zinc-900 p-4 shadow-lg">
-      <textarea
-        id="prompt-input"
-        name="prompt"
-        rows="3"
-        placeholder="Type your prompt here..."
-        class="w-full bg-transparent text-zinc-100 placeholder-zinc-600 resize-none outline-none text-sm leading-relaxed"
-      ></textarea>
-      <div class="flex items-center justify-between mt-3 pt-3 border-t border-zinc-800">
-        <div class="flex items-center gap-3">
-          <select
-            id="model-select"
-            class="bg-zinc-800 text-zinc-300 text-xs rounded-lg px-3 py-1.5 border border-zinc-700 outline-none focus:border-zinc-500"
-          >
-            <option value="placeholder">Placeholder</option>
-          </select>
-        </div>
+    <!-- Input form -->
+    <form id="prompt-form" class="border-t border-zinc-800 bg-zinc-900 p-4">
+      <div class="max-w-4xl mx-auto flex gap-3 items-end">
+        <textarea
+          id="prompt-input"
+          name="prompt"
+          rows="2"
+          placeholder="Type your message…"
+          class="flex-1 bg-zinc-800 text-zinc-100 placeholder-zinc-600 resize-none outline-none text-sm leading-relaxed rounded-lg px-4 py-3 border border-zinc-700 focus:border-zinc-500 slim-scrollbar"
+        ></textarea>
         <button
           type="submit"
-          class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          id="send-btn"
+          class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Send
         </button>
       </div>
     </form>
-  </main>
+  </div>
 
 </body>
 <script src="/js/app.js"></script>
