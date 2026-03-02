@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
+import { collectChatCompletion } from '../services/llm.js';
+import { getSystemPrompt, parseToolCall, executeTool } from '../services/tools.js';
 
 const router = Router();
 
@@ -69,44 +70,54 @@ router.post('/:id/messages', async (req, res) => {
   const abortController = new AbortController();
   res.on('close', () => abortController.abort());
 
-  let accumulated = '';
-
   try {
-    const upstream = await streamChatCompletion(conv.messages.slice(0, -1), {
-      slotId,
-      signal: abortController.signal,
-    });
+    // Build messages with system prompt for tool support
+    const systemPrompt = getSystemPrompt();
+    const llmMessages = [
+      { role: 'system', content: systemPrompt },
+      ...conv.messages.slice(0, -1), // exclude assistant placeholder
+    ];
 
-    for await (const chunk of parseSSEChunks(upstream)) {
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) continue;
+    const MAX_TOOL_ROUNDS = 5;
+    let finalContent = '';
+    let lastUsage = null;
 
-      // Reasoning content (thinking models like Qwen3)
-      if (delta.reasoning_content) {
-        res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const result = await collectChatCompletion(llmMessages, {
+        slotId,
+        signal: abortController.signal,
+      });
+
+      if (result.usage) lastUsage = result.usage;
+
+      const toolCall = parseToolCall(result.content);
+      if (toolCall) {
+        const toolResult = executeTool(toolCall.name, toolCall.arguments);
+        // Send tool_use event to client
+        res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
+        // Append assistant tool call + tool result to messages for next round
+        llmMessages.push({ role: 'assistant', content: result.content });
+        llmMessages.push({ role: 'user', content: `Tool "${toolCall.name}" result: ${toolResult}` });
+      } else {
+        // Final answer — no tool call
+        finalContent = result.content;
+        break;
       }
+    }
 
-      // Regular content
-      if (delta.content) {
-        accumulated += delta.content;
-        conversations.updateMessageContent(conv.id, msgIndex, accumulated);
-        res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
-      }
+    // Send final content as a single event
+    if (finalContent) {
+      conversations.updateMessageContent(conv.id, msgIndex, finalContent);
+      res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
+    }
 
-      // Usage info on final chunk (llama.cpp sends timings, not usage)
-      const timings = chunk.timings || chunk.usage;
-      if (timings) {
-        const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
-        const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
-        const total = timings.total_tokens ?? (prompt + predicted);
-        conversations.setTokenCount(conv.id, total);
-        res.write(`data: ${JSON.stringify({ usage: { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: total } })}\n\n`);
-      }
+    if (lastUsage) {
+      conversations.setTokenCount(conv.id, lastUsage.total_tokens);
+      res.write(`data: ${JSON.stringify({ usage: lastUsage })}\n\n`);
     }
   } catch (err) {
     if (err.name !== 'AbortError') {
       const errMsg = err.message || 'LLM request failed';
-      // Update assistant message with error
       conversations.updateMessageContent(conv.id, msgIndex, `[Error: ${errMsg}]`);
       res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
     }

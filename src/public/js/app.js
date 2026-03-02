@@ -365,7 +365,12 @@ async function sendMessage(content) {
   bubble.textContent = '';
   bubble.appendChild(contentSpan);
 
+  // Tool use indicator container (inserted before content)
+  const toolUseContainer = document.createElement('div');
+  toolUseContainer.className = 'tool-use-container';
+
   let hasReasoning = false;
+  let hasToolUse = false;
 
   state.abortController = new AbortController();
   let accumulated = '';
@@ -410,6 +415,24 @@ async function sendMessage(content) {
               }
               accumulatedReasoning += data.reasoning;
               reasoningBody.textContent = accumulatedReasoning;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+            if (data.tool_use) {
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              const detail = document.createElement('details');
+              detail.className = 'mb-2 text-zinc-500 text-xs';
+              const summary = document.createElement('summary');
+              summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>`;
+              const body = document.createElement('pre');
+              body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+              body.textContent = data.tool_use.result;
+              detail.appendChild(summary);
+              detail.appendChild(body);
+              toolUseContainer.appendChild(detail);
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.content) {

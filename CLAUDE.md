@@ -21,7 +21,8 @@ src/
     health.js              # Health check proxy to llama-server
   services/
     conversations.js       # In-memory conversation store (Map-based)
-    llm.js                 # llama-server client (streaming + SSE parser)
+    llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
+    tools.js               # Tool registry, system prompt, parser, executor
     slots.js               # Slot monitor (polling, assignment, pin/unpin)
   views/index.html         # Main chat UI (sidebar, status bar, slot panel)
   public/js/app.js         # Client-side: conversations, streaming, slots UI
@@ -55,6 +56,10 @@ src/
 
 ## Current State
 - Connected to local llama-server via OpenAI-compatible chat completions endpoint
+- Prompt-based tool calling: system prompt defines `<tool_call>` protocol, backend loops up to 5 rounds executing tools and feeding results back until LLM produces a final answer
+- Tool-call rounds are buffered (non-streaming); final answer sent as single SSE `{content}` event
+- Client shows collapsible tool-use indicators (`{tool_use}` SSE events) in assistant bubbles
+- Available tools: `current_datetime` (returns UTC, local time, IANA timezone, UTC offset)
 - SSE streaming with support for reasoning models (Qwen3 `reasoning_content`)
 - In-memory conversation store (no persistence across restarts)
 - Slot monitoring with bidirectional conversation-slot mapping
@@ -66,3 +71,5 @@ src/
 - ES modules (`import`/`export`)
 - Port defaults to 3000 (configurable via PORT env var)
 - llama-server sends `timings` (not OpenAI `usage`) — backend normalizes to `usage` format
+- Tools are registered in `src/services/tools.js` — add new tools to the `tools` object with `description`, `parameters`, and `execute` function
+- Tool results sent to LLM as `user` role messages: `Tool "name" result: {json}`
