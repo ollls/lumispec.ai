@@ -59,7 +59,7 @@ src/
 - Prompt-based tool calling: system prompt defines `<tool_call>` protocol, backend loops up to 5 rounds executing tools and feeding results back until LLM produces a final answer
 - Tool-call rounds are buffered (non-streaming); final answer sent as single SSE `{content}` event
 - Client shows collapsible tool-use indicators (`{tool_use}` SSE events) in assistant bubbles
-- Available tools: `current_datetime` (returns UTC, local time, IANA timezone, UTC offset)
+- Available tools: `current_datetime` (returns UTC, local time, IANA timezone, UTC offset), `web_search` (DuckDuckGo search, returns top 5 results), `web_fetch` (fetches a URL and extracts content as markdown via Readability + Turndown)
 - SSE streaming with support for reasoning models (Qwen3 `reasoning_content`)
 - In-memory conversation store (no persistence across restarts)
 - Slot monitoring with bidirectional conversation-slot mapping

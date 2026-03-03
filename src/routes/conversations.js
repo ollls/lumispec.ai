@@ -92,7 +92,7 @@ router.post('/:id/messages', async (req, res) => {
 
       const toolCall = parseToolCall(result.content);
       if (toolCall) {
-        const toolResult = executeTool(toolCall.name, toolCall.arguments);
+        const toolResult = await executeTool(toolCall.name, toolCall.arguments);
         // Send tool_use event to client
         res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
         // Append assistant tool call + tool result to messages for next round
