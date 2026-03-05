@@ -1,4 +1,14 @@
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+import { existsSync } from 'fs';
+
+if (!existsSync('.env')) {
+  console.error('Error: .env file not found.');
+  console.error('Run: cp .env.example .env');
+  console.error('Then edit .env with your settings.');
+  process.exit(1);
+}
+
+dotenvConfig();
 
 export default {
   port: parseInt(process.env.PORT || '3000', 10),
