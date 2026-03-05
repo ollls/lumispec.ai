@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { collectChatCompletion } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
 import { getSystemPrompt, parseToolCall, executeTool } from '../services/tools.js';
 
 const router = Router();
@@ -103,13 +103,40 @@ router.post('/:id/messages', async (req, res) => {
       ...historyMessages,
     ];
 
+    // Stream one LLM round: forwards reasoning chunks to client in real-time,
+    // buffers content for tool-call detection, returns { content, usage }.
+    async function streamRound(messages, opts) {
+      const response = await streamChatCompletion(messages, opts);
+      let content = '';
+      let usage = null;
+
+      for await (const chunk of parseSSEChunks(response)) {
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta?.reasoning_content) {
+          res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
+        }
+        if (delta?.content) {
+          content += delta.content;
+        }
+        // Usage: llama-server sends timings, OpenAI sends usage
+        const timings = chunk.timings || chunk.usage;
+        if (timings) {
+          const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
+          const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
+          usage = { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: prompt + predicted };
+        }
+      }
+
+      return { content, usage };
+    }
+
     const MAX_TOOL_ROUNDS = 5;
     let finalContent = '';
     let lastUsage = null;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       console.log(`[tool-loop] round ${round + 1}/${MAX_TOOL_ROUNDS}, messages: ${llmMessages.length}`);
-      const result = await collectChatCompletion(llmMessages, {
+      const result = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
       });
@@ -141,7 +168,7 @@ router.post('/:id/messages', async (req, res) => {
         role: 'user',
         content: 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.',
       });
-      const forced = await collectChatCompletion(llmMessages, {
+      const forced = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
       });

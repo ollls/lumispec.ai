@@ -5,7 +5,7 @@ A lightweight, self-hosted chat interface for [llama.cpp](https://github.com/gge
 ## Features
 
 - **Multi-conversation** — Create, switch, and delete conversations from the sidebar
-- **SSE streaming** — Real-time token streaming with support for reasoning models (Qwen3 `<think>` blocks shown in collapsible sections)
+- **SSE streaming** — Real-time streaming with reasoning model support (Qwen3 `<think>` blocks streamed live into collapsible sections)
 - **Vision / image support** — Attach images via button, clipboard paste, or drag-and-drop; works with multimodal models like Qwen3.5
 - **Web search** — Built-in Tavily search tool the LLM can invoke autonomously to answer questions with up-to-date information
 - **Web fetch** — LLM can read web pages, extracting content as clean markdown via Readability
