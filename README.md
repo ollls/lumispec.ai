@@ -1,6 +1,6 @@
 # ScrapChat
 
-A lightweight, self-hosted chat interface for [llama.cpp](https://github.com/ggerganov/llama.cpp) server. Multi-conversation UI with web search, vision support, and real-time slot monitoring — no cloud APIs required for core functionality.
+A lightweight, self-hosted chat interface for [llama.cpp](https://github.com/ggerganov/llama.cpp) server with `current_datetime`, `web_search`, and `web_fetch` tools. Multi-conversation UI with vision support and real-time slot monitoring — no cloud APIs required for core functionality.
 
 ## Features
 
@@ -107,17 +107,60 @@ npm run dev
 npm run css:watch
 ```
 
-## Built-in Tools
+## Tools
 
-The LLM can autonomously use these tools during conversations:
+ScrapChat uses a prompt-based tool-calling protocol. The LLM decides when to use a tool, emits a `<tool_call>` XML block, and the backend executes it and feeds the result back. This loop runs up to 5 rounds per message, so the LLM can chain tools (e.g. search then fetch). Tool usage appears as collapsible indicators in assistant messages — no user action required.
 
-| Tool | Description |
-|---|---|
-| `current_datetime` | Returns current date/time with timezone info |
-| `web_search` | Searches the web via Tavily (top 5 results) |
-| `web_fetch` | Fetches a URL and extracts content as markdown |
+### Built-in Tools
 
-Tools are invoked automatically by the LLM when needed — no user action required. Tool usage is shown as collapsible indicators in assistant messages.
+#### `current_datetime`
+
+Returns the current date and time in both UTC and local time, plus IANA timezone name and UTC offset. Takes no arguments. The system prompt already includes today's date, but the LLM can call this tool when it needs the exact time.
+
+#### `web_search`
+
+Searches the web via the Tavily API and returns the top 5 results (title, URL, description). Requires `TAVILY_API_KEY` to be set — without it the tool is still registered but calls will fail. The LLM is instructed to use this for any time-sensitive or current-events questions.
+
+**Parameters:** `query` (string)
+
+#### `web_fetch`
+
+Fetches a URL and extracts its main content as clean markdown. Uses Mozilla Readability for article extraction with a Turndown HTML-to-markdown conversion. Output is truncated to ~4 000 characters to keep token usage reasonable. Typically used after `web_search` to read a specific page.
+
+**Parameters:** `url` (string)
+
+### Adding a New Tool
+
+All tools live in a single registry at `src/services/tools.js`. To add a new tool:
+
+**1. Define the tool** — add an entry to the `tools` object:
+
+```js
+const tools = {
+  // ... existing tools ...
+
+  my_tool: {
+    description: 'Short description of what the tool does. Mention required arguments.',
+    parameters: { arg1: 'string', arg2: 'number' },
+    execute: async ({ arg1, arg2 }) => {
+      // Your logic here — can be async
+      return { result: 'value' };
+    },
+  },
+};
+```
+
+**2. That's it.** The tool is automatically:
+- Listed in the system prompt sent to the LLM (built from the registry)
+- Parseable and executable by the tool-call loop
+- Shown in the UI as a collapsible tool-use indicator when invoked
+
+**Guidelines for tool authors:**
+- **`description`** — This is what the LLM reads to decide when and how to call your tool. Be specific about what arguments are required and what the tool returns.
+- **`parameters`** — An object mapping argument names to type strings (`'string'`, `'number'`, etc.). Used for documentation; no runtime validation is performed.
+- **`execute(args)`** — Receives the parsed arguments object. Return a plain object (it gets `JSON.stringify`'d before being sent back to the LLM). Throw on errors — the framework catches exceptions and returns `{ error: message }`.
+- Keep returned data concise. Large payloads eat into the model's context window.
+- Use `AbortSignal.timeout()` for any external HTTP calls to avoid hanging the tool loop.
 
 ## Tech Stack
 
