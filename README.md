@@ -42,7 +42,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Configuration
 
-All configuration is via environment variables. Set them inline or in a `.env` file:
+All configuration is via environment variables, passed inline when starting the server:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -51,15 +51,9 @@ All configuration is via environment variables. Set them inline or in a `.env` f
 | `LLAMA_MAX_CONTEXT` | `131072` | Fallback max context tokens (auto-detected from server slots) |
 | `TAVILY_API_KEY` | — | Tavily search API key (optional, enables web search tool) |
 
-**Example:**
+### llama.cpp Server
 
-```bash
-LLAMA_URL=http://192.168.1.100:8080 TAVILY_API_KEY=tvly-your-key npm start
-```
-
-## llama.cpp Server Setup
-
-ScrapChat connects to a running [llama-server](https://github.com/ggerganov/llama.cpp/tree/master/examples/server). Start it with any GGUF model:
+ScrapChat requires a running [llama-server](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) with any GGUF model. Install llama.cpp and start it:
 
 ```bash
 # Text-only model
@@ -69,7 +63,29 @@ llama-server -m your-model.gguf -c 131072 --port 8080
 llama-server -m qwen3.5-vision.gguf -c 131072 --port 8080
 ```
 
-ScrapChat auto-detects vision support from the server's `/props` endpoint and enables image uploads accordingly.
+If llama-server runs on a different host or port, set `LLAMA_URL`:
+
+```bash
+LLAMA_URL=http://192.168.1.100:8080 npm start
+```
+
+ScrapChat auto-detects vision support from the server's `/props` endpoint and enables image uploads when available.
+
+### Tavily Search (optional)
+
+To enable the web search tool, sign up for a free API key at [tavily.com](https://tavily.com) and pass it when starting:
+
+```bash
+TAVILY_API_KEY=tvly-your-key-here npm start
+```
+
+Without this key, the LLM will still work but won't be able to search the web. The status bar shows a red/green indicator for Tavily availability.
+
+### Full example
+
+```bash
+LLAMA_URL=http://localhost:8080 TAVILY_API_KEY=tvly-your-key npm start
+```
 
 ## Development
 
