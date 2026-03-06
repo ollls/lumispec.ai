@@ -28,6 +28,11 @@ const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
 const searchDot = document.getElementById('search-dot');
 const searchLabel = document.getElementById('search-label');
+const searchToggle = document.getElementById('search-toggle');
+const searchDropdown = document.getElementById('search-dropdown');
+const toolUsageToggle = document.getElementById('tool-usage-toggle');
+const toolUsageCount = document.getElementById('tool-usage-count');
+const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
@@ -206,11 +211,13 @@ function renderMessages(messages) {
   for (const msg of messages) {
     const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
     const images = typeof msg.content === 'object' ? msg.content.images : undefined;
-    appendMessage(msg.role, text, images);
+    const reasoning = typeof msg.content === 'object' ? msg.content.reasoning : undefined;
+    const toolUses = typeof msg.content === 'object' ? msg.content.toolUses : undefined;
+    appendMessage(msg.role, text, images, { reasoning, toolUses });
   }
 }
 
-function appendMessage(role, text, images) {
+function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
   wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
@@ -247,8 +254,52 @@ function appendMessage(role, text, images) {
     bubble.appendChild(imgGrid);
   }
 
+  // Render stored reasoning block (collapsed)
+  if (role === 'assistant' && meta.reasoning) {
+    const details = document.createElement('details');
+    details.className = 'mb-2 text-zinc-500 text-xs';
+    const summary = document.createElement('summary');
+    summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+    summary.textContent = 'Thought process';
+    const body = document.createElement('pre');
+    body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
+    body.textContent = meta.reasoning;
+    details.appendChild(summary);
+    details.appendChild(body);
+    bubble.appendChild(details);
+  }
+
+  // Render stored tool uses (collapsed)
+  if (role === 'assistant' && meta.toolUses && meta.toolUses.length > 0) {
+    const container = document.createElement('div');
+    container.className = 'tool-use-container';
+    for (const tu of meta.toolUses) {
+      const detail = document.createElement('details');
+      detail.className = 'mb-2 text-zinc-500 text-xs';
+      const summary = document.createElement('summary');
+      summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+      let sourcesTag = '';
+      if (tu.name === 'web_search') {
+        try {
+          const parsed = JSON.parse(tu.result);
+          if (parsed.sources) sourcesTag = ` <span class="text-zinc-600">— ${parsed.sources}</span>`;
+        } catch {}
+      }
+      summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${tu.name}</strong>${sourcesTag}`;
+      const body = document.createElement('pre');
+      body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+      body.textContent = tu.result;
+      detail.appendChild(summary);
+      detail.appendChild(body);
+      container.appendChild(detail);
+    }
+    bubble.appendChild(container);
+  }
+
   if (role === 'assistant' && text) {
-    renderFormattedContent(text, bubble);
+    const contentSpan = document.createElement('span');
+    renderFormattedContent(text, contentSpan);
+    bubble.appendChild(contentSpan);
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
@@ -338,6 +389,7 @@ async function sendMessage(content, images) {
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.tool_use) {
+              trackToolUse(data.tool_use.name);
               if (!hasToolUse) {
                 hasToolUse = true;
                 bubble.insertBefore(toolUseContainer, contentSpan);
@@ -346,7 +398,15 @@ async function sendMessage(content, images) {
               detail.className = 'mb-2 text-zinc-500 text-xs';
               const summary = document.createElement('summary');
               summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
-              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>`;
+              let sourcesTag = '';
+              if (data.tool_use.name === 'web_search') {
+                try {
+                  const parsed = JSON.parse(data.tool_use.result);
+                  if (parsed.sources) sourcesTag = ` <span class="text-zinc-600">— ${parsed.sources}</span>`;
+                } catch {}
+                pollSearch();
+              }
+              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>${sourcesTag}`;
               const body = document.createElement('pre');
               body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
               body.textContent = data.tool_use.result;
@@ -439,20 +499,102 @@ async function pollInternet() {
   }
 }
 
-// ── Search engine check ──────────────────────────────
+// ── Search engine check & switcher ───────────────────
+let searchEngines = [];
+
 async function pollSearch() {
   try {
     const res = await fetch('/api/health/search');
-    const { ok, engine } = await res.json();
+    const { ok, engine, engines } = await res.json();
     searchDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    searchLabel.textContent = engine ? `${engine} Search` : 'Tavily Search';
-    searchLabel.className = ok ? 'text-green-500' : 'text-red-400';
+    searchLabel.textContent = engine ? `${engine} Search` : 'Search';
+    searchToggle.className = `flex items-center gap-1 transition-colors ${ok ? 'text-green-500 hover:text-green-400' : 'text-red-400 hover:text-red-300'}`;
+    if (engines) searchEngines = engines;
   } catch {
     searchDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
-    searchLabel.textContent = 'Tavily Search';
-    searchLabel.className = 'text-red-400';
+    searchLabel.textContent = 'Search';
+    searchToggle.className = 'flex items-center gap-1 transition-colors text-red-400 hover:text-red-300';
   }
 }
+
+function renderSearchDropdown() {
+  searchDropdown.innerHTML = '';
+  for (const eng of searchEngines) {
+    const item = document.createElement('button');
+    item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
+      eng.active
+        ? 'text-indigo-400 bg-indigo-500/10'
+        : eng.configured
+          ? 'text-zinc-300 hover:bg-zinc-700'
+          : 'text-zinc-600 cursor-not-allowed'
+    }`;
+    item.textContent = eng.label + (eng.active ? ' ✓' : !eng.configured ? ' (no key)' : '');
+    if (!eng.active && eng.configured) {
+      item.addEventListener('click', () => switchSearchEngine(eng.id));
+    }
+    searchDropdown.appendChild(item);
+  }
+}
+
+async function switchSearchEngine(engineId) {
+  searchDropdown.classList.add('hidden');
+  // Immediately show checking state
+  searchDot.className = 'inline-block w-2 h-2 rounded-full bg-zinc-600 animate-pulse';
+  searchLabel.textContent = 'Switching…';
+  searchToggle.className = 'flex items-center gap-1 transition-colors text-zinc-500';
+  try {
+    await fetch('/api/health/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: engineId }),
+    });
+  } catch { /* pollSearch will pick up the state */ }
+  await pollSearch();
+}
+
+searchToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !searchDropdown.classList.contains('hidden');
+  searchDropdown.classList.toggle('hidden');
+  if (!isOpen) renderSearchDropdown();
+});
+
+document.addEventListener('click', () => {
+  searchDropdown.classList.add('hidden');
+  toolUsageDropdown.classList.add('hidden');
+});
+
+searchDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Tool usage tracking ─────────────────────────────
+const toolUsageCounts = {};
+
+function trackToolUse(name) {
+  toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
+  const total = Object.values(toolUsageCounts).reduce((a, b) => a + b, 0);
+  toolUsageCount.textContent = total;
+  toolUsageToggle.classList.remove('hidden');
+}
+
+function renderToolUsageDropdown() {
+  toolUsageDropdown.innerHTML = '';
+  const entries = Object.entries(toolUsageCounts).sort((a, b) => b[1] - a[1]);
+  for (const [name, count] of entries) {
+    const item = document.createElement('div');
+    item.className = 'px-3 py-1.5 text-xs flex justify-between gap-4';
+    item.innerHTML = `<span class="text-zinc-400">${name}</span><span class="text-zinc-500">${count}</span>`;
+    toolUsageDropdown.appendChild(item);
+  }
+}
+
+toolUsageToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !toolUsageDropdown.classList.contains('hidden');
+  toolUsageDropdown.classList.toggle('hidden');
+  if (!isOpen) renderToolUsageDropdown();
+});
+
+toolUsageDropdown.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Slot panel ────────────────────────────────────────
 let slotPanelOpen = false;

@@ -37,13 +37,26 @@
         <span id="inet-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="inet-label" class="text-zinc-500">Internet</span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="relative flex items-center gap-2">
         <span id="search-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <span id="search-label" class="text-zinc-500">Tavily Search</span>
+        <button id="search-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
+          <span id="search-label">Search</span>
+          <svg class="w-3 h-3 opacity-60" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5l3 3 3-3"/></svg>
+        </button>
+        <div id="search-dropdown" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[140px]">
+        </div>
       </div>
       <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
         Slots: <span id="slots-summary">—</span>
       </button>
+      <div class="relative flex items-center gap-2">
+        <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1 hidden">
+          <span>🔧</span>
+          <span id="tool-usage-count">0</span>
+        </button>
+        <div id="tool-usage-dropdown" class="hidden absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
+        </div>
+      </div>
       <div class="ml-auto flex items-center gap-2">
         <span class="text-zinc-500">Context:</span>
         <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">

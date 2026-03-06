@@ -80,7 +80,7 @@ router.post('/:id/messages', async (req, res) => {
     // Build messages with system prompt for tool support
     const systemPrompt = getSystemPrompt();
 
-    // Convert stored messages to OpenAI format (handle vision content)
+    // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     const historyMessages = conv.messages.slice(0, -1).map(msg => {
       if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
         const parts = [];
@@ -94,6 +94,9 @@ router.post('/:id/messages', async (req, res) => {
           });
         }
         return { role: 'user', content: parts };
+      }
+      if (msg.role === 'assistant' && typeof msg.content === 'object' && msg.content.text) {
+        return { role: 'assistant', content: msg.content.text };
       }
       return msg;
     });
@@ -113,6 +116,7 @@ router.post('/:id/messages', async (req, res) => {
       for await (const chunk of parseSSEChunks(response)) {
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.reasoning_content) {
+          accumulatedReasoning += delta.reasoning_content;
           res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
         }
         if (delta?.content) {
@@ -133,6 +137,8 @@ router.post('/:id/messages', async (req, res) => {
     const MAX_TOOL_ROUNDS = 5;
     let finalContent = '';
     let lastUsage = null;
+    let accumulatedReasoning = '';
+    const toolUses = [];
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       console.log(`[tool-loop] round ${round + 1}/${MAX_TOOL_ROUNDS}, messages: ${llmMessages.length}`);
@@ -149,7 +155,8 @@ router.post('/:id/messages', async (req, res) => {
         console.log(`[tool-loop] tool call: ${toolCall.name}(${JSON.stringify(toolCall.arguments)})`);
         const toolResult = await executeTool(toolCall.name, toolCall.arguments);
         console.log(`[tool-loop] tool result (${toolResult.length} chars): ${toolResult.slice(0, 200)}`);
-        // Send tool_use event to client
+        // Send tool_use event to client and store for persistence
+        toolUses.push({ name: toolCall.name, result: toolResult });
         res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
         // Append assistant tool call + tool result to messages for next round
         llmMessages.push({ role: 'assistant', content: result.content });
@@ -179,7 +186,10 @@ router.post('/:id/messages', async (req, res) => {
 
     // Send final content as a single event
     if (finalContent) {
-      conversations.updateMessageContent(conv.id, msgIndex, finalContent);
+      const stored = { text: finalContent };
+      if (accumulatedReasoning) stored.reasoning = accumulatedReasoning;
+      if (toolUses.length > 0) stored.toolUses = toolUses;
+      conversations.updateMessageContent(conv.id, msgIndex, stored);
       res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
     }
 

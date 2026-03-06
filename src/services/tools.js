@@ -3,6 +3,43 @@ import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import config from '../config.js';
 
+// ── Search engine backends ───────────────────────────
+async function searchTavily(query) {
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.tavily.apiKey}`,
+    },
+    body: JSON.stringify({ query, max_results: 5 }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.warn(`[web_search] Tavily returned ${res.status}: ${body}`);
+    return { error: `Search failed (HTTP ${res.status})`, results: [] };
+  }
+  const data = await res.json();
+  return { results: (data.results || []).map(r => ({ title: r.title, url: r.url, description: r.content || '' })) };
+}
+
+async function searchKeiro(query) {
+  const res = await fetch(`${config.keiro.baseUrl}/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: config.keiro.apiKey, query }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.warn(`[web_search] Keiro returned ${res.status}: ${body}`);
+    return { error: `Search failed (HTTP ${res.status})`, results: [] };
+  }
+  const data = await res.json();
+  const results = data.data?.search_results || [];
+  return { results: results.slice(0, 5).map(r => ({ title: r.title || '', url: r.url || '', description: r.snippet || '' })) };
+}
+
 // Tool registry — single source of truth
 const tools = {
   current_datetime: {
@@ -19,34 +56,43 @@ const tools = {
     },
   },
   web_search: {
-    description: 'Search the web using Tavily. Requires a "query" argument.',
+    description: 'Search the web. Requires a "query" argument.',
     parameters: { query: 'string' },
     execute: async ({ query }) => {
-      const res = await fetch('https://api.tavily.com/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.tavily.apiKey}`,
-        },
-        body: JSON.stringify({ query, max_results: 5 }),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        console.warn(`[web_search] Tavily returned ${res.status}: ${body}`);
-        return { error: `Search failed (HTTP ${res.status})`, results: [] };
+      const engine = config.search.engine;
+      if (engine === 'tavily') {
+        const res = await searchTavily(query);
+        return { ...res, sources: 'Tavily' };
       }
-      const data = await res.json();
-      const results = (data.results || []).map(r => ({
-        title: r.title,
-        url: r.url,
-        description: r.content || '',
-      }));
-      return { results };
+      if (engine === 'keiro') {
+        const res = await searchKeiro(query);
+        return { ...res, sources: 'Keiro' };
+      }
+      // 'both' — run in parallel, merge and deduplicate by URL
+      const [keiro, tavily] = await Promise.all([
+        searchKeiro(query).catch(e => ({ error: e.message, results: [] })),
+        searchTavily(query).catch(e => ({ error: e.message, results: [] })),
+      ]);
+      const keiroOk = keiro.results.length > 0;
+      const tavilyOk = tavily.results.length > 0;
+      let sources;
+      if (keiroOk && tavilyOk) sources = 'Keiro + Tavily';
+      else if (keiroOk) sources = 'Keiro (Tavily failed)';
+      else if (tavilyOk) sources = 'Tavily (Keiro failed)';
+      else sources = 'both failed';
+      const seen = new Set();
+      const merged = [];
+      for (const r of [...keiro.results, ...tavily.results]) {
+        if (!seen.has(r.url)) {
+          seen.add(r.url);
+          merged.push(r);
+        }
+      }
+      return { results: merged.slice(0, 8), sources };
     },
   },
   web_fetch: {
-    description: 'Fetch a web page and extract its content as markdown. Requires a "url" argument. Use after web_search to read a specific page.',
+    description: 'Fetch a web page and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
     parameters: { url: 'string' },
     execute: async ({ url }) => {
       const res = await fetch(url, {
@@ -94,9 +140,15 @@ export function getSystemPrompt() {
     .map(([name, t]) => `- ${name}: ${t.description}`)
     .join('\n');
 
-  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const datetime = {
+    utc: now.toISOString(),
+    local: now.toString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    offset: now.getTimezoneOffset(),
+  };
 
-  return `You are a helpful, knowledgeable assistant. Today's date is ${today}. Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+  return `You are a helpful, knowledgeable assistant. Current date/time: ${datetime.local} (UTC: ${datetime.utc}, timezone: ${datetime.timezone}). Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 
 To use a tool, respond ONLY with:
 
@@ -111,6 +163,7 @@ Tool rules:
 - Output ONLY the <tool_call> block when using a tool, no other text.
 - Wait for the tool result before answering.
 - Do not fabricate tool results.
+- After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 
 ## Response Formatting
 
