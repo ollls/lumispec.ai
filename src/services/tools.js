@@ -159,6 +159,172 @@ function gainsToCsv(data) {
   return toCsv(['Symbol', 'Type', 'C/P', 'Strike', 'Description', 'Date Acquired', 'Quantity', 'Cost/Share', 'Total Cost', 'Market Value', 'Gain', 'Gain %', 'Term'], rows);
 }
 
+function quotesToCsv(data) {
+  const quotes = data.quotes || [];
+  if (!quotes.length) return '';
+  const headers = ['Symbol', 'Description', 'Last Price', 'Change', 'Change %', 'Bid', 'Ask', 'Bid Size', 'Ask Size', 'Volume', 'Day High', 'Day Low', 'Open', 'Prev Close', '52w High', '52w Low', 'Market Cap', 'P/E', 'EPS', 'Div Yield', 'Next Earnings'];
+  const rows = quotes.map(q => {
+    const all = q.All || q.Intraday || q.Fundamental || {};
+    return [
+      q.Product?.symbol || '', q.Product?.securityType || '',
+      all.lastTrade ?? '', all.changeClose ?? all.change ?? '', all.changeClosePercentage ?? all.changePct ?? '',
+      all.bid ?? '', all.ask ?? '', all.bidSize ?? '', all.askSize ?? '',
+      all.totalVolume ?? all.volume ?? '',
+      all.high ?? '', all.low ?? '', all.open ?? '', all.previousClose ?? '',
+      all.high52 ?? '', all.low52 ?? '',
+      all.marketCap ?? '', all.pe ?? '', all.eps ?? '', all.dividend ?? all.annualDividend ?? '',
+      all.nextEarningDate ?? '',
+    ];
+  });
+  return toCsv(headers, rows);
+}
+
+function quotesToMd(data) {
+  const quotes = data.quotes || [];
+  if (!quotes.length) return '';
+  const headers = ['Symbol', 'Last', 'Change', 'Change %', 'Bid', 'Ask', 'Volume', '52w High', '52w Low', 'P/E'];
+  const rows = quotes.map(q => {
+    const all = q.All || q.Intraday || q.Fundamental || {};
+    return [
+      q.Product?.symbol || '', all.lastTrade ?? '', all.changeClose ?? all.change ?? '',
+      all.changeClosePercentage ?? all.changePct ?? '', all.bid ?? '', all.ask ?? '',
+      all.totalVolume ?? all.volume ?? '', all.high52 ?? '', all.low52 ?? '', all.pe ?? '',
+    ];
+  });
+  return toMd(`Quotes (${quotes.length})`, headers, rows);
+}
+
+function optionChainsToCsv(data) {
+  const pairs = data.OptionPair || [];
+  if (!pairs.length) return '';
+  const headers = ['Type', 'Symbol', 'Strike', 'Expiry', 'Bid', 'Ask', 'Last', 'Volume', 'Open Interest', 'IV', 'Delta', 'Gamma', 'Theta', 'Vega', 'Rho', 'Theo Value', 'In The Money'];
+  const rows = [];
+  for (const pair of pairs) {
+    for (const type of ['Call', 'Put']) {
+      const opt = pair[type];
+      if (!opt) continue;
+      const greeks = opt.OptionGreeks || {};
+      rows.push([
+        type, opt.symbol || '', opt.strikePrice ?? '', opt.expiryDate || '',
+        opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
+        opt.openInterest ?? '', greeks.iv ?? '',
+        greeks.delta ?? '', greeks.gamma ?? '',
+        greeks.theta ?? '', greeks.vega ?? '', greeks.rho ?? '',
+        greeks.currentValue ?? '', opt.inTheMoney ?? '',
+      ]);
+    }
+  }
+  return toCsv(headers, rows);
+}
+
+function optionChainsToMd(data) {
+  const pairs = data.OptionPair || [];
+  if (!pairs.length) return '';
+  const headers = ['Type', 'Strike', 'Expiry', 'Bid', 'Ask', 'Last', 'Vol', 'OI', 'IV', 'Delta', 'Theta', 'ITM'];
+  const rows = [];
+  for (const pair of pairs) {
+    for (const type of ['Call', 'Put']) {
+      const opt = pair[type];
+      if (!opt) continue;
+      const greeks = opt.OptionGreeks || {};
+      rows.push([
+        type, opt.strikePrice ?? '', opt.expiryDate || '',
+        opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
+        opt.openInterest ?? '', greeks.iv ?? '',
+        greeks.delta ?? '', greeks.theta ?? '', opt.inTheMoney ?? '',
+      ]);
+    }
+  }
+  return toMd(`Option Chain (${rows.length} contracts)`, headers, rows);
+}
+
+function optionExpireDatesToCsv(data) {
+  const dates = data.expirationDates || [];
+  if (!dates.length) return '';
+  const headers = ['Year', 'Month', 'Day', 'Expiry Type'];
+  const rows = dates.map(d => [d.year ?? '', d.month ?? '', d.day ?? '', d.expiryType ?? '']);
+  return toCsv(headers, rows);
+}
+
+function optionExpireDatesToMd(data) {
+  const dates = data.expirationDates || [];
+  if (!dates.length) return '';
+  const headers = ['Year', 'Month', 'Day', 'Type'];
+  const rows = dates.map(d => [d.year ?? '', d.month ?? '', d.day ?? '', d.expiryType ?? '']);
+  return toMd(`Option Expiration Dates (${dates.length})`, headers, rows);
+}
+
+function lookupToCsv(data) {
+  const products = data.products || [];
+  if (!products.length) return '';
+  const headers = ['Symbol', 'Description', 'Type'];
+  const rows = products.map(p => [p.symbol || '', p.description || '', p.type || '']);
+  return toCsv(headers, rows);
+}
+
+function lookupToMd(data) {
+  const products = data.products || [];
+  if (!products.length) return '';
+  const headers = ['Symbol', 'Description', 'Type'];
+  const rows = products.map(p => [p.symbol || '', p.description || '', p.type || '']);
+  return toMd(`Product Lookup (${products.length})`, headers, rows);
+}
+
+function ordersToCsv(data) {
+  const orders = data.Order || [];
+  if (!orders.length) return '';
+  const headers = ['Order ID', 'Date', 'Type', 'Status', 'Symbol', 'Security Type', 'Action', 'Quantity', 'Price Type', 'Limit Price', 'Filled Qty', 'Avg Exec Price', 'Total Order Value', 'Total Commission'];
+  const rows = orders.map(o => {
+    const detail = o.OrderDetail?.[0] || {};
+    const inst = detail.Instrument?.[0] || {};
+    const p = inst.Product || {};
+    return [
+      o.orderId ?? '', o.orderPlacedDate || detail.placedTime || '',
+      o.orderType || '', detail.status || '',
+      p.symbol || '', p.securityType || '',
+      inst.orderAction || '', inst.orderedQuantity ?? inst.quantity ?? '',
+      detail.priceType || '', detail.limitPrice ?? '',
+      inst.filledQuantity ?? '', inst.averageExecutionPrice ?? '',
+      detail.totalOrderValue ?? '', detail.totalCommission ?? '',
+    ];
+  });
+  return toCsv(headers, rows);
+}
+
+function ordersToMd(data) {
+  const orders = data.Order || [];
+  if (!orders.length) return '';
+  const headers = ['Order ID', 'Date', 'Status', 'Symbol', 'Action', 'Qty', 'Price Type', 'Limit', 'Filled', 'Avg Price'];
+  const rows = orders.map(o => {
+    const detail = o.OrderDetail?.[0] || {};
+    const inst = detail.Instrument?.[0] || {};
+    const p = inst.Product || {};
+    return [
+      o.orderId ?? '', o.orderPlacedDate || detail.placedTime || '',
+      detail.status || '', p.symbol || '', inst.orderAction || '',
+      inst.orderedQuantity ?? inst.quantity ?? '', detail.priceType || '',
+      detail.limitPrice ?? '', inst.filledQuantity ?? '', inst.averageExecutionPrice ?? '',
+    ];
+  });
+  return toMd(`Orders (${orders.length})`, headers, rows);
+}
+
+function alertsToCsv(data) {
+  const alerts = data.Alert || [];
+  if (!alerts.length) return '';
+  const headers = ['Alert ID', 'Date', 'Subject', 'Status', 'Symbol'];
+  const rows = alerts.map(a => [a.id ?? '', a.createDate || a.createTime || '', a.subject || '', a.status || '', a.symbol || '']);
+  return toCsv(headers, rows);
+}
+
+function alertsToMd(data) {
+  const alerts = data.Alert || [];
+  if (!alerts.length) return '';
+  const headers = ['ID', 'Date', 'Subject', 'Status', 'Symbol'];
+  const rows = alerts.map(a => [a.id ?? '', a.createDate || a.createTime || '', a.subject || '', a.status || '', a.symbol || '']);
+  return toMd(`Alerts (${alerts.length})`, headers, rows);
+}
+
 function gainsToMd(data) {
   const rows = (data.gains || []).map(g => [
     g.symbol, g.callPut || '', g.strikePrice ?? '', g.dateAcquired ?? '',
@@ -226,11 +392,11 @@ const tools = {
     execute: async ({ query }) => {
       const engine = config.search.engine;
       if (engine === 'tavily') {
-        const res = await searchTavily(query);
+        const res = await searchTavily(query).catch(e => ({ error: e.message, results: [] }));
         return { ...res, sources: 'Tavily' };
       }
       if (engine === 'keiro') {
-        const res = await searchKeiro(query);
+        const res = await searchKeiro(query).catch(e => ({ error: e.message, results: [] }));
         return { ...res, sources: 'Keiro' };
       }
       // 'both' — run in parallel, merge and deduplicate by URL
@@ -306,9 +472,9 @@ const tools = {
     },
   },
   etrade_account: {
-    description: 'Retrieve E*TRADE brokerage account data. Requires an "action" argument: "list" (list accounts), "balance" (account balance), "portfolio" (positions/holdings), "transactions" (transaction history, defaults to last 30 days or use startDate/endDate), or "gains" (unrealized gains with lot-level cost basis and short/long term classification). For balance/portfolio/transactions/gains, also requires "accountIdKey" — use the ENCODED string key (e.g. "-HfArItq47WyjwKBqyytsA"), NOT the numeric accountId. Get it from the "list" action response. For transactions, optional "startDate" and "endDate" in MMDDYYYY format (e.g. "01012026"), and "count" (max 50). To export data to a file, add "saveAs" with a filename — the server converts and saves directly. File format is determined by extension: .md (markdown table), .json (raw API data), anything else including .csv defaults to structured CSV. When the user doesn\'t specify a filename, generate one from the action (e.g. "transactions.csv", "portfolio.csv", "balance.csv", "accounts.csv"). Usage guide: "gains" for current holdings with cost basis and short/long term (tax planning); "transactions" for trade history including all buys/sells (default last 30 days); "transactions" with startDate/endDate for a specific period (e.g. tax year). Gains shows only open positions; transactions shows all activity including closed trades. By default, use saveAs for file exports. If the user asks to customize columns or reshape data, first fetch without saveAs, then use save_file — but only for small results (under 20 records) to avoid truncation.',
-    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', saveAs: 'string (optional)' },
-    execute: async ({ action, accountIdKey, startDate, endDate, count, saveAs }) => {
+    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (defaults last 30 days; optional startDate/endDate in MMDDYYYY, count max 50)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
+    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
+    execute: async ({ action, accountIdKey, startDate, endDate, count, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
       if (!etrade.isAuthenticated()) {
         return { error: 'E*TRADE not authenticated. Click "E*TRADE (connect)" in the status bar to authenticate.' };
       }
@@ -333,29 +499,77 @@ const tools = {
           if (!accountIdKey) return { error: 'accountIdKey required. Use action "list" first.' };
           result = await etrade.getGains(accountIdKey);
           break;
+        // Market data actions
+        case 'quote':
+          if (!symbols) return { error: 'symbols required (comma-separated, e.g. "AAPL,MSFT").' };
+          result = await etrade.getQuotes(symbols, { detailFlag });
+          break;
+        case 'optionchains':
+          if (!symbol) return { error: 'symbol required.' };
+          result = await etrade.getOptionChains({ symbol, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly });
+          break;
+        case 'optionexpiry':
+          if (!symbol) return { error: 'symbol required.' };
+          result = await etrade.getOptionExpireDates(symbol);
+          break;
+        case 'lookup':
+          if (!search) return { error: 'search term required.' };
+          result = await etrade.lookupProduct(search);
+          break;
+        // Account activity actions
+        case 'orders':
+          if (!accountIdKey) return { error: 'accountIdKey required. Use action "list" first.' };
+          result = await etrade.getOrders(accountIdKey, { status, fromDate, toDate, count });
+          break;
+        case 'alerts':
+          result = await etrade.getAlerts({ count, category, status });
+          break;
+        case 'alert_detail':
+          if (!alertId) return { error: 'alertId required.' };
+          result = await etrade.getAlertDetails(alertId);
+          break;
+        case 'transaction_detail':
+          if (!accountIdKey) return { error: 'accountIdKey required.' };
+          if (!transactionId) return { error: 'transactionId required.' };
+          result = await etrade.getTransactionDetail(accountIdKey, transactionId);
+          break;
         default:
-          return { error: `Unknown action: ${action}. Use: list, balance, portfolio, transactions, gains` };
+          return { error: `Unknown action: ${action}. Use: list, balance, portfolio, transactions, gains, quote, optionchains, optionexpiry, lookup, orders, alerts, alert_detail, transaction_detail` };
       }
+      const formatters = {
+        transactions: transactionsToCsv, portfolio: portfolioToCsv, list: accountsToCsv,
+        balance: balanceToCsv, gains: gainsToCsv, quote: quotesToCsv,
+        optionchains: optionChainsToCsv, optionexpiry: optionExpireDatesToCsv,
+        lookup: lookupToCsv, orders: ordersToCsv, alerts: alertsToCsv,
+      };
+      const mdFormatters = {
+        transactions: transactionsToMd, portfolio: portfolioToMd, list: accountsToMd,
+        balance: balanceToMd, gains: gainsToMd, quote: quotesToMd,
+        optionchains: optionChainsToMd, optionexpiry: optionExpireDatesToMd,
+        lookup: lookupToMd, orders: ordersToMd, alerts: alertsToMd,
+      };
       // Save to file if requested
       if (saveAs && result && !result.error) {
         let content;
-        const formatters = { transactions: transactionsToCsv, portfolio: portfolioToCsv, list: accountsToCsv, balance: balanceToCsv, gains: gainsToCsv };
-        const mdFormatters = { transactions: transactionsToMd, portfolio: portfolioToMd, list: accountsToMd, balance: balanceToMd, gains: gainsToMd };
         if (saveAs.endsWith('.json')) {
           content = JSON.stringify(result, null, 2);
         } else if (saveAs.endsWith('.md') && mdFormatters[action]) {
           content = mdFormatters[action](result);
         } else {
-          // Default to CSV for .csv, .txt, or any unrecognized extension
           content = formatters[action]?.(result) || JSON.stringify(result, null, 2);
         }
         if (!content) return { ...result, saveError: 'No data to save' };
         const file = await saveToFile(saveAs, content);
-        // Return summary + file info (avoid echoing all data back to LLM)
         const summary = action === 'transactions'
           ? { transactionCount: result.transactionCount || 0, totalCount: result.totalCount || 0, moreTransactions: result.moreTransactions || false }
-          : { recordCount: Array.isArray(result) ? result.length : 1 };
+          : { recordCount: result.totalCount ?? (Array.isArray(result) ? result.length : 1) };
         return { ...summary, savedFile: file };
+      }
+      // Include pre-formatted markdown table so the LLM presents exact data
+      const mdFormatter = mdFormatters[action];
+      if (mdFormatter && result && !result.error) {
+        const table = mdFormatter(result);
+        if (table) return { _markdown: table };
       }
       return result;
     },
@@ -390,8 +604,11 @@ ${toolList}
 Tool rules:
 - Output ONLY the <tool_call> block when using a tool, no other text.
 - Wait for the tool result before answering.
-- Do not fabricate tool results.
+- Do not fabricate tool results. When etrade_account returns a "_markdown" field, use that pre-formatted table as your primary data source — present those exact values. Do not recompute, round, or omit rows.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
+- For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
+- Options analysis workflow: (1) get current price with "quote", (2) get available expirations with "optionexpiry", (3) pick the expiry closest to the user's target DTE, (4) fetch the chain with "optionchains" using that expiry + strikePriceNear set to current price. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
+- CRITICAL: Only present strike prices, premiums, and Greeks that appear EXACTLY in the tool results. NEVER interpolate, extrapolate, or invent strikes between the ones returned. If the chain shows strikes at 420 and 430, do NOT fabricate a 425 strike. Present only real data rows from the tool output.
 - When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
 
 ## Response Formatting
@@ -408,7 +625,7 @@ Rules:
 - Use bullet points for 3+ related items. Use numbered lists only for sequential steps.
 - Use tables for comparisons of 3+ items.
 - Use fenced code blocks with language tags for code. Use \`inline code\` for technical terms.
-- Mermaid v11 diagrams are supported via \`\`\`mermaid code blocks. No emoji in Mermaid text. Pie values must be positive — use a table for negative values. For ANY bar or line chart, the FIRST LINE must be exactly "xychart-beta" — no other chart type keyword exists (not "barChart", "lineChart", "line chart", "bar chart"). Use "bar" and "line" as series keywords inside xychart-beta. Valid types: pie, xychart-beta, flowchart, timeline, mindmap, gantt, journey, sequenceDiagram.
+- Mermaid v11 diagrams are supported by the UI (NOT a tool — just use fenced \`\`\`mermaid code blocks in your response). No emoji in Mermaid text. Pie chart labels MUST be quoted: \`"AMD" : 35.06\` (not \`AMD : 35.06\`). Pie values must be positive — use a table for negative values. For ANY bar or line chart, the FIRST LINE must be exactly "xychart-beta" — no other chart type keyword exists (not "barChart", "lineChart", "line chart", "bar chart"). Use "bar" and "line" as series keywords inside xychart-beta. Valid types: pie, xychart-beta, flowchart, timeline, mindmap, gantt, journey, sequenceDiagram.
 - Keep paragraphs to 2–4 sentences.
 - Use emoji sparingly as section markers (e.g., 📌 Key Point, ⚠️ Warning) — never inline or decorative.
 - Use plain, direct language. No filler phrases or sycophantic openers.
@@ -429,10 +646,18 @@ export function parseToolCall(text) {
 
 // Execute a tool by name
 export async function executeTool(name, args) {
-  const tool = tools[name];
+  let tool = tools[name];
   if (!tool) {
-    const available = Object.keys(tools).join(', ');
-    return JSON.stringify({ error: `Unknown tool: ${name}. Available tools: ${available}` });
+    // Fuzzy match: find tool names containing the input or vice versa
+    const available = Object.keys(tools);
+    const close = available.find(t => t.includes(name) || name.includes(t));
+    if (close) {
+      console.log(`[tools] Auto-corrected "${name}" → "${close}"`);
+      tool = tools[close];
+      name = close;
+    } else {
+      return JSON.stringify({ error: `Unknown tool: ${name}. Available tools: ${available.join(', ')}` });
+    }
   }
   try {
     const result = await tool.execute(args);

@@ -141,20 +141,16 @@ router.post('/:id/messages', async (req, res) => {
     const toolUses = [];
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      console.log(`[tool-loop] round ${round + 1}/${MAX_TOOL_ROUNDS}, messages: ${llmMessages.length}`);
       const result = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
       });
 
-      console.log(`[tool-loop] LLM response (${result.content.length} chars): ${result.content.slice(0, 200)}`);
       if (result.usage) lastUsage = result.usage;
 
       const toolCall = parseToolCall(result.content);
       if (toolCall) {
-        console.log(`[tool-loop] tool call: ${toolCall.name}(${JSON.stringify(toolCall.arguments)})`);
         const toolResult = await executeTool(toolCall.name, toolCall.arguments);
-        console.log(`[tool-loop] tool result (${toolResult.length} chars): ${toolResult.slice(0, 200)}`);
         // Send tool_use event to client and store for persistence
         toolUses.push({ name: toolCall.name, result: toolResult });
         res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
@@ -179,7 +175,6 @@ router.post('/:id/messages', async (req, res) => {
         slotId,
         signal: abortController.signal,
       });
-      console.log(`[tool-loop] forced answer (${forced.content.length} chars): ${forced.content.slice(0, 200)}`);
       finalContent = forced.content;
       if (forced.usage) lastUsage = forced.usage;
     }

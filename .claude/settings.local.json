@@ -8,7 +8,9 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.servicestack.net)",
       "WebFetch(domain:deepwiki.com)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "WebFetch(domain:diviengine.com)",
+      "WebFetch(domain:www.nngroup.com)"
     ]
   }
 }

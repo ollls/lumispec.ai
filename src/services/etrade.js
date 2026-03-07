@@ -189,6 +189,96 @@ function normalizeDate(str) {
   return str; // pass through as-is, let E*TRADE reject if invalid
 }
 
+// ── Market Data endpoints ────────────────────────────
+
+async function getQuotes(symbols, { detailFlag = 'ALL', requireEarningsDate = true } = {}) {
+  if (!symbols || !symbols.length) throw new Error('At least one symbol is required');
+  const syms = Array.isArray(symbols) ? symbols : symbols.split(',').map(s => s.trim());
+  const params = new URLSearchParams({ detailFlag });
+  if (requireEarningsDate) params.set('requireEarningsDate', 'true');
+  if (syms.length > 25) params.set('overrideSymbolCount', 'true');
+  const data = await apiGet(`/v1/market/quote/${syms.join(',')}.json?${params}`);
+  const quotes = data.QuoteResponse?.QuoteData || [];
+  return { quotes, totalCount: quotes.length };
+}
+
+async function getOptionChains({ symbol, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, includeWeekly, skipAdjusted = true, chainType = 'CALLPUT', optionCategory = 'STANDARD', priceType = 'ATNM' } = {}) {
+  if (!symbol) throw new Error('symbol is required');
+  const params = new URLSearchParams({ symbol, chainType, optionCategory, priceType });
+  if (expiryYear) params.set('expiryYear', expiryYear);
+  if (expiryMonth) params.set('expiryMonth', expiryMonth);
+  if (expiryDay) params.set('expiryDay', expiryDay);
+  if (strikePriceNear) params.set('strikePriceNear', strikePriceNear);
+  if (noOfStrikes) params.set('noOfStrikes', noOfStrikes);
+  if (includeWeekly) params.set('includeWeekly', 'true');
+  if (skipAdjusted) params.set('skipAdjusted', 'true');
+  const data = await apiGet(`/v1/market/optionchains.json?${params}`);
+  const result = data.OptionChainResponse || data;
+  return result;
+}
+
+async function getOptionExpireDates(symbol, expiryType) {
+  if (!symbol) throw new Error('symbol is required');
+  const params = new URLSearchParams({ symbol });
+  if (expiryType) params.set('expiryType', expiryType);
+  const data = await apiGet(`/v1/market/optionexpiredate.json?${params}`);
+  const dates = data.OptionExpireDateResponse?.ExpirationDate || [];
+  return { expirationDates: dates, totalCount: dates.length };
+}
+
+async function lookupProduct(search) {
+  if (!search) throw new Error('search term is required');
+  const data = await apiGet(`/v1/market/lookup/${encodeURIComponent(search)}.json`);
+  const products = data.LookupResponse?.Data || [];
+  return { products, totalCount: products.length };
+}
+
+// ── Account Activity endpoints ───────────────────────
+
+async function getOrders(accountIdKey, { status, fromDate, toDate, marker, count = 100 } = {}) {
+  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  const params = new URLSearchParams();
+  if (count) params.set('count', count);
+  if (status) params.set('status', status);
+  if (fromDate) params.set('fromDate', normalizeDate(fromDate));
+  if (toDate) params.set('toDate', normalizeDate(toDate));
+  if (marker) params.set('marker', marker);
+  const qs = params.toString();
+  const data = await apiGet(`/v1/accounts/${accountIdKey}/orders.json${qs ? '?' + qs : ''}`);
+  const result = data.OrdersResponse || data;
+  const orders = result?.Order || [];
+  result.totalCount = Array.isArray(orders) ? orders.length : 0;
+  return result;
+}
+
+async function getAlerts({ count = 25, category, status, direction, search } = {}) {
+  const params = new URLSearchParams();
+  if (count) params.set('count', count);
+  if (category) params.set('category', category);
+  if (status) params.set('status', status);
+  if (direction) params.set('direction', direction);
+  if (search) params.set('search', search);
+  const qs = params.toString();
+  const data = await apiGet(`/v1/user/alerts.json${qs ? '?' + qs : ''}`);
+  const result = data.AlertsResponse || data;
+  const alerts = result?.Alert || [];
+  result.totalCount = Array.isArray(alerts) ? alerts.length : 0;
+  return result;
+}
+
+async function getAlertDetails(alertId) {
+  if (!alertId) throw new Error('alertId is required');
+  const data = await apiGet(`/v1/user/alerts/${alertId}.json`);
+  return data.AlertDetailsResponse || data;
+}
+
+async function getTransactionDetail(accountIdKey, transactionId) {
+  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  if (!transactionId) throw new Error('transactionId is required');
+  const data = await apiGet(`/v1/accounts/${accountIdKey}/transactions/${transactionId}.json`);
+  return data.TransactionDetailsResponse || data;
+}
+
 async function getTransactions(accountIdKey, { count = 50, startDate, endDate } = {}) {
   accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
   // Default to last 30 days if no start date provided
@@ -202,13 +292,8 @@ async function getTransactions(accountIdKey, { count = 50, startDate, endDate } 
   const ed = normalizeDate(endDate);
   if (sd) url += `&startDate=${sd}`;
   if (ed) url += `&endDate=${ed}`;
-  const fullUrl = `${BASE}${url}`;
-  console.log(`[etrade] transactions request: ${fullUrl}`);
-  console.log(`[etrade] params: startDate=${sd}, endDate=${ed}, count=${count}`);
   try {
     const data = await apiGet(url, 180000);
-    console.log(`[etrade] transactions response keys:`, Object.keys(data));
-    console.log(`[etrade] transactions response (first 500 chars):`, JSON.stringify(data).slice(0, 500));
     const result = data.TransactionListResponse || data;
     const txns = result?.Transaction || result?.transaction || [];
     result.totalCount = Array.isArray(txns) ? txns.length : 0;
@@ -229,4 +314,12 @@ export default {
   getPortfolio,
   getGains,
   getTransactions,
+  getQuotes,
+  getOptionChains,
+  getOptionExpireDates,
+  lookupProduct,
+  getOrders,
+  getAlerts,
+  getAlertDetails,
+  getTransactionDetail,
 };
