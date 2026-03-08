@@ -66,6 +66,18 @@
         </div>
       </div>
       <div class="ml-auto flex items-center gap-2">
+        <div class="relative flex items-center mr-6">
+          <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Tools</button>
+          <div id="tools-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 w-80 max-h-80 overflow-y-auto slim-scrollbar">
+            <div id="tools-list" class="py-1"></div>
+          </div>
+        </div>
+        <div class="relative flex items-center">
+          <button id="prompts-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Prompts</button>
+          <div id="prompts-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+            <div id="prompt-list" class="py-1"></div>
+          </div>
+        </div>
         <span class="text-zinc-500">Context:</span>
         <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
           <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
@@ -80,8 +92,8 @@
     </div>
 
     <!-- Chat area -->
-    <div id="response-area" class="flex-1 overflow-y-auto px-6 py-6 space-y-4 slim-scrollbar">
-      <div id="empty-state" class="text-zinc-500 text-sm text-center py-20">
+    <div id="response-area" class="flex-1 overflow-y-auto px-4 py-6 space-y-4 slim-scrollbar">
+      <div id="empty-state" class="text-zinc-500 text-sm text-center" style="margin-top: 40vh;">
         Create or select a conversation to get started.
       </div>
     </div>
@@ -109,16 +121,31 @@
             class="flex-1 bg-zinc-800 text-zinc-100 placeholder-zinc-600 resize-none outline-none text-sm leading-relaxed rounded-lg px-4 py-3 border border-zinc-700 focus:border-zinc-500 slim-scrollbar"
           ></textarea>
           <button
+            type="button"
+            id="clear-prompt-btn"
+            title="Clear prompt"
+            class="text-zinc-600 hover:text-zinc-300 transition-colors px-1 py-3 text-sm shrink-0"
+          >&#10005;</button>
+          <button
             type="submit"
             id="send-btn"
             class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Send
           </button>
+          <button
+            type="button"
+            id="save-prompt-btn"
+            title="Save as prompt"
+            class="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium px-3 py-3 rounded-lg transition-colors"
+          >
+            Save
+          </button>
         </div>
       </div>
     </form>
   </div>
+
 
 </body>
 <script src="/js/app.js"></script>

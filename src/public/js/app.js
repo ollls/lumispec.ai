@@ -41,6 +41,14 @@ const etradePanelContent = document.getElementById('etrade-panel-content');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
+const savePromptBtn = document.getElementById('save-prompt-btn');
+const clearPromptBtn = document.getElementById('clear-prompt-btn');
+const promptList = document.getElementById('prompt-list');
+const promptsToggle = document.getElementById('prompts-toggle');
+const promptsDropdown = document.getElementById('prompts-dropdown');
+const toolsToggle = document.getElementById('tools-toggle');
+const toolsDropdown = document.getElementById('tools-dropdown');
+const toolsList = document.getElementById('tools-list');
 
 // ── API layer ─────────────────────────────────────────
 const api = {
@@ -989,9 +997,209 @@ form.addEventListener('drop', (e) => {
   }
 });
 
+// ── Prompt Library ────────────────────────────────────
+promptsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toolsDropdown.classList.add('hidden');
+  promptsDropdown.classList.toggle('hidden');
+});
+promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
+toolsDropdown.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', (e) => {
+  if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
+  if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
+});
+
+// ── Tools Panel ──────────────────────────────────────
+toolsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.toggle('hidden');
+  if (!toolsDropdown.classList.contains('hidden')) refreshTools();
+});
+
+async function refreshTools() {
+  try {
+    const tools = await (await fetch('/api/tools')).json();
+    renderTools(tools);
+  } catch {}
+}
+
+function renderTools(tools) {
+  toolsList.innerHTML = '';
+  for (const t of tools) {
+    const item = document.createElement('div');
+    item.className = 'relative flex items-center gap-2 px-3 py-2 border-b border-zinc-700/50 hover:bg-zinc-700/30 transition-colors';
+
+    const toggle = document.createElement('button');
+    Object.assign(toggle.style, {
+      width: '32px', height: '16px', borderRadius: '9999px', position: 'relative',
+      flexShrink: '0', transition: 'background 0.2s', cursor: 'pointer', border: 'none',
+      background: t.enabled ? '#6366f1' : '#52525b',
+    });
+    const knob = document.createElement('span');
+    Object.assign(knob.style, {
+      position: 'absolute', top: '2px', width: '12px', height: '12px',
+      borderRadius: '9999px', background: 'white', transition: 'left 0.2s',
+      left: t.enabled ? '16px' : '2px',
+    });
+    toggle.appendChild(knob);
+    toggle.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch(`/api/tools/${t.name}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !t.enabled }),
+      });
+      if (res.ok) refreshTools();
+    });
+
+    const name = document.createElement('span');
+    Object.assign(name.style, { fontSize: '12px', fontWeight: '500', cursor: 'default', color: t.enabled ? '#e4e4e7' : '#71717a' });
+    name.textContent = t.name;
+
+    item.appendChild(toggle);
+    item.appendChild(name);
+
+    // Popup on hover — appended to body with inline styles to avoid clipping and Tailwind build issues
+    let popup = null;
+    item.addEventListener('mouseenter', () => {
+      popup = document.createElement('div');
+      Object.assign(popup.style, {
+        position: 'fixed', zIndex: '9999', width: '300px', maxHeight: '400px',
+        overflowY: 'auto', padding: '12px', background: '#18181b', border: '1px solid #52525b',
+        borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', pointerEvents: 'none',
+      });
+      const descEl = document.createElement('div');
+      Object.assign(descEl.style, { fontSize: '12px', color: '#d4d4d8', lineHeight: '1.6', whiteSpace: 'pre-wrap' });
+      descEl.textContent = t.description;
+      popup.appendChild(descEl);
+      if (t.parameters.length > 0) {
+        const paramsEl = document.createElement('div');
+        Object.assign(paramsEl.style, { marginTop: '8px', fontSize: '10px', color: '#71717a' });
+        paramsEl.textContent = 'params: ' + t.parameters.join(', ');
+        popup.appendChild(paramsEl);
+      }
+      document.body.appendChild(popup);
+      const rect = item.getBoundingClientRect();
+      let top = rect.top;
+      let left = rect.right + 8;
+      if (left + 308 > window.innerWidth) left = rect.left - 308 - 8;
+      if (top + popup.offsetHeight > window.innerHeight) top = window.innerHeight - popup.offsetHeight - 8;
+      popup.style.top = top + 'px';
+      popup.style.left = left + 'px';
+    });
+    item.addEventListener('mouseleave', () => {
+      if (popup) { popup.remove(); popup = null; }
+    });
+
+    toolsList.appendChild(item);
+  }
+}
+
+async function refreshPrompts() {
+  try {
+    const prompts = await (await fetch('/api/prompts')).json();
+    renderPrompts(prompts);
+  } catch {}
+}
+
+function renderPrompts(prompts) {
+  promptList.innerHTML = '';
+  let dragSrcEl = null;
+
+  for (const p of prompts) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-grab border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.draggable = true;
+    item.dataset.id = p.id;
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      promptList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      promptList.insertBefore(dragSrcEl, item);
+      const ids = [...promptList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/prompts/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs text-zinc-300';
+    titleSpan.textContent = p.title || p.text.slice(0, 60);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/prompts/${p.id}`, { method: 'DELETE' });
+      refreshPrompts();
+    });
+
+    item.addEventListener('click', () => {
+      input.value = p.text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.focus();
+    });
+
+    item.appendChild(titleSpan);
+    item.appendChild(delBtn);
+    promptList.appendChild(item);
+  }
+}
+
+clearPromptBtn.addEventListener('click', () => {
+  input.value = '';
+  input.style.height = 'auto';
+  input.focus();
+});
+
+savePromptBtn.addEventListener('click', async () => {
+  const text = input.value.trim();
+  if (!text) return;
+  savePromptBtn.disabled = true;
+  savePromptBtn.textContent = '…';
+  try {
+    await fetch('/api/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    input.value = '';
+    input.style.height = 'auto';
+    refreshPrompts();
+  } finally {
+    savePromptBtn.disabled = false;
+    savePromptBtn.textContent = 'Save';
+  }
+});
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   await refreshSidebar();
+  refreshPrompts();
   pollHealth();
   setInterval(pollHealth, 5000);
   pollInternet();

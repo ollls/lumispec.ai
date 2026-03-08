@@ -576,9 +576,29 @@ const tools = {
   },
 };
 
+// Tool enable/disable state
+const disabledTools = new Set();
+
+export function listTools() {
+  return Object.entries(tools).map(([name, t]) => ({
+    name,
+    description: t.description.split('\n')[0],
+    parameters: Object.keys(t.parameters),
+    enabled: !disabledTools.has(name),
+  }));
+}
+
+export function setToolEnabled(name, enabled) {
+  if (!tools[name]) return false;
+  if (enabled) disabledTools.delete(name);
+  else disabledTools.add(name);
+  return true;
+}
+
 // Build system prompt from registry
 export function getSystemPrompt() {
   const toolList = Object.entries(tools)
+    .filter(([name]) => !disabledTools.has(name))
     .map(([name, t]) => `- ${name}: ${t.description}`)
     .join('\n');
 
@@ -592,17 +612,34 @@ export function getSystemPrompt() {
 
   return `You are a helpful, knowledgeable assistant. Current date/time: ${datetime.local} (UTC: ${datetime.utc}, timezone: ${datetime.timezone}). Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 
-To use a tool, respond ONLY with:
+## Tool Call Format (MANDATORY)
 
+Every tool call MUST be wrapped in <tool_call></tool_call> tags. Never output bare JSON without these tags.
+
+Single tool call:
 <tool_call>
-{"name": "tool_name", "arguments": {}}
+{"name": "web_search", "arguments": {"query": "AAPL stock price"}}
 </tool_call>
+
+Multiple tool calls (executed in parallel):
+<tool_call>
+{"name": "etrade_account", "arguments": {"action": "portfolio", "accountIdKey": "abc123"}}
+</tool_call>
+<tool_call>
+{"name": "etrade_account", "arguments": {"action": "quote", "symbols": "AAPL,MSFT"}}
+</tool_call>
+
+CRITICAL JSON rules:
+- All arguments go FLAT in the "arguments" object. NEVER nest "arguments" inside "arguments".
+- Every opening { must have a matching closing }.
+- WRONG: {"name": "etrade_account", "arguments": {"action": "portfolio", "arguments": {"accountIdKey": "x"}}}
+- RIGHT: {"name": "etrade_account", "arguments": {"action": "portfolio", "accountIdKey": "x"}}
 
 Available tools:
 ${toolList}
 
 Tool rules:
-- Output ONLY the <tool_call> block when using a tool, no other text.
+- Output ONLY <tool_call> blocks when using tools, no other text.
 - Wait for the tool result before answering.
 - Do not fabricate tool results. When etrade_account returns a "_markdown" field, use that pre-formatted table as your primary data source — present those exact values. Do not recompute, round, or omit rows.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
@@ -632,20 +669,51 @@ Rules:
 - Separate major topic shifts with a horizontal rule (---).`;
 }
 
-// Parse <tool_call>...</tool_call> from LLM output
-export function parseToolCall(text) {
-  const match = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/);
-  if (!match) return null;
-  try {
-    const parsed = JSON.parse(match[1]);
-    return { name: parsed.name, arguments: parsed.arguments || {} };
-  } catch {
-    return null;
+// Parse all <tool_call>...</tool_call> blocks from LLM output
+export function parseToolCalls(text) {
+  const calls = [];
+
+  // Primary: extract all <tool_call> blocks
+  for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+    } catch { /* skip malformed */ }
   }
+  if (calls.length > 0) return calls;
+
+  // Fallback: detect bare JSON tool calls without tags (handles nested objects and missing braces)
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf('{"name"', i);
+    if (start === -1) break;
+    // Brace-counting to find the end of this JSON object
+    let depth = 0, end = start;
+    for (let j = start; j < text.length; j++) {
+      if (text[j] === '{') depth++;
+      else if (text[j] === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
+    }
+    let candidate = text.slice(start, end);
+    // If braces are unbalanced, try appending missing closing braces
+    if (depth > 0) candidate += '}'.repeat(depth);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed.name && typeof parsed.arguments === 'object') {
+        // Flatten nested "arguments" wrapper the LLM sometimes produces
+        const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
+        calls.push({ name: parsed.name, arguments: args });
+      }
+    } catch { /* skip malformed */ }
+    i = end;
+  }
+  return calls;
 }
 
 // Execute a tool by name
 export async function executeTool(name, args) {
+  if (disabledTools.has(name)) {
+    return JSON.stringify({ error: `Tool "${name}" is currently disabled.` });
+  }
   let tool = tools[name];
   if (!tool) {
     // Fuzzy match: find tool names containing the input or vice versa

@@ -6,6 +6,8 @@ import conversationRoutes from './routes/conversations.js';
 import slotRoutes from './routes/slots.js';
 import healthRoutes from './routes/health.js';
 import etradeRoutes from './routes/etrade.js';
+import promptRoutes from './routes/prompts.js';
+import toolRoutes from './routes/tools.js';
 import slots from './services/slots.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +24,8 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/slots', slotRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/etrade', etradeRoutes);
+app.use('/api/prompts', promptRoutes);
+app.use('/api/tools', toolRoutes);
 
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));

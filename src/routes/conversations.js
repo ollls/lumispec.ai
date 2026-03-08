@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
-import { getSystemPrompt, parseToolCall, executeTool } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool } from '../services/tools.js';
 
 const router = Router();
 
@@ -148,15 +148,20 @@ router.post('/:id/messages', async (req, res) => {
 
       if (result.usage) lastUsage = result.usage;
 
-      const toolCall = parseToolCall(result.content);
-      if (toolCall) {
-        const toolResult = await executeTool(toolCall.name, toolCall.arguments);
-        // Send tool_use event to client and store for persistence
-        toolUses.push({ name: toolCall.name, result: toolResult });
-        res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
-        // Append assistant tool call + tool result to messages for next round
+      const toolCallsFound = parseToolCalls(result.content);
+      if (toolCallsFound.length > 0) {
+        // Execute all tool calls in parallel
+        const results = await Promise.all(
+          toolCallsFound.map(tc => executeTool(tc.name, tc.arguments))
+        );
+        const resultParts = [];
+        for (let i = 0; i < toolCallsFound.length; i++) {
+          toolUses.push({ name: toolCallsFound[i].name, result: results[i] });
+          res.write(`data: ${JSON.stringify({ tool_use: { name: toolCallsFound[i].name, result: results[i] } })}\n\n`);
+          resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${results[i]}`);
+        }
         llmMessages.push({ role: 'assistant', content: result.content });
-        llmMessages.push({ role: 'user', content: `Tool "${toolCall.name}" result: ${toolResult}` });
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') });
       } else {
         // Final answer — no tool call
         finalContent = result.content;
