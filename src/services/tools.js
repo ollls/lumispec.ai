@@ -896,13 +896,16 @@ export function getSystemPrompt() {
 
   return `You are a helpful, knowledgeable assistant. Current date/time: ${datetime.local} (UTC: ${datetime.utc}, timezone: ${datetime.timezone}). Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 
-## Tool Call Format (MANDATORY)
+## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
-Every tool call MUST be wrapped in <tool_call></tool_call> tags. Never output bare JSON without these tags.
+CRITICAL: Every tool call MUST be wrapped in <tool_call></tool_call> tags. Bare JSON without these tags will NOT execute — it will be displayed as plain text and the tool will never run.
 
-Single tool call:
+WRONG (silently ignored — tool never runs):
+{"name": "run_python", "arguments": {"code": "print('hello')"}}
+
+CORRECT (this actually executes):
 <tool_call>
-{"name": "web_search", "arguments": {"query": "AAPL stock price"}}
+{"name": "run_python", "arguments": {"code": "print('hello')"}}
 </tool_call>
 
 Multiple tool calls (executed in parallel):
@@ -923,9 +926,10 @@ Available tools:
 ${toolList}
 
 Tool rules:
-- Output ONLY <tool_call> blocks when using tools, no other text.
+- Output ONLY <tool_call> blocks when using tools, no other text before or after.
 - Wait for the tool result before answering.
 - Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
+- REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.
 ## FINANCIAL DATA INTEGRITY (applies to ALL E*TRADE / financial data)
 - NEVER interpret, reformat, summarize, round, abbreviate, recalculate, or manually transcribe financial data. E*TRADE tool results are authoritative — present them EXACTLY as returned, or save them to a file and let Python do the analysis. Dropping digits, misplacing decimals, or rounding dollar amounts is a serious error (e.g. $92,891.35 must stay $92,891.35 — never $924.83, $92,891, or $92.9K).
 - NEVER fabricate, interpolate, or invent financial figures. Only present values that appear verbatim in tool results. If a field or row doesn't exist in the data, don't create it.
@@ -974,7 +978,10 @@ Rules:
 - Keep paragraphs to 2–4 sentences.
 - Use emoji sparingly as section markers (e.g., 📌 Key Point, ⚠️ Warning) — never inline or decorative.
 - Use plain, direct language. No filler phrases or sycophantic openers.
-- Separate major topic shifts with a horizontal rule (---).`;
+- Separate major topic shifts with a horizontal rule (---).
+
+## FINAL REMINDER
+All tool calls MUST use <tool_call></tool_call> tags. Bare JSON is silently ignored — the tool will NOT run.`;
 }
 
 // Parse all <tool_call>...</tool_call> blocks from LLM output
@@ -1054,11 +1061,19 @@ export function parseToolCalls(text) {
   while (i < text.length) {
     const start = text.indexOf('{"name"', i);
     if (start === -1) break;
-    // Brace-counting to find the end of this JSON object
-    let depth = 0, end = start;
+    // String-aware brace counting — skip over JSON string contents so that
+    // braces inside quoted values (e.g. Python code) don't confuse the parser
+    let depth = 0, end = start, inString = false;
     for (let j = start; j < text.length; j++) {
-      if (text[j] === '{') depth++;
-      else if (text[j] === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
+      const ch = text[j];
+      if (inString) {
+        if (ch === '\\') { j++; continue; } // skip escaped char
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
     }
     let candidate = text.slice(start, end);
     // If braces are unbalanced, try appending missing closing braces
