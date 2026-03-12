@@ -158,8 +158,8 @@ router.post('/:id/messages', async (req, res) => {
     let accumulatedReasoning = '';
     const toolUses = [];
     const toolCallCounts = {}; // track per-tool call counts
-    // Workflow state tracker — tracks what data has been acquired across rounds
-    const acquired = { quote: false, expiry: false, chains: [], portfolio: false, savedFiles: [] };
+    let hadChainData = false;        // whether any optionchains call has completed
+    const savedFiles = [];            // filenames from saveAs / auto-save results
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Stream content as tool_content so user sees progress during generation
@@ -238,43 +238,26 @@ router.post('/:id/messages', async (req, res) => {
         llmMessages.push({ role: 'assistant', content: result.content });
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
 
-        // Update workflow state based on what tools just ran
+        // Track chain completions and saved files
         for (const tc of toolCallsFound) {
-          const action = tc.arguments?.action;
-          if (action === 'quote') acquired.quote = true;
-          if (action === 'optionexpiry') acquired.expiry = true;
-          if (action === 'portfolio') acquired.portfolio = true;
-          if (action === 'optionchains') {
-            const expLabel = [tc.arguments?.expiryYear, tc.arguments?.expiryMonth, tc.arguments?.expiryDay].filter(Boolean).join('-') || 'default';
-            acquired.chains.push(expLabel);
-          }
+          if (tc.arguments?.action === 'optionchains') hadChainData = true;
         }
-        // Track saved files from results
         for (const r of results) {
           try {
             const p = JSON.parse(r);
-            if (p.savedFile?.filename) acquired.savedFiles.push(p.savedFile.filename);
+            if (p.savedFile?.filename) savedFiles.push(p.savedFile.filename);
           } catch {}
         }
 
-        // Build workflow-aware directive: full state + next step
-        const stateLines = [];
-        if (acquired.quote) stateLines.push('quote ✓');
-        if (acquired.expiry) stateLines.push('optionexpiry ✓');
-        if (acquired.chains.length) stateLines.push(`optionchains ✓ (${acquired.chains.join(', ')})`);
-        if (acquired.portfolio) stateLines.push('portfolio ✓');
-        if (acquired.savedFiles.length) stateLines.push(`saved files: ${acquired.savedFiles.join(', ')}`);
-
+        // Directive: nudge LLM toward next step based on what's missing
         let directive = '';
-        if (acquired.chains.length > 0 && acquired.savedFiles.length > 0) {
-          directive = `Data is ready. Use run_python to read ${acquired.savedFiles.join(' and ')} and perform your analysis. Do NOT fetch more data unless specifically needed.`;
-        } else if (acquired.chains.length > 0) {
-          directive = 'Option chain data retrieved. If you need to analyze it, use run_python. If you need more expiries, call optionchains with saveAs.';
-        } else if (acquired.quote || acquired.expiry) {
-          directive = 'You have quote/expiry data. NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
+        if (savedFiles.length > 0) {
+          directive = `Data saved to: ${savedFiles.join(', ')}. Use run_python to analyze. Do NOT re-fetch data you already have.`;
+        } else if (!hadChainData) {
+          directive = 'NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
         }
 
-        const toolReminder = `\n\n[WORKFLOW STATE] Completed: ${stateLines.join(', ') || 'none'}. Rounds left: ${roundsLeft}.\n${directive}\nREMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
+        const toolReminder = `\n\nRounds left: ${roundsLeft}.${directive ? ' ' + directive : ''} REMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + toolReminder });
       } else {
         // Final answer — no tool call found by parser
