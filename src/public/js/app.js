@@ -510,23 +510,39 @@ async function sendMessage(content, images) {
                 } catch {}
                 pollSearch();
               }
-              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>${sourcesTag}`;
+              // Parse result to check for _markdown and build summary info
+              let parsedResult = null;
+              try { parsedResult = JSON.parse(data.tool_use.result); } catch {}
+
+              // Build richer summary line with key metadata
+              let metaTag = '';
+              if (parsedResult && !parsedResult.error) {
+                const counts = [];
+                if (parsedResult.totalCount != null) counts.push(`${parsedResult.totalCount} items`);
+                else if (parsedResult.totalPositions != null) counts.push(`${parsedResult.totalPositions} positions`);
+                else if (parsedResult.totalPairs != null) counts.push(`${parsedResult.totalPairs} pairs`);
+                if (parsedResult._autoSaved) counts.push('auto-saved');
+                if (parsedResult.savedFile) counts.push(parsedResult.savedFile.filename);
+                if (counts.length) metaTag = ` <span class="text-zinc-600">— ${counts.join(', ')}</span>`;
+              }
+              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>${sourcesTag}${metaTag}`;
+
+              // Raw JSON goes inside the collapsible
               const body = document.createElement('pre');
               body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
               body.textContent = data.tool_use.result;
               detail.appendChild(summary);
               detail.appendChild(body);
+
+              // Render _markdown tables inside the collapsible details (user can expand to see)
+              if (parsedResult?._markdown) {
+                const mdDiv = document.createElement('div');
+                mdDiv.className = 'mt-2 text-sm border-t border-zinc-800 pt-2';
+                renderFormattedContent(parsedResult._markdown, mdDiv);
+                detail.appendChild(mdDiv);
+              }
+
               toolUseContainer.appendChild(detail);
-              // Render _markdown tables directly so the LLM doesn't have to retype numbers
-              try {
-                const parsed = JSON.parse(data.tool_use.result);
-                if (parsed._markdown) {
-                  const mdDiv = document.createElement('div');
-                  mdDiv.className = 'my-2 text-sm';
-                  renderFormattedContent(parsed._markdown, mdDiv);
-                  toolUseContainer.appendChild(mdDiv);
-                }
-              } catch {}
 
               const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
               if (dl) toolUseContainer.appendChild(dl);

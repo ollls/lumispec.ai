@@ -219,11 +219,12 @@ function quotesToCsv(data) {
 function quotesToMd(data) {
   const quotes = data.quotes || [];
   if (!quotes.length) return '';
-  const headers = ['Symbol', 'Last', 'Change', 'Change %', 'Bid', 'Ask', 'Volume', '52w High', '52w Low', 'P/E'];
+  const headers = ['Symbol', 'Company', 'Last', 'Change', 'Change %', 'Bid', 'Ask', 'Volume', '52w High', '52w Low', 'P/E'];
   const rows = quotes.map(q => {
     const all = q.All || q.Intraday || q.Fundamental || {};
     return [
-      q.Product?.symbol || '', all.lastTrade ?? '', all.changeClose ?? all.change ?? '',
+      q.Product?.symbol || '', all.companyName || q.Product?.symbolDescription || '',
+      all.lastTrade ?? '', all.changeClose ?? all.change ?? '',
       all.changeClosePercentage ?? all.changePct ?? '', all.bid ?? '', all.ask ?? '',
       all.totalVolume ?? all.volume ?? '', all.high52 ?? '', all.low52 ?? '', all.pe ?? '',
     ];
@@ -714,7 +715,7 @@ const tools = {
     },
   },
   etrade_account: {
-    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
+    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — can be the encoded key from "list", a numeric accountId, OR a description like "IRA", "Rollover IRA", "brokerage" — auto-resolved):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
     parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
     execute: async ({ action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
       const _logArgs = { action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId };
@@ -1027,7 +1028,8 @@ Tool rules:
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
-- Options analysis workflow: (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis (IV surface, term structure), fetch up to 3 chains in parallel in ONE round, each with saveAs (e.g. saveAs: "MU_chain_apr17.csv"). Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. (3) In the NEXT round (not the same round!), use run_python on the saved CSVs. NEVER mix optionchains + run_python in the same round — run_python executes in parallel and the files won't exist yet. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
+- EXISTING POSITIONS IV/Greeks: When the user asks about IV, Greeks, or details on options they ALREADY HOLD (e.g. "check my MU option's IV", "what's the delta on my calls"), do NOT fetch the full option chain or expiry list. Instead: (1) call "portfolio" with accountIdKey matching the account description (e.g. "IRA", "brokerage" — auto-resolved, no need to call "list" first) to see their exact positions (symbol, strike, expiry), (2) call "optionchains" with the EXACT expiryYear/expiryMonth/expiryDay and strikePriceNear matching the held position's strike, with noOfStrikes=3 to get a narrow slice. This returns IV and Greeks in just 2 rounds. NEVER call optionexpiry when the user already has positions — the expiry is in the portfolio data. NEVER call "list" just to look up an accountIdKey — pass the account description directly.
+- General options analysis workflow (IV surface, term structure, "show all options"): (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis, fetch up to 3 chains in parallel in ONE round, each with saveAs (e.g. saveAs: "MU_chain_apr17.csv"). Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. (3) In the NEXT round (not the same round!), use run_python on the saved CSVs. NEVER mix optionchains + run_python in the same round — run_python executes in parallel and the files won't exist yet. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
 - CRITICAL: Only present strike prices, premiums, and Greeks that appear EXACTLY in the tool results. NEVER interpolate, extrapolate, or invent strikes between the ones returned. If the chain shows strikes at 420 and 430, do NOT fabricate a 425 strike. Present only real data rows from the tool output.
 - RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). The full chain will auto-save to CSV. Then use run_python to sort/filter the CSV and find the answer. You cannot determine "most popular" from a subset — you need all strikes to compare. Example: fetch full chain with saveAs → run_python to sort by Open Interest or Volume → present top N results.
 - When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
@@ -1083,12 +1085,27 @@ function repairToolCallJson(raw) {
     }
   } catch { /* continue to other repair attempts */ }
 
-  // Attempt 1: escape literal newlines/tabs/carriage-returns, then parse
+  // Attempt 1: smart-escape literal newlines/tabs/CR inside JSON string values only
   try {
-    const fixed = raw.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
-    const parsed = JSON.parse(fixed);
+    let escaped = '';
+    let esc_inStr = false;
+    for (let j = 0; j < raw.length; j++) {
+      const ch = raw[j];
+      if (esc_inStr) {
+        if (ch === '\\') { escaped += ch + (raw[++j] || ''); continue; }
+        if (ch === '"') esc_inStr = false;
+        if (ch === '\n') { escaped += '\\n'; continue; }
+        if (ch === '\r') { escaped += '\\r'; continue; }
+        if (ch === '\t') { escaped += '\\t'; continue; }
+        escaped += ch;
+      } else {
+        if (ch === '"') esc_inStr = true;
+        escaped += ch;
+      }
+    }
+    const parsed = JSON.parse(escaped);
     if (parsed.name) {
-      console.log(`[parseToolCalls] repaired JSON by escaping newlines for tool "${name}"`);
+      console.log(`[parseToolCalls] repaired JSON by smart-escaping newlines for tool "${name}"`);
       return { name: parsed.name, arguments: parsed.arguments || {} };
     }
   } catch { /* continue to next attempt */ }
@@ -1118,6 +1135,14 @@ function repairToolCallJson(raw) {
 
 export function parseToolCalls(text) {
   const calls = [];
+
+  // Pre-normalize: fix = used instead of : in tool call JSON
+  // Pattern 1: "name=tool_name" as a single token → "name": "tool_name"
+  //   e.g. {"name=list_files", "arguments": {}} → {"name": "list_files", "arguments": {}}
+  text = text.replace(/"(name|arguments)\s*=\s*([^"{}[\],]+)"/g, '"$1": "$2"');
+  // Pattern 2: "key" = value (= as separator instead of :)
+  //   e.g. {"name" = "list_files"} → {"name": "list_files"}
+  text = text.replace(/"(\w+)"\s*=\s*/g, '"$1": ');
 
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
@@ -1162,17 +1187,41 @@ export function parseToolCalls(text) {
     let candidate = text.slice(start, end);
     // If braces are unbalanced, try appending missing closing braces
     if (depth > 0) candidate += '}'.repeat(depth);
+    // Try parsing directly, then with smart newline escaping, then full repair
+    let parsed = null;
     try {
-      const parsed = JSON.parse(candidate);
-      if (parsed.name && typeof parsed.arguments === 'object') {
-        // Flatten nested "arguments" wrapper the LLM sometimes produces
-        const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
-        calls.push({ name: parsed.name, arguments: args });
-      }
+      parsed = JSON.parse(candidate);
     } catch {
-      // Bare JSON also failed — try repair
-      const repaired = repairToolCallJson(candidate);
-      if (repaired) calls.push(repaired);
+      // Smart-escape: only escape literal newlines/tabs/CR inside JSON string values
+      // (unlike blind replace, this preserves whitespace between JSON tokens)
+      let escaped = '';
+      let esc_inStr = false;
+      for (let j = 0; j < candidate.length; j++) {
+        const ch = candidate[j];
+        if (esc_inStr) {
+          if (ch === '\\') { escaped += ch + (candidate[++j] || ''); continue; }
+          if (ch === '"') esc_inStr = false;
+          if (ch === '\n') { escaped += '\\n'; continue; }
+          if (ch === '\r') { escaped += '\\r'; continue; }
+          if (ch === '\t') { escaped += '\\t'; continue; }
+          escaped += ch;
+        } else {
+          if (ch === '"') esc_inStr = true;
+          escaped += ch;
+        }
+      }
+      try {
+        parsed = JSON.parse(escaped);
+        console.log(`[parseToolCalls] bare JSON parsed after smart-escaping newlines`);
+      } catch {
+        // Full repair as last resort
+        const repaired = repairToolCallJson(candidate);
+        if (repaired) calls.push(repaired);
+      }
+    }
+    if (parsed && parsed.name && typeof parsed.arguments === 'object') {
+      const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
+      calls.push({ name: parsed.name, arguments: args });
     }
     i = end;
   }

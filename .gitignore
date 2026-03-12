@@ -2,3 +2,4 @@ node_modules/
 src/public/css/output.css
 .env
 data/
+logs/

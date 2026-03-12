@@ -26,6 +26,9 @@ export default {
     apiKey: process.env.KEIRO_API_KEY || '',
     baseUrl: process.env.KEIRO_BASE_URL || 'https://kierolabs.space/api',
   },
+  python: {
+    venvPath: process.env.PYTHON_VENV || '',
+  },
   etrade: {
     consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',

@@ -124,6 +124,7 @@ router.post('/:id/messages', async (req, res) => {
       const response = await streamChatCompletion(messages, opts);
       let content = '';
       let usage = null;
+      let suppressToolContent = false;
 
       for await (const chunk of parseSSEChunks(response)) {
         const delta = chunk.choices?.[0]?.delta;
@@ -134,8 +135,13 @@ router.post('/:id/messages', async (req, res) => {
         if (delta?.content) {
           content += delta.content;
           // During tool rounds, stream content so user sees progress instead of dead screen
-          if (isToolRound) {
-            res.write(`data: ${JSON.stringify({ tool_content: delta.content })}\n\n`);
+          // But suppress streaming once content looks like a JSON tool call (bare or tagged)
+          if (isToolRound && !suppressToolContent) {
+            if (/\{"name"\s*:/.test(content) || /<tool_call>/i.test(content)) {
+              suppressToolContent = true;
+            } else {
+              res.write(`data: ${JSON.stringify({ tool_content: delta.content })}\n\n`);
+            }
           }
         }
         // Usage: llama-server sends timings, OpenAI sends usage
@@ -150,7 +156,7 @@ router.post('/:id/messages', async (req, res) => {
       return { content, usage };
     }
 
-    const MAX_TOOL_ROUNDS = 5;
+    const MAX_TOOL_ROUNDS = 7;
     const MAX_SAME_TOOL_REPEATS = 2;
     const MAX_PARALLEL_TOOLS = 4;
     let finalContent = '';
@@ -220,14 +226,14 @@ router.post('/:id/messages', async (req, res) => {
               llmResult = JSON.stringify(summary);
             } else if (parsed._markdown) {
               const { _markdown, ...summary } = parsed;
-              // Truncate markdown tables to reduce context: keep header + first 10 data rows
+              // Truncate markdown tables to reduce context: keep header + first 30 data rows
               const mdLines = _markdown.split('\n');
               let truncatedMd = _markdown;
               const dataRowStart = mdLines.findIndex(l => l.startsWith('|')) + 2; // skip header + separator
               if (dataRowStart > 1) {
                 const dataRows = mdLines.slice(dataRowStart).filter(l => l.startsWith('|'));
-                if (dataRows.length > 10) {
-                  truncatedMd = mdLines.slice(0, dataRowStart + 10).join('\n') + `\n... (${dataRows.length - 10} more rows)`;
+                if (dataRows.length > 30) {
+                  truncatedMd = mdLines.slice(0, dataRowStart + 30).join('\n') + `\n... (${dataRows.length - 30} more rows)`;
                 }
               }
               llmResult = truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');

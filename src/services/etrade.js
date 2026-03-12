@@ -92,28 +92,49 @@ async function listAccounts() {
   return { accounts, totalCount: accounts.length };
 }
 
-// Resolve accountIdKey: if a numeric accountId is passed, look up the real accountIdKey
-function resolveAccountIdKey(value) {
+// Resolve accountIdKey: accepts numeric accountId, account description, or account type
+// Auto-fetches account list if not cached
+async function resolveAccountIdKey(value) {
   if (!value) return null;
-  // If it looks like a numeric accountId (all digits), try to find the encoded accountIdKey
-  if (/^\d+$/.test(value) && cachedAccounts) {
+  // If it already looks like an encoded accountIdKey (contains non-digit chars, not a descriptive name), pass through
+  if (!cachedAccounts && isAuthenticated()) {
+    try { await listAccounts(); } catch (e) { console.warn(`[etrade] auto-fetch accounts failed: ${e.message}`); }
+  }
+  if (!cachedAccounts) return value;
+
+  // Try numeric accountId match
+  if (/^\d+$/.test(value)) {
     const match = cachedAccounts.find(a => String(a.accountId) === value || String(a.accountIdKey) === value);
     if (match && match.accountIdKey !== value) {
       console.log(`[etrade] Resolved numeric accountId ${value} → accountIdKey ${match.accountIdKey}`);
       return match.accountIdKey;
     }
   }
+
+  // Try description/type match (case-insensitive substring: "IRA", "Rollover IRA", "brokerage", etc.)
+  const lower = value.toLowerCase();
+  const descMatch = cachedAccounts.find(a =>
+    (a.accountDesc && a.accountDesc.toLowerCase().includes(lower)) ||
+    (a.accountName && a.accountName.toLowerCase().includes(lower)) ||
+    (a.accountType && a.accountType.toLowerCase().includes(lower)) ||
+    (a.instType && a.instType.toLowerCase().includes(lower))
+  );
+  if (descMatch) {
+    console.log(`[etrade] Resolved "${value}" → accountIdKey ${descMatch.accountIdKey} (${descMatch.accountDesc || descMatch.accountName || ''})`);
+    return descMatch.accountIdKey;
+  }
+
   return value;
 }
 
 async function getBalance(accountIdKey, instType = 'BROKERAGE') {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   const data = await apiGet(`/v1/accounts/${accountIdKey}/balance.json?instType=${instType}&realTimeNAV=true`);
   return data.BalanceResponse || data;
 }
 
 async function getPortfolio(accountIdKey) {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   const data = await apiGet(`/v1/accounts/${accountIdKey}/portfolio.json?view=COMPLETE&totalsRequired=true`);
   const result = data.PortfolioResponse || data;
   const positions = result?.AccountPortfolio?.[0]?.Position || [];
@@ -122,7 +143,7 @@ async function getPortfolio(accountIdKey) {
 }
 
 async function getGains(accountIdKey) {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   const data = await apiGet(`/v1/accounts/${accountIdKey}/portfolio.json?view=COMPLETE&totalsRequired=true&lotsRequired=true`);
   const result = data.PortfolioResponse || data;
   const positions = result?.AccountPortfolio?.[0]?.Position || [];
@@ -241,7 +262,7 @@ async function lookupProduct(search) {
 // ── Account Activity endpoints ───────────────────────
 
 async function getOrders(accountIdKey, { status, fromDate, toDate, marker, count = 100 } = {}) {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   const params = new URLSearchParams();
   if (count) params.set('count', count);
   if (status) params.set('status', status);
@@ -278,14 +299,14 @@ async function getAlertDetails(alertId) {
 }
 
 async function getTransactionDetail(accountIdKey, transactionId) {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   if (!transactionId) throw new Error('transactionId is required');
   const data = await apiGet(`/v1/accounts/${accountIdKey}/transactions/${transactionId}.json`);
   return data.TransactionDetailsResponse || data;
 }
 
 async function getTransactions(accountIdKey, { count = 50, startDate, endDate, maxPages = 0 } = {}) {
-  accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
+  accountIdKey = (await resolveAccountIdKey(accountIdKey)) || accountIdKey;
   if (!startDate) {
     startDate = `0101${new Date().getFullYear()}`;
   }
