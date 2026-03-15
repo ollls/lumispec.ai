@@ -264,6 +264,26 @@ function scheduleRender(text, container) {
   }, RENDER_INTERVAL - (now - _lastRenderTime));
 }
 
+// ── Extract image URLs from tool results ──────────────
+const IMG_URL_RE = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp|svg|bmp)(?:\?\S*)?/gi;
+function extractImageUrls(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  const urls = new Set();
+  if (typeof obj === 'string') {
+    for (const m of obj.matchAll(IMG_URL_RE)) urls.add(m[0]);
+  } else if (Array.isArray(obj)) {
+    for (const item of obj) {
+      for (const u of extractImageUrls(item, depth + 1)) urls.add(u);
+    }
+  } else if (typeof obj === 'object') {
+    for (const [key, val] of Object.entries(obj)) {
+      if (key.startsWith('_')) continue; // skip _markdown etc.
+      for (const u of extractImageUrls(val, depth + 1)) urls.add(u);
+    }
+  }
+  return [...urls];
+}
+
 // ── File download link helper ─────────────────────────
 function makeFileDownloadLink(toolName, resultStr) {
   try {
@@ -540,6 +560,34 @@ async function sendMessage(content, images) {
                 mdDiv.className = 'mt-2 text-sm border-t border-zinc-800 pt-2';
                 renderFormattedContent(parsedResult._markdown, mdDiv);
                 detail.appendChild(mdDiv);
+              }
+
+              // Detect image URLs in tool results and render as thumbnails
+              const imageUrls = extractImageUrls(parsedResult);
+              if (imageUrls.length > 0) {
+                const imgGrid = document.createElement('div');
+                imgGrid.className = 'msg-image-grid mt-2 border-t border-zinc-800 pt-2';
+                for (const url of imageUrls.slice(0, 12)) {
+                  const img = document.createElement('img');
+                  img.src = url;
+                  img.className = 'msg-image-thumb';
+                  img.loading = 'lazy';
+                  img.alt = '';
+                  img.addEventListener('click', () => {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'image-overlay';
+                    const full = document.createElement('img');
+                    full.src = url;
+                    full.className = 'image-overlay-img';
+                    overlay.appendChild(full);
+                    overlay.addEventListener('click', () => overlay.remove());
+                    document.body.appendChild(overlay);
+                  });
+                  img.addEventListener('error', () => img.remove());
+                  imgGrid.appendChild(img);
+                }
+                // Show outside the collapsible so images are visible without expanding
+                toolUseContainer.appendChild(imgGrid);
               }
 
               toolUseContainer.appendChild(detail);
