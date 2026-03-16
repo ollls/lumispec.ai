@@ -266,6 +266,18 @@ router.post('/:id/messages', async (req, res) => {
             return requestConfirmation(conv.id, command);
           },
         };
+        // Send status indicators for slow operations (booking tools)
+        for (const tc of toolCallsFound) {
+          const statusMessages = {
+            'booking:prebook': '🔒 Pre-booking rate...',
+            'booking:book': '📝 Completing reservation...',
+            'booking:cancel': '❌ Cancelling booking...',
+          };
+          const statusKey = `${tc.name}:${tc.arguments?.action}`;
+          if (statusMessages[statusKey]) {
+            res.write(`data: ${JSON.stringify({ tool_status: statusMessages[statusKey] })}\n\n`);
+          }
+        }
         const results = await Promise.all(
           toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context))
         );
@@ -295,6 +307,13 @@ router.post('/:id/messages', async (req, res) => {
                 }
               }
               llmResult = truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
+            }
+            // Strip heavy data from LLM context (keep for frontend via SSE)
+            if (parsed._images || parsed._rateMap) {
+              const { _images, _rateMap, ...rest } = parsed;
+              if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
+              if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
+              llmResult = JSON.stringify(rest);
             }
           } catch {}
           resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);

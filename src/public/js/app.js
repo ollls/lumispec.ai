@@ -33,6 +33,9 @@ const searchDropdown = document.getElementById('search-dropdown');
 const toolUsageToggle = document.getElementById('tool-usage-toggle');
 const toolUsageCount = document.getElementById('tool-usage-count');
 const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
+const liteapiStatus = document.getElementById('liteapi-status');
+const liteapiDot = document.getElementById('liteapi-dot');
+const liteapiLabel = document.getElementById('liteapi-label');
 const etradeStatus = document.getElementById('etrade-status');
 const etradeDot = document.getElementById('etrade-dot');
 const etradeToggle = document.getElementById('etrade-toggle');
@@ -277,7 +280,7 @@ function extractImageUrls(obj, depth = 0) {
     }
   } else if (typeof obj === 'object') {
     for (const [key, val] of Object.entries(obj)) {
-      if (key.startsWith('_')) continue; // skip _markdown etc.
+      if (key.startsWith('_') && key !== '_images') continue; // skip _markdown etc. but keep _images
       for (const u of extractImageUrls(val, depth + 1)) urls.add(u);
     }
   }
@@ -389,6 +392,42 @@ function appendMessage(role, text, images, meta = {}) {
       detail.appendChild(summary);
       detail.appendChild(body);
       container.appendChild(detail);
+      // Collapsible image thumbnails for stored tool results
+      try {
+        const parsedTu = JSON.parse(tu.result);
+        const tuImageUrls = extractImageUrls(parsedTu);
+        if (tuImageUrls.length > 0) {
+          const imgDetail = document.createElement('details');
+          imgDetail.className = 'mb-2 border-t border-zinc-800 pt-2';
+          const imgSummary = document.createElement('summary');
+          imgSummary.className = 'text-xs text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors select-none';
+          imgSummary.textContent = `📷 Photos (${tuImageUrls.slice(0, 12).length})`;
+          imgDetail.appendChild(imgSummary);
+          const imgGrid = document.createElement('div');
+          imgGrid.className = 'msg-image-grid mt-2';
+          for (const url of tuImageUrls.slice(0, 12)) {
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'msg-image-thumb';
+            img.loading = 'lazy';
+            img.alt = '';
+            img.addEventListener('click', () => {
+              const overlay = document.createElement('div');
+              overlay.className = 'image-overlay';
+              const full = document.createElement('img');
+              full.src = url;
+              full.className = 'image-overlay-img';
+              overlay.appendChild(full);
+              overlay.addEventListener('click', () => overlay.remove());
+              document.body.appendChild(overlay);
+            });
+            img.addEventListener('error', () => img.remove());
+            imgGrid.appendChild(img);
+          }
+          imgDetail.appendChild(imgGrid);
+          container.appendChild(imgDetail);
+        }
+      } catch {}
       const dl = makeFileDownloadLink(tu.name, tu.result);
       if (dl) container.appendChild(dl);
     }
@@ -507,8 +546,25 @@ async function sendMessage(content, images) {
               toolUseContainer._thinkingEl.textContent += data.tool_content;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
+            if (data.tool_status) {
+              // Show inline status for slow operations (prebook, book, cancel)
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              // Remove previous status if any
+              const prev = toolUseContainer.querySelector('.tool-status-msg');
+              if (prev) prev.remove();
+              const statusEl = document.createElement('div');
+              statusEl.className = 'tool-status-msg text-xs text-indigo-400 py-1 animate-pulse';
+              statusEl.textContent = data.tool_status;
+              toolUseContainer.appendChild(statusEl);
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
             if (data.tool_use) {
-              // Clear the "Working..." indicator when a tool result arrives
+              // Clear status and "Working..." indicators when a tool result arrives
+              const statusMsg = toolUseContainer.querySelector('.tool-status-msg');
+              if (statusMsg) statusMsg.remove();
               if (toolUseContainer._thinkingEl) {
                 toolUseContainer._thinkingEl.closest('details').remove();
                 delete toolUseContainer._thinkingEl;
@@ -562,11 +618,17 @@ async function sendMessage(content, images) {
                 detail.appendChild(mdDiv);
               }
 
-              // Detect image URLs in tool results and render as thumbnails
+              // Detect image URLs in tool results and render as collapsible thumbnails
               const imageUrls = extractImageUrls(parsedResult);
               if (imageUrls.length > 0) {
+                const imgDetail = document.createElement('details');
+                imgDetail.className = 'mt-2 border-t border-zinc-800 pt-2';
+                const imgSummary = document.createElement('summary');
+                imgSummary.className = 'text-xs text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors select-none';
+                imgSummary.textContent = `📷 Photos (${imageUrls.slice(0, 12).length})`;
+                imgDetail.appendChild(imgSummary);
                 const imgGrid = document.createElement('div');
-                imgGrid.className = 'msg-image-grid mt-2 border-t border-zinc-800 pt-2';
+                imgGrid.className = 'msg-image-grid mt-2';
                 for (const url of imageUrls.slice(0, 12)) {
                   const img = document.createElement('img');
                   img.src = url;
@@ -586,8 +648,8 @@ async function sendMessage(content, images) {
                   img.addEventListener('error', () => img.remove());
                   imgGrid.appendChild(img);
                 }
-                // Show outside the collapsible so images are visible without expanding
-                toolUseContainer.appendChild(imgGrid);
+                imgDetail.appendChild(imgGrid);
+                toolUseContainer.appendChild(imgDetail);
               }
 
               toolUseContainer.appendChild(detail);
@@ -818,6 +880,19 @@ toolUsageToggle.addEventListener('click', (e) => {
 });
 
 toolUsageDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── LiteAPI health check ─────────────────────────────
+async function pollLiteapi() {
+  try {
+    const res = await fetch('/api/health/liteapi');
+    const { ok, configured } = await res.json();
+    if (!configured) return; // no key, hide entirely
+    liteapiStatus.classList.remove('hidden');
+    liteapiDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    liteapiLabel.textContent = 'LiteAPI';
+    liteapiLabel.className = ok ? 'text-green-500' : 'text-red-400';
+  } catch {}
+}
 
 // ── E*TRADE auth flow ────────────────────────────────
 async function pollEtrade() {
@@ -1369,6 +1444,8 @@ savePromptBtn.addEventListener('click', async () => {
   setInterval(pollInternet, 30000);
   pollSearch();
   setInterval(pollSearch, 60000);
+  pollLiteapi();
+  setInterval(pollLiteapi, 60000);
   pollEtrade();
   refreshSlots();
   setInterval(refreshSlots, 5000);

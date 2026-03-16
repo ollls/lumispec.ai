@@ -89,4 +89,18 @@ router.post('/search', (req, res) => {
   res.json({ engine, label: ENGINES[engine].label });
 });
 
+// ── LiteAPI health check ────────────────────────────
+router.get('/liteapi', async (_req, res) => {
+  if (!config.liteapi.apiKey) return res.json({ ok: false, configured: false });
+  try {
+    const resp = await fetch('https://api.liteapi.travel/v3.0/data/countries', {
+      headers: { 'X-API-Key': config.liteapi.apiKey },
+      signal: AbortSignal.timeout(5000),
+    });
+    res.json({ ok: resp.status !== 401 && resp.status !== 403, configured: true });
+  } catch {
+    res.json({ ok: false, configured: true });
+  }
+});
+
 export default router;

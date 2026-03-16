@@ -29,6 +29,9 @@ export default {
   python: {
     venvPath: process.env.PYTHON_VENV || '',
   },
+  liteapi: {
+    apiKey: process.env.LITEAPI_KEY || '',
+  },
   etrade: {
     consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',

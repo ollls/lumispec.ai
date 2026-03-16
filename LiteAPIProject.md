@@ -135,5 +135,33 @@ search rates (POST /hotels/rates)
   → book (POST /rates/book) with prebookId + guest info + payment
 ```
 
-## Environment Variable Needed
-- `LITEAPI_KEY` — LiteAPI API key (sandbox or production)
+## Image Rendering (implemented)
+
+The frontend tool result renderer (`src/public/js/app.js`) now auto-detects image URLs in any tool result JSON and renders them as clickable thumbnails. This is a generic capability — any tool returning image URLs gets thumbnails for free.
+
+**How it works:**
+- `extractImageUrls(obj)` recursively walks the tool result JSON, collects URLs ending in `.jpg`, `.png`, `.gif`, `.webp`, etc.
+- Up to 12 thumbnails are rendered in a flex grid **outside** the collapsible tool panel (always visible)
+- Click opens full-size image in the existing overlay lightbox
+- Failed loads silently remove themselves (`error` handler)
+- Lazy loaded (`loading="lazy"`)
+- Skips `_`-prefixed keys (like `_markdown`) to avoid double-rendering
+
+**What this means for hotel tools:**
+- `hotel_search` and `hotel_details` should include image URLs (thumbnail/hotelImages) in their result JSON
+- The frontend will automatically render hotel photos as a thumbnail gallery — no special card renderer needed
+- The LLM context trimming (in `conversations.js` tool loop) should strip image URLs and replace with a count (`imageCount: 12`) to save tokens — the LLM doesn't need URLs, only the browser does
+
+**LiteAPI image fields to include in tool results:**
+- `thumbnail` — single URL, pre-made thumbnail from CDN (`static.cupid.travel/hotels/thumbnail/...`)
+- `hotelImages[].url` — standard resolution
+- `hotelImages[].urlHd` — high definition
+- `rooms[].photos[].url` / `rooms[].photos[].hd_url` — room-level photos
+
+**LLM system prompt note:** Tell the LLM that hotel images are displayed automatically by the UI — it should NOT output markdown image syntax, just summarize key facts (name, price, rating, amenities).
+
+## Environment & Config
+
+- **Env var:** `LITEAPI_KEY` in `.env` file (see `.env.example` for template)
+- **Config:** `config.liteapi.apiKey` in `src/config.js`
+- **Auth header:** `X-API-Key: ${config.liteapi.apiKey}`

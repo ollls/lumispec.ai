@@ -14,8 +14,9 @@ async function generateTitle(text) {
           { role: 'system', content: 'Title the following text in 3-6 words.' },
           { role: 'user', content: text.slice(0, 200) },
         ],
-        max_tokens: 8000,
+        max_tokens: 200,
         stream: false,
+        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: AbortSignal.timeout(30000),
     });
