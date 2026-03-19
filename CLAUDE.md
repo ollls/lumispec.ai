@@ -105,7 +105,7 @@ Safety mechanisms:
 | `list_files` | List files in data directory with size and date |
 | `file_read` | Read file contents from data dir (optional head N lines, CSV truncation) |
 | `run_command` | Shell command execution (requires user confirmation via SSE) |
-| `run_python` | Execute Python script in venv, cwd=data dir (requires user confirmation) |
+| `run_python` | Execute Python script in venv, cwd=data dir (requires confirmation unless autorun enabled) |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -119,6 +119,11 @@ Prompt-based interactive HTML visualizations rendered in sandboxed iframes withi
 **Types**: `svg` (inline SVG), `chartjs` (Chart.js config-driven), `html` (plain HTML/CSS/JS)
 
 **Toggle**: Checkbox in input form next to attach button. State in `state.appletsEnabled`, persisted to localStorage (default: on). Sent as `applets: true|false` in message POST body. Backend conditionally injects applet prompt section into system prompt via `getSystemPrompt({ applets })`.
+
+### Autorun
+Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, `run_python` tool executions skip the confirmation prompt and run immediately. `run_command` always requires confirmation regardless.
+
+**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context; `run_python` checks `context.autorun` to skip `confirmFn`.
 
 **Frontend rendering** (app.js):
 - `extractApplets(text)` — regex-extracts `<applet>` blocks BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify

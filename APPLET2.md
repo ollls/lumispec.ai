@@ -24,6 +24,7 @@ The real constraint isn't the iframe — it's whether a local llama model can re
 |---|---|
 | **D3.js** (constrained subset) | Simple bindings work: force-directed graphs, tree/hierarchy diagrams, Sankey, basic geo. Dangerous API surface — multiple incompatible major versions (v4/v5/v7). Must pin to one version with explicit examples. Skip choropleth maps (need GeoJSON data, too heavy). |
 | **Math.js** | Formula evaluation is straightforward. Visualization is just Chart.js/SVG with computed data. Formula visualizers, equation solvers with visual output. |
+| **WebGL/GLSL** (fragment shader only) | Zero library dependency — browser-native API. Template-driven: fixed ~50-line boilerplate handles WebGL setup (canvas, shader compile, fullscreen quad, render loop, `u_time`/`u_resolution` uniforms), LLM only writes the fragment shader body. GLSL is declarative and compact — LLMs handle it well. Produces generative art, animated gradients, fractals, noise-based effects, raymarching, procedural textures, interactive math/physics demos. Caveat: typos in GLSL = silent black canvas (no helpful errors), so keep scope to fragment shaders — skip complex vertex/geometry work (that's Three.js Phase 3 territory). |
 
 ### Phase 3 — Experimental, opt-in, expect lower success rates
 

@@ -1674,39 +1674,55 @@ function repairToolCallJson(raw) {
     }
   } catch { /* continue to next attempt */ }
 
-  // Attempt 2: for run_python/run_command, manually extract the string argument
-  // then unescape JSON sequences so the code has real newlines (not literal \n)
-  const argName = name === 'run_python' ? 'code' : name === 'run_command' ? 'command' : null;
-  if (argName) {
-    const pattern = new RegExp(`"${argName}"\\s*:\\s*"`);
-    const argMatch = raw.match(pattern);
-    if (argMatch) {
-      const start = argMatch.index + argMatch[0].length;
-      // Find the closing quote: walk forward, skip escaped chars, handle literal newlines
+  // Attempt 2: manually extract string arguments for tools with large content
+  // Unescape JSON sequences so values have real newlines (not literal \n)
+  // Supports single-arg tools (run_python, run_command) and multi-arg (save_file)
+  const toolArgMap = {
+    run_python: { primary: 'code' },
+    run_command: { primary: 'command' },
+    save_file: { primary: 'content', extra: ['filename'] },
+  };
+  const argConfig = toolArgMap[name];
+  if (argConfig) {
+    // Helper: extract a quoted string value for a given key from raw JSON text
+    const extractStringArg = (src, key) => {
+      const pattern = new RegExp(`"${key}"\\s*:\\s*"`);
+      const m = src.match(pattern);
+      if (!m) return null;
+      const start = m.index + m[0].length;
       let end = -1;
-      for (let j = start; j < raw.length; j++) {
-        const ch = raw[j];
-        if (ch === '\\') { j++; continue; } // skip escaped char
-        // Literal newlines inside JSON string are invalid but common from LLMs — skip them
+      for (let j = start; j < src.length; j++) {
+        const ch = src[j];
+        if (ch === '\\') { j++; continue; }
         if (ch === '\n' || ch === '\r') continue;
         if (ch === '"') {
-          // Check if this quote is followed by }} (end of arguments+outer object)
-          const after = raw.slice(j + 1).trimStart();
-          if (after.startsWith('}')) { end = j; break; }
+          const after = src.slice(j + 1).trimStart();
+          // Stop if followed by }} (end of object), or ,"key" (next argument)
+          if (after.startsWith('}') || after.match(/^,\s*"/)) {
+            end = j; break;
+          }
         }
       }
-      // Fallback: walk backwards (handles cases where forward scan fails)
       if (end === -1) {
-        end = raw.length - 1;
-        while (end > start && /[\s}]/.test(raw[end])) end--;
-        if (raw[end] !== '"') end = -1;
+        end = src.length - 1;
+        while (end > start && /[\s}]/.test(src[end])) end--;
+        if (src[end] !== '"') return null;
       }
-      if (end > start) {
-        const rawValue = raw.slice(start, end);
-        const value = unescapeJsonString(rawValue);
-        console.log(`[parseToolCalls] manually extracted "${argName}" (${value.length} chars) for tool "${name}"`);
-        return { name, arguments: { [argName]: value } };
+      return end > start ? unescapeJsonString(src.slice(start, end)) : null;
+    };
+
+    const primary = extractStringArg(raw, argConfig.primary);
+    if (primary !== null) {
+      const args = { [argConfig.primary]: primary };
+      // Extract extra args (short string args like filename)
+      if (argConfig.extra) {
+        for (const key of argConfig.extra) {
+          const val = extractStringArg(raw, key);
+          if (val !== null) args[key] = val;
+        }
       }
+      console.log(`[parseToolCalls] manually extracted args (${Object.keys(args).join(', ')}) for tool "${name}"`);
+      return { name, arguments: args };
     }
   }
 

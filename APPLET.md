@@ -201,6 +201,6 @@ For type="html" applets:
 
 ## Future Phases (see APPLET2.md)
 
-- **Phase 2**: D3.js (constrained subset: force graphs, trees, Sankey), Math.js (formula visualization)
+- **Phase 2**: D3.js (constrained subset: force graphs, trees, Sankey), Math.js (formula visualization), WebGL/GLSL (template-driven fragment shaders: generative art, fractals, procedural textures, animated effects)
 - **Phase 3**: Three.js (3D scenes, experimental), Tone.js (audio synthesis, experimental)
 - Rich dashboards should be built as actual app features, not LLM-generated applets

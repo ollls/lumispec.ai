@@ -117,16 +117,18 @@
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
           </button>
-          <label id="applet-toggle-label" title="Enable applet visualizations"
-            class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 py-3 text-xs shrink-0 cursor-pointer select-none">
-            <input type="checkbox" id="applet-toggle" class="accent-indigo-500 w-3.5 h-3.5" checked>
-            Applets
-          </label>
-          <label id="autorun-toggle-label" title="Auto-approve Python script execution"
-            class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 py-3 text-xs shrink-0 cursor-pointer select-none">
-            <input type="checkbox" id="autorun-toggle" class="accent-amber-500 w-3.5 h-3.5">
-            Autorun
-          </label>
+          <div class="flex flex-col gap-0.5 shrink-0 py-1.5">
+            <label id="applet-toggle-label" title="Enable applet visualizations"
+              class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" id="applet-toggle" class="accent-indigo-500 w-3.5 h-3.5" checked>
+              Applets
+            </label>
+            <label id="autorun-toggle-label" title="Auto-approve Python script execution"
+              class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" id="autorun-toggle" class="accent-amber-500 w-3.5 h-3.5">
+              Autorun
+            </label>
+          </div>
           <textarea
             id="prompt-input"
             name="prompt"

@@ -228,6 +228,7 @@ router.post('/:id/messages', async (req, res) => {
           if (allowedCalls.length > 0) {
             console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
             const context = {
+              autorun,
               confirmFn: (command) => {
                 res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
                 return requestConfirmation(conv.id, command);
