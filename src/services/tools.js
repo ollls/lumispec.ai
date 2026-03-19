@@ -675,9 +675,14 @@ const tools = {
       if (!code?.trim()) return { error: 'code is required' };
       if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
-      console.log(`[run_python] requesting user confirmation...`);
-      const approved = await context.confirmFn(`Python script:\n${code}`);
-      console.log(`[run_python] confirmation ${approved ? 'approved' : 'denied'} (${elapsed()})`);
+      let approved = true;
+      if (context.autorun) {
+        console.log(`[run_python] autorun enabled, skipping confirmation (${elapsed()})`);
+      } else {
+        console.log(`[run_python] requesting user confirmation...`);
+        approved = await context.confirmFn(`Python script:\n${code}`);
+        console.log(`[run_python] confirmation ${approved ? 'approved' : 'denied'} (${elapsed()})`);
+      }
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
 
       // Auto-fix JS-style booleans/null → Python (common LLM mistake)

@@ -7,6 +7,7 @@ const state = {
   maxContext: 131072,
   pendingImages: [], // { dataUrl, mimeType, name }
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
+  autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -46,6 +47,7 @@ const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
 const appletToggle = document.getElementById('applet-toggle');
+const autorunToggle = document.getElementById('autorun-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
@@ -588,6 +590,7 @@ async function sendMessage(content, images) {
         content,
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
         applets: state.appletsEnabled,
+        autorun: state.autorunEnabled,
       }),
       signal: state.abortController.signal,
     });
@@ -1290,6 +1293,13 @@ appletToggle.checked = state.appletsEnabled;
 appletToggle.addEventListener('change', () => {
   state.appletsEnabled = appletToggle.checked;
   localStorage.setItem('appletsEnabled', state.appletsEnabled);
+});
+
+// Autorun toggle
+autorunToggle.checked = state.autorunEnabled;
+autorunToggle.addEventListener('change', () => {
+  state.autorunEnabled = autorunToggle.checked;
+  localStorage.setItem('autorunEnabled', state.autorunEnabled);
 });
 
 imageInput.addEventListener('change', () => {

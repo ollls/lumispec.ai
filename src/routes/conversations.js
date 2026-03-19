@@ -56,6 +56,7 @@ router.post('/:id/messages', async (req, res) => {
   const content = (req.body.content || '').trim();
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
+  const autorun = !!req.body.autorun;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -266,6 +267,7 @@ router.post('/:id/messages', async (req, res) => {
         console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
         const roundStart = Date.now();
         const context = {
+          autorun,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
@@ -395,6 +397,7 @@ router.post('/:id/messages', async (req, res) => {
       if (lastChanceCalls.length > 0) {
         console.warn(`[tool-loop] forced answer still contains tool call(s): ${lastChanceCalls.map(c => c.name).join(', ')}, executing last chance`);
         const context = {
+          autorun,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
@@ -428,6 +431,7 @@ router.post('/:id/messages', async (req, res) => {
       if (safetyCalls.length > 0) {
         console.warn(`[safety-net] finalContent contains unparsed tool call(s): ${safetyCalls.map(c => c.name).join(', ')} — executing`);
         const context = {
+          autorun,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
