@@ -32,6 +32,14 @@ export default {
   liteapi: {
     apiKey: process.env.LITEAPI_KEY || '',
   },
+  claude: {
+    apiKey: process.env.CLAUDE_API_KEY || '',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+    maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '8192', 10),
+  },
+  llm: {
+    backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
+  },
   etrade: {
     consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',

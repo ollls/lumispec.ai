@@ -10,7 +10,8 @@
       "WebFetch(domain:deepwiki.com)",
       "Bash(node:*)",
       "WebFetch(domain:diviengine.com)",
-      "WebFetch(domain:www.nngroup.com)"
+      "WebFetch(domain:www.nngroup.com)",
+      "Bash(grep -iE '\\(tvly-|sk-|key-|Bearer |apikey=\\)[A-Za-z0-9_\\\\-]{8,}')"
     ]
   }
 }

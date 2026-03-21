@@ -2,4 +2,6 @@ node_modules/
 src/public/css/output.css
 .env
 data/
+!data/prompts.json
+!data/templates.json
 logs/

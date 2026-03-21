@@ -1,0 +1,26 @@
+[
+  {
+    "id": "3b4f52f6-4e50-406b-be23-12263d01a513",
+    "title": "Next Week Call Options by Volume",
+    "text": "Show {$Tickler} CALL options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
+    "createdAt": "2026-03-21T04:41:20.145Z"
+  },
+  {
+    "id": "1e435b0b-ec60-4be5-a75f-eccabfc361de",
+    "title": "Stock Option Chain Dashboard Template",
+    "text": "Use HTML applet BIG, CLEAN SIMPLE look and feel.  Generate option chain dashboard for {$Ticker} stock.  Period {$Period:daterange}. Use applet template - [template: Option Chain]",
+    "createdAt": "2026-03-21T02:49:37.733Z"
+  },
+  {
+    "id": "827f7ee6-4445-4392-a62f-2b093182f8ab",
+    "title": "ETRADE Balance View with HTML Applet",
+    "text": "Show my ETRADE accounts balances, use HTML applet and best look and feel practices.",
+    "createdAt": "2026-03-20T20:31:00.634Z"
+  },
+  {
+    "id": "a1049dc5-d280-487b-9929-77f1cf4413aa",
+    "title": "Generate AMD Option Chain Dashboard",
+    "text": "Use HTML applet: Generate option chain dashboard for AMD stock. Dashboard should let me to select expiry date and type: PUT or CALL, once selected it will load relevant file and display option chain strikes and greeks. DO NOT embed data into frame, each time user selects expiry date, load that file and render it. Use etrade tool to download data. Use list_files to validate presence of the files before applet code generation. match the correct filename pattern,  filter by CASE INSESITIVE CALL or PUT from the CSV data itself rather than expecting separate files. Use best practicies for Look and Feel.",
+    "createdAt": "2026-03-20T21:48:29.128Z"
+  }
+]

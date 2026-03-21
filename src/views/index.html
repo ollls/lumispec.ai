@@ -9,7 +9,27 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <link rel="stylesheet" href="/lib/flatpickr-dark.css">
   <link rel="stylesheet" href="/css/output.css">
+  <style>
+    /* Flatpickr zinc/indigo overrides */
+    .flatpickr-calendar { background: #1c1c22 !important; border-color: #3f3f46 !important; font-size: 13px; }
+    .flatpickr-months .flatpickr-month { background: #1c1c22 !important; }
+    .flatpickr-current-month .flatpickr-monthDropdown-months { background: #1c1c22 !important; }
+    .flatpickr-weekdays { background: #1c1c22 !important; }
+    span.flatpickr-weekday { color: #71717a !important; }
+    .flatpickr-day { color: #d4d4d8 !important; }
+    .flatpickr-day:hover { background: #27272a !important; border-color: #27272a !important; }
+    .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+      background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important;
+    }
+    .flatpickr-day.inRange { background: #312e81 !important; border-color: #312e81 !important; box-shadow: -5px 0 0 #312e81, 5px 0 0 #312e81 !important; }
+    .flatpickr-day.today { border-color: #6366f1 !important; }
+    .flatpickr-day.today:hover { background: #4f46e5 !important; }
+    .flatpickr-months .flatpickr-prev-month, .flatpickr-months .flatpickr-next-month { fill: #a1a1aa !important; }
+    .flatpickr-months .flatpickr-prev-month:hover svg, .flatpickr-months .flatpickr-next-month:hover svg { fill: #e4e4e7 !important; }
+    .flatpickr-calendar.static { position: relative !important; margin-top: 4px; }
+  </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-screen flex overflow-hidden">
 
@@ -30,9 +50,14 @@
 
     <!-- Status bar -->
     <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs">
-      <div class="flex items-center gap-2">
-        <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <span id="health-label" class="text-zinc-500">llama.cpp</span>
+      <div class="relative flex items-center gap-2">
+        <span id="llm-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
+        <button id="llm-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
+          <span id="llm-label">LLM</span>
+          <svg class="w-3 h-3 opacity-60" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5l3 3 3-3"/></svg>
+        </button>
+        <div id="llm-dropdown" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[140px]">
+        </div>
       </div>
       <div class="flex items-center gap-2">
         <span id="inet-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
@@ -69,8 +94,8 @@
         <div id="tool-usage-dropdown" class="hidden absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
         </div>
       </div>
-      <div class="ml-auto flex items-center gap-2">
-        <div class="relative flex items-center mr-6">
+      <div class="ml-auto mr-10 flex items-center gap-6">
+        <div class="relative flex items-center">
           <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Tools</button>
           <div id="tools-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 w-80 max-h-80 overflow-y-auto slim-scrollbar">
             <div id="tools-list" class="py-1"></div>
@@ -82,6 +107,14 @@
             <div id="prompt-list" class="py-1"></div>
           </div>
         </div>
+        <div class="relative flex items-center">
+          <button id="templates-toggle" class="text-rose-400 hover:text-rose-300 transition-colors text-xs">Templates</button>
+          <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+            <div id="template-list" class="py-1"></div>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
         <span class="text-zinc-500">Context:</span>
         <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
           <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
@@ -99,6 +132,21 @@
     <div id="response-area" class="flex-1 overflow-y-auto px-4 py-6 space-y-4 slim-scrollbar">
       <div id="empty-state" class="text-zinc-500 text-sm text-center" style="margin-top: 40vh;">
         Create or select a conversation to get started.
+      </div>
+    </div>
+
+    <!-- Prompt Variables Modal -->
+    <div id="prompt-vars-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
+      <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-zinc-700">
+          <h3 class="text-sm font-medium text-zinc-200">Fill in prompt variables</h3>
+          <button id="prompt-vars-cancel" class="text-zinc-500 hover:text-zinc-300 text-lg leading-none">&times;</button>
+        </div>
+        <div id="prompt-vars-fields" class="px-5 py-4 space-y-3 max-h-80 overflow-y-auto slim-scrollbar"></div>
+        <div class="flex justify-end gap-2 px-5 py-3 border-t border-zinc-700">
+          <button id="prompt-vars-clear" class="text-xs text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded transition-colors">Clear all</button>
+          <button id="prompt-vars-submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors">Apply</button>
+        </div>
       </div>
     </div>
 
@@ -164,5 +212,6 @@
 
 
 </body>
-<script src="/js/app.js?v=2"></script>
+<script src="/lib/flatpickr.min.js"></script>
+<script src="/js/app.js?v=6"></script>
 </html>

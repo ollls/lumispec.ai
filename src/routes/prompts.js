@@ -1,28 +1,16 @@
 import { Router } from 'express';
 import { listPrompts, createPrompt, deletePrompt, updatePrompt, reorderPrompts } from '../services/prompts.js';
-import config from '../config.js';
+import { collectChatCompletion } from '../services/llm.js';
 
 const router = Router();
 
 async function generateTitle(text) {
   try {
-    const res = await fetch(`${config.llama.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: 'Title the following text in 3-6 words.' },
-          { role: 'user', content: text.slice(0, 200) },
-        ],
-        max_tokens: 200,
-        stream: false,
-        chat_template_kwargs: { enable_thinking: false },
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    const data = await res.json();
-    const msg = data.choices?.[0]?.message;
-    let title = msg?.content?.trim();
+    const { content: raw } = await collectChatCompletion([
+      { role: 'system', content: 'Title the following text in 3-6 words.' },
+      { role: 'user', content: text.slice(0, 200) },
+    ], { signal: AbortSignal.timeout(30000), maxTokens: 200 });
+    let title = raw?.trim();
     if (title) {
       // Strip Qwen3 think blocks if present
       title = title.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -31,20 +19,12 @@ async function generateTitle(text) {
         title = '';
       }
     }
-    // Qwen3 separates reasoning into reasoning_content, leaving content empty
-    if (!title && msg?.reasoning_content) {
-      // Extract last quoted string from reasoning as best title candidate
-      const quoted = msg.reasoning_content.match(/"([^"]{3,80})"/g);
-      if (quoted?.length) {
-        title = quoted[quoted.length - 1].replace(/"/g, '').trim();
-      }
-    }
     if (title) {
       title = title.replace(/^["']|["']$/g, '').trim();
       if (title.length > 60) title = title.slice(0, 60);
       if (title) return title;
     }
-    console.warn('generateTitle: no usable content in LLM response. msg:', JSON.stringify(msg));
+    console.warn('generateTitle: no usable content in LLM response. raw:', JSON.stringify(raw));
   } catch (err) {
     console.warn('generateTitle failed:', err.message, err.cause || '');
   }

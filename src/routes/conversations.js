@@ -3,6 +3,7 @@ import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
+import { getTemplateByName } from '../services/templates.js';
 
 const router = Router();
 
@@ -53,12 +54,23 @@ router.post('/:id/messages', async (req, res) => {
   const conv = conversations.get(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
-  const content = (req.body.content || '').trim();
+  let content = (req.body.content || '').trim();
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
+  }
+
+  // Expand [template: name] tags — inject saved applet HTML as context for the LLM
+  const templateRe = /\[template:\s*([^\]]+)\]/gi;
+  for (const match of [...content.matchAll(templateRe)]) {
+    const tpl = getTemplateByName(match[1].trim());
+    if (tpl) {
+      content = content.replace(match[0],
+        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block with ONLY the data filenames/configuration updated. Do NOT redesign the layout, styling, or structure:\n\`\`\`html\n${tpl.html}\n\`\`\``
+      );
+    }
   }
 
   // Store user message — structured content when images are present
@@ -127,14 +139,14 @@ router.post('/:id/messages', async (req, res) => {
     // buffers content for tool-call detection, returns { content, usage }.
     // When isToolRound=true, streams content tokens as {tool_content} events for user feedback.
     async function streamRound(messages, opts, isToolRound = false) {
-      const response = await streamChatCompletion(messages, opts);
+      const { response, backend } = await streamChatCompletion(messages, opts);
       let content = '';
       let usage = null;
       let suppressToolContent = false;
       let toolContentBuffer = '';   // buffer tool_content until we know it's not a tool call
       let toolContentFlushed = false; // true once buffer has been flushed (safe to stream directly)
 
-      for await (const chunk of parseSSEChunks(response)) {
+      for await (const chunk of parseSSEChunks(response, backend)) {
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.reasoning_content) {
           accumulatedReasoning += delta.reasoning_content;
@@ -188,7 +200,7 @@ router.post('/:id/messages', async (req, res) => {
     let lastUsage = null;
     let accumulatedReasoning = '';
     const toolUses = [];
-    const toolCallCounts = {}; // track per-tool call counts (by name)
+    const toolCallSigCounts = {}; // track repeat counts per unique signature (name+args)
     const toolCallSigs = new Set(); // track unique tool+args signatures for dedup
     let hadChainData = false;        // whether any optionchains call has completed
     let hadExpiryCall = false;       // whether optionexpiry was called (signals options analysis)
@@ -207,24 +219,31 @@ router.post('/:id/messages', async (req, res) => {
         console.warn(`[tool-loop] round ${round + 1}: parseToolCalls returned empty but content has {"name":. Content length: ${result.content.length}. First 500 chars:\n${result.content.slice(0, 500)}\n...Last 200 chars:\n${result.content.slice(-200)}`);
       }
       if (toolCallsFound.length > 0) {
-        // Check for repeated same-tool calls (prevents retry loops)
-        // Count by unique signature (name+args) so distinct queries (e.g. different expiries) don't trigger the limit
+        // Check for repeated identical tool calls (prevents retry loops)
+        // Count by unique signature (name+args) so distinct queries (e.g. different expiry dates) are independent
         for (const tc of toolCallsFound) {
           const sig = tc.name + ':' + JSON.stringify(tc.arguments || {});
           if (toolCallSigs.has(sig)) {
-            // Exact duplicate call — count against the repeat limit
-            toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+            // Exact duplicate call — count against the repeat limit for THIS signature
+            toolCallSigCounts[sig] = (toolCallSigCounts[sig] || 1) + 1;
           } else {
             toolCallSigs.add(sig);
           }
         }
-        const overLimit = toolCallsFound.filter(tc => toolCallCounts[tc.name] > MAX_SAME_TOOL_REPEATS);
+        const overLimit = toolCallsFound.filter(tc => {
+          const sig = tc.name + ':' + JSON.stringify(tc.arguments || {});
+          return (toolCallSigCounts[sig] || 0) > MAX_SAME_TOOL_REPEATS;
+        });
         if (overLimit.length > 0) {
+          const overSig = overLimit[0].name + ':' + JSON.stringify(overLimit[0].arguments || {});
           const overName = overLimit[0].name;
-          const overCount = toolCallCounts[overName];
+          const overCount = toolCallSigCounts[overSig];
           console.warn(`[tool-loop] tool "${overName}" called ${overCount} times, forcing final answer`);
           // Filter out over-limit tools; execute remaining tools if any
-          const allowedCalls = toolCallsFound.filter(tc => toolCallCounts[tc.name] <= MAX_SAME_TOOL_REPEATS);
+          const allowedCalls = toolCallsFound.filter(tc => {
+            const sig = tc.name + ':' + JSON.stringify(tc.arguments || {});
+            return (toolCallSigCounts[sig] || 0) <= MAX_SAME_TOOL_REPEATS;
+          });
           if (allowedCalls.length > 0) {
             console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
             const context = {
@@ -245,7 +264,7 @@ router.post('/:id/messages', async (req, res) => {
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({
             role: 'user',
-            content: `Tool "${overName}" has been called ${overCount} times and is now DISABLED. You MUST provide your final answer NOW using the results you have so far. Do NOT call any tools. If there was an error, explain what went wrong.`,
+            content: `Tool "${overName}" has been called ${overCount} times with identical arguments and is now DISABLED for that call. You MUST provide your final answer NOW using the results you have so far. Do NOT call any tools. If there was an error, explain what went wrong.`,
           });
           // Give LLM ONE final chance to answer, then break regardless
           const forceResult = await streamRound(llmMessages, { slotId, signal: abortController.signal }, true);

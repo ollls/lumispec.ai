@@ -18,8 +18,10 @@ const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
-const healthDot = document.getElementById('health-dot');
-const healthLabel = document.getElementById('health-label');
+const llmDot = document.getElementById('llm-dot');
+const llmLabel = document.getElementById('llm-label');
+const llmToggle = document.getElementById('llm-toggle');
+const llmDropdown = document.getElementById('llm-dropdown');
 const slotsToggle = document.getElementById('slots-toggle');
 const slotsSummary = document.getElementById('slots-summary');
 const slotPanel = document.getElementById('slot-panel');
@@ -53,6 +55,9 @@ const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
 const promptsToggle = document.getElementById('prompts-toggle');
 const promptsDropdown = document.getElementById('prompts-dropdown');
+const templateList = document.getElementById('template-list');
+const templatesToggle = document.getElementById('templates-toggle');
+const templatesDropdown = document.getElementById('templates-dropdown');
 const toolsToggle = document.getElementById('tools-toggle');
 const toolsDropdown = document.getElementById('tools-dropdown');
 const toolsList = document.getElementById('tools-list');
@@ -278,13 +283,37 @@ window.addEventListener('load', () => {
 
   const iframe = document.createElement('iframe');
   iframe.className = 'applet-iframe';
-  iframe.sandbox = 'allow-scripts';
+  iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:hidden;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:auto;display:block';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
+  saveBtn.textContent = 'Save as Template';
+  saveBtn.addEventListener('click', async () => {
+    const name = prompt('Template name:');
+    if (!name) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving\u2026';
+    try {
+      await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, type: applet.type, html: applet.html }),
+      });
+      saveBtn.textContent = 'Saved \u2713';
+      saveBtn.className = 'bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded mt-1';
+      refreshTemplates();
+    } catch {
+      saveBtn.textContent = 'Save failed';
+      saveBtn.disabled = false;
+    }
+  });
 
   const wrapper = document.createElement('div');
   wrapper.className = 'applet-wrapper';
   wrapper.appendChild(iframe);
+  wrapper.appendChild(saveBtn);
   return wrapper;
 }
 
@@ -315,6 +344,12 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
         placeholder.replaceWith(createAppletIframe(applet));
       }
     });
+    // Expand bubble to full width when applets are present
+    const bubble = container.parentElement;
+    if (bubble) {
+      bubble.classList.remove('max-w-[80%]');
+      bubble.classList.add('max-w-full', 'w-full');
+    }
   }
 
   if (renderMermaid && typeof mermaid !== 'undefined') {
@@ -853,20 +888,67 @@ function updateContextBar(tokens) {
 }
 
 // ── Health polling ────────────────────────────────────
-async function pollHealth() {
+let llmBackends = [];
+
+async function pollLLM() {
   try {
-    const { ok, data } = await api.checkHealth();
+    const res = await fetch('/api/health/llm');
+    const { ok, backend, backends } = await res.json();
     state.healthy = ok;
-    healthDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    healthLabel.textContent = ok ? 'llama.cpp' : 'llama.cpp';
-    healthLabel.className = ok ? 'text-green-500' : 'text-red-400';
+    llmDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    llmLabel.textContent = backend || 'LLM';
+    llmToggle.className = `flex items-center gap-1 transition-colors ${ok ? 'text-green-500 hover:text-green-400' : 'text-red-400 hover:text-red-300'}`;
+    if (backends) llmBackends = backends;
   } catch {
     state.healthy = false;
-    healthDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
-    healthLabel.textContent = 'llama.cpp';
-    healthLabel.className = 'text-red-400';
+    llmDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
+    llmLabel.textContent = 'LLM';
+    llmToggle.className = 'flex items-center gap-1 transition-colors text-red-400 hover:text-red-300';
   }
 }
+
+function renderLLMDropdown() {
+  llmDropdown.innerHTML = '';
+  for (const b of llmBackends) {
+    const item = document.createElement('button');
+    item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
+      b.active
+        ? 'text-indigo-400 bg-indigo-500/10'
+        : b.configured
+          ? 'text-zinc-300 hover:bg-zinc-700'
+          : 'text-zinc-600 cursor-not-allowed'
+    }`;
+    item.textContent = b.label + (b.active ? ' \u2713' : !b.configured ? ' (no key)' : '');
+    if (!b.active && b.configured) {
+      item.addEventListener('click', () => switchLLMBackend(b.id));
+    }
+    llmDropdown.appendChild(item);
+  }
+}
+
+async function switchLLMBackend(backendId) {
+  llmDropdown.classList.add('hidden');
+  llmDot.className = 'inline-block w-2 h-2 rounded-full bg-zinc-600 animate-pulse';
+  llmLabel.textContent = 'Switching\u2026';
+  llmToggle.className = 'flex items-center gap-1 transition-colors text-zinc-500';
+  try {
+    await fetch('/api/health/llm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: backendId }),
+    });
+  } catch { /* pollLLM will pick up the state */ }
+  await pollLLM();
+}
+
+llmToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !llmDropdown.classList.contains('hidden');
+  llmDropdown.classList.toggle('hidden');
+  if (!isOpen) renderLLMDropdown();
+});
+
+llmDropdown.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Internet check ────────────────────────────────────
 async function pollInternet() {
@@ -947,6 +1029,7 @@ document.addEventListener('click', () => {
   searchDropdown.classList.add('hidden');
   toolUsageDropdown.classList.add('hidden');
   etradePanel.classList.add('hidden');
+  llmDropdown.classList.add('hidden');
 });
 
 searchDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1343,13 +1426,77 @@ form.addEventListener('drop', (e) => {
 promptsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   toolsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
 toolsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Templates dropdown ──────────────────────────────────
+templatesToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.add('hidden');
+  templatesDropdown.classList.toggle('hidden');
+  if (!templatesDropdown.classList.contains('hidden')) refreshTemplates();
+});
+templatesDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+function renderTemplates(templates) {
+  templateList.innerHTML = '';
+  if (!templates.length) {
+    templateList.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-500">No templates saved yet</div>';
+    return;
+  }
+  for (const t of templates) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'flex-1 text-xs text-zinc-300';
+    nameSpan.textContent = t.name;
+
+    const typeSpan = document.createElement('span');
+    typeSpan.className = 'text-zinc-600 text-xs shrink-0';
+    typeSpan.textContent = t.type;
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '\u2715';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/templates/${t.id}`, { method: 'DELETE' });
+      refreshTemplates();
+    });
+
+    item.addEventListener('click', () => {
+      const tag = `[template: ${t.name}]`;
+      const pos = input.selectionStart || input.value.length;
+      input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.focus();
+      templatesDropdown.classList.add('hidden');
+    });
+
+    item.appendChild(nameSpan);
+    item.appendChild(typeSpan);
+    item.appendChild(delBtn);
+    templateList.appendChild(item);
+  }
+}
+
+async function refreshTemplates() {
+  try {
+    const templates = await (await fetch('/api/templates')).json();
+    renderTemplates(templates);
+  } catch {}
+}
+
 document.addEventListener('click', (e) => {
   if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
   if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
+  if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
 });
 
 // ── Tools Panel ──────────────────────────────────────
@@ -1449,6 +1596,218 @@ function expandPromptMacros(text) {
     .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
 }
 
+// ── Prompt Variables ─────────────────────────────────
+const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day']);
+
+function extractPromptVariables(text) {
+  const vars = [];
+  const seen = new Set();
+  const re = /\{\$(\w+)(?::(\w+))?\}/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1];
+    if (builtinMacros.has(name.toLowerCase()) || seen.has(name)) continue;
+    seen.add(name);
+    const type = (m[2] || 'string').toLowerCase();
+    vars.push({ name, type, placeholder: m[0] });
+  }
+  return vars;
+}
+
+function variableInputType(type) {
+  switch (type) {
+    case 'date': return 'date';
+    case 'daterange': return 'daterange';
+    case 'month': return 'month';
+    default: return 'text';
+  }
+}
+
+function humanLabel(name) {
+  return name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+}
+
+function showPromptVarsModal(promptText, vars) {
+  const modal = document.getElementById('prompt-vars-modal');
+  const fields = document.getElementById('prompt-vars-fields');
+  fields.innerHTML = '';
+  // Destroy any previous flatpickr instances
+  if (modal._flatpickrInstances) {
+    modal._flatpickrInstances.forEach(fp => fp.destroy());
+  }
+  modal._flatpickrInstances = [];
+
+  for (const v of vars) {
+    const wrapper = document.createElement('div');
+    const label = document.createElement('label');
+    label.className = 'block text-xs text-zinc-400 mb-1';
+    label.textContent = humanLabel(v.name) + (v.type !== 'string' ? ` (${v.type})` : '');
+    wrapper.appendChild(label);
+
+    const inputType = variableInputType(v.type);
+
+    if (inputType === 'daterange') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select date range...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.dataset.varType = 'daterange';
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      // Initialize flatpickr after DOM insertion
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          mode: 'range',
+          dateFormat: 'Y-m-d',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
+    } else if (inputType === 'date') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select date...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          dateFormat: 'Y-m-d',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
+    } else if (inputType === 'month') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select month...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.dataset.varType = 'month';
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          dateFormat: 'Y-m',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+          plugins: [],
+          disableMobile: true,
+          onChange: function(selectedDates, dateStr, instance) {
+            // flatpickr doesn't have a native month-only mode, so we use default with day hidden via CSS
+          },
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
+      inp.dataset.varName = v.name;
+      wrapper.appendChild(inp);
+    }
+
+    fields.appendChild(wrapper);
+  }
+
+  modal.classList.remove('hidden');
+  const firstInput = fields.querySelector('input');
+  if (firstInput && !firstInput.readOnly) firstInput.focus();
+
+  // Store prompt text on modal for submit handler
+  modal._promptText = promptText;
+  modal._vars = vars;
+}
+
+function collectVarValues() {
+  const fields = document.getElementById('prompt-vars-fields');
+  const values = {};
+  const inputs = fields.querySelectorAll('input[data-var-name]');
+  for (const inp of inputs) {
+    const name = inp.dataset.varName;
+    if (inp.dataset.varType === 'daterange') {
+      // flatpickr range mode stores "YYYY-MM-DD to YYYY-MM-DD" in the value
+      const parts = inp.value.split(' to ');
+      values[name] = { from: parts[0] || '', to: parts[1] || '' };
+    } else {
+      values[name] = inp.value;
+    }
+  }
+  return values;
+}
+
+function substituteVars(text, vars, values) {
+  let result = text;
+  for (const v of vars) {
+    const val = values[v.name];
+    let replacement = '';
+    if (v.type === 'daterange' && val && typeof val === 'object') {
+      replacement = [val.from, val.to].filter(Boolean).join(' to ');
+    } else if (v.type === 'month' && val) {
+      // flatpickr gives YYYY-MM or YYYY-MM-DD, format to "March 2026"
+      const parts = val.split('-');
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1);
+      replacement = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } else {
+      replacement = val || '';
+    }
+    // Replace all occurrences of this variable (with or without type suffix)
+    const escaped = v.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\{\\$${escaped}(?::\\w+)?\\}`, 'g'), replacement);
+  }
+  return result;
+}
+
+// Modal event handlers
+document.getElementById('prompt-vars-cancel').addEventListener('click', () => {
+  const modal = document.getElementById('prompt-vars-modal');
+  if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+  modal._flatpickrInstances = [];
+  modal.classList.add('hidden');
+});
+
+document.getElementById('prompt-vars-clear').addEventListener('click', () => {
+  const fields = document.getElementById('prompt-vars-fields');
+  fields.querySelectorAll('input').forEach(inp => inp.value = '');
+  const firstInput = fields.querySelector('input');
+  if (firstInput) firstInput.focus();
+});
+
+document.getElementById('prompt-vars-submit').addEventListener('click', () => {
+  const modal = document.getElementById('prompt-vars-modal');
+  const values = collectVarValues();
+  let text = substituteVars(modal._promptText, modal._vars, values);
+  text = expandPromptMacros(text);
+  input.value = text;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  input.focus();
+  if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+  modal._flatpickrInstances = [];
+  modal.classList.add('hidden');
+});
+
+// Close modal on Escape
+document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modal = document.getElementById('prompt-vars-modal');
+    if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+    modal._flatpickrInstances = [];
+    modal.classList.add('hidden');
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('prompt-vars-submit').click();
+  }
+});
+
 async function refreshPrompts() {
   try {
     const prompts = await (await fetch('/api/prompts')).json();
@@ -1510,10 +1869,15 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
-      input.value = expandPromptMacros(p.text);
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-      input.focus();
+      const vars = extractPromptVariables(p.text);
+      if (vars.length > 0) {
+        showPromptVarsModal(p.text, vars);
+      } else {
+        input.value = expandPromptMacros(p.text);
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        input.focus();
+      }
     });
 
     item.appendChild(titleSpan);
@@ -1552,8 +1916,8 @@ savePromptBtn.addEventListener('click', async () => {
 (async function init() {
   await refreshSidebar();
   refreshPrompts();
-  pollHealth();
-  setInterval(pollHealth, 5000);
+  pollLLM();
+  setInterval(pollLLM, 5000);
   pollInternet();
   setInterval(pollInternet, 30000);
   pollSearch();

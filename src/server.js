@@ -8,6 +8,7 @@ import healthRoutes from './routes/health.js';
 import etradeRoutes from './routes/etrade.js';
 import promptRoutes from './routes/prompts.js';
 import toolRoutes from './routes/tools.js';
+import templateRoutes from './routes/templates.js';
 import slots from './services/slots.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,6 +27,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/etrade', etradeRoutes);
 app.use('/api/prompts', promptRoutes);
 app.use('/api/tools', toolRoutes);
+app.use('/api/templates', templateRoutes);
 
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));
