@@ -14,16 +14,20 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 ## Project Structure
 ```
 src/
-  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python)
-  server.js                # Express server, entry point, starts slot polling
+  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir)
+  server.js                # Express server, entry point, starts slot polling, /api/config endpoint
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands
     slots.js               # Slot status, pin/unpin endpoints
     health.js              # Health checks: llama, internet, search engines (keiro/tavily), liteapi
     etrade.js              # E*TRADE OAuth flow (status, auth start, auth complete, disconnect)
     prompts.js             # Prompt library CRUD + reorder + LLM-generated titles
-    sessions.js            # Session prompts CRUD (upsert by color, LLM-generated titles)
+    sessions.js            # Session prompts CRUD (upsert by color, reorder, PATCH title, LLM-generated titles)
     tools.js               # List tools, toggle enable/disable
+  services/
+    ...
+    sessions.js            # Session prompts persistence + reorder + update
+    templates.js           # Template persistence + reorder + update
   services/
     conversations.js       # In-memory conversation store (Map-based)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
@@ -65,7 +69,11 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/prompts/:id` | PATCH/DELETE | Update/delete prompt |
 | `/api/prompts/reorder` | PUT | Reorder prompts |
 | `/api/sessions` | GET/POST | List/upsert session prompts (one per color, LLM titles) |
-| `/api/sessions/:id` | DELETE | Delete session prompt |
+| `/api/sessions/:id` | PATCH/DELETE | Update title/text / delete session prompt |
+| `/api/sessions/reorder` | PUT | Reorder sessions |
+| `/api/templates/:id` | PATCH/DELETE | Update name / delete template |
+| `/api/templates/reorder` | PUT | Reorder templates |
+| `/api/config` | GET | Public config (location) |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
 
@@ -87,6 +95,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `LITEAPI_KEY` — LiteAPI hotel/travel API key
 - `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` — E*TRADE OAuth credentials
 - `ETRADE_SANDBOX` — `true` for sandbox mode
+- `LOCATION` — default user location for weather/travel queries and `{$location}` macro
+- `SOURCE_DIR` — project root path for `source_read` tool (self-awareness)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -94,10 +104,12 @@ Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
 - Max 4 parallel tool calls per round (excess dropped)
-- Bare/malformed JSON tool calls trigger retry prompts
-- Safety net catches unparsed tool calls in final content
+- Bare/malformed JSON tool calls trigger retry prompts (skipped when response contains `<applet>` blocks)
+- Safety net catches unparsed tool calls in final content (also skipped for applet responses)
 - Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data
 - Tool call logging to `logs/` directory
+- Queue-based command confirmation: parallel `run_command` calls confirmed FIFO (not single-slot)
+- Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
 
 ### Registered Tools
 | Tool | Description |
@@ -108,8 +120,9 @@ Safety mechanisms:
 | `save_file` | Save content to `data/` dir, returns download URL |
 | `list_files` | List files in data directory with size and date |
 | `file_read` | Read file contents from data dir (optional head N lines, CSV truncation) |
-| `run_command` | Shell command execution (requires user confirmation via SSE) |
-| `run_python` | Execute Python script in venv, cwd=data dir (requires confirmation unless autorun enabled) |
+| `run_command` | Shell command execution via async exec (non-blocking), 30s timeout |
+| `run_python` | Execute Python script in venv, cwd=data dir, 120s timeout |
+| `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -125,9 +138,9 @@ Prompt-based interactive HTML visualizations rendered in sandboxed iframes withi
 **Toggle**: Checkbox in input form next to attach button. State in `state.appletsEnabled`, persisted to localStorage (default: on). Sent as `applets: true|false` in message POST body. Backend conditionally injects applet prompt section into system prompt via `getSystemPrompt({ applets })`.
 
 ### Autorun
-Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, `run_python` tool executions skip the confirmation prompt and run immediately. `run_command` always requires confirmation regardless.
+Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, both `run_python` and `run_command` skip the confirmation prompt and run immediately.
 
-**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context; `run_python` checks `context.autorun` to skip `confirmFn`.
+**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context; both `run_python` and `run_command` check `context.autorun` to skip `confirmFn`.
 
 ### Think Toggle
 Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/thinking blocks, tool content ("Working..."), tool status messages, and tool use details ("Used web_search", etc.) during streaming.
@@ -152,14 +165,43 @@ Colored session types that define conversation categories. Each conversation is 
 - Auto-submitted with `hideUserMessage: true` — user message bubble hidden from chat
 - Auto-title skipped for hidden session prompts (`hidden` flag in POST body)
 - Title only set from first visible user message
-- Variable substitution (`{$date}`, `{$time}`, custom vars) supported via same modal as prompts
+- Variable substitution (`{$date}`, `{$time}`, `{$location}`, custom vars) supported via same modal as prompts
 - Think toggle temporarily disabled during session init
 
-**Input locking**: Input textarea and Send button disabled when no session is active (`!currentConversationId || !sessionType`). Placeholder shows "Select or create a session to start…". Menu items (Sessions, Prompts, Templates) also blocked without active session.
+**Input locking**: Input textarea and Send button disabled when no session is active (`!currentConversationId || !sessionType`). Placeholder shows "Select or create a session to start…". Menu items (Sessions, Prompts, Templates) also blocked without active session — clicking shows red "Create a session first" flash message inline with empty state text.
 
 **Save Session button**: Saves input text as the session prompt for the current color. Upserts — same color overwrites existing. LLM generates title (defensive prompt with triple-backtick wrapping to prevent instruction following).
 
-**Sessions menu**: Dropdown in top bar menu (Tools, Prompts, Sessions, Templates). Lists saved session prompts with titles colored by session color. Click to load text into input (with variable substitution). Delete with hover ✕ button.
+**Sessions menu**: Dropdown in top bar menu (Tools, Prompts, Sessions, Templates). Lists saved session prompts with titles colored by session color. Click to load text into input (with variable substitution). Drag grip handle (⠿) to reorder. Pencil (✎) button for inline title editing. Delete with hover ✕ button.
+
+**Session button tooltips**: Colored `+` buttons show instant CSS tooltips on hover with the saved session prompt title (via `data-tip` attribute, no native title delay).
+
+### Draggable Menus & Inline Editing
+All three dropdown menus (Prompts, Sessions, Templates) share the same UI pattern:
+- **Drag grip handle** (⠿): mousedown on grip enables `draggable`, drop reorders and persists via PUT `/reorder` endpoint
+- **Inline title editing** (✎): `startTitleEdit()` makes title span `contentEditable`, Enter saves via PATCH, Escape cancels, blur saves
+- **Click**: loads prompt/session text into input (with variable substitution) or inserts template tag
+- **Delete** (✕): hover-visible delete button
+- Items are NOT `draggable` by default — only grip handle enables it, preventing accidental drag on click
+- Dropdowns expand up to `max-h-[80vh]` before scrolling
+
+### Location Macro
+- `LOCATION` env var exposed via `GET /api/config` endpoint
+- Frontend fetches on init, stores in `state.location`
+- `{$location}` builtin macro auto-expands like `{$date}` — no modal prompt
+- Location also injected into LLM system prompt ("User Location" section) for weather/travel queries
+
+### Source Code Self-Awareness
+- `SOURCE_DIR` env var points to project root
+- `source_read` tool with three actions: `tree` (list files), `read` (file by path), `grep` (regex search)
+- Path-escape protection: resolved paths must start with `sourceRoot`
+- System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
+- No confirmation needed — read-only access scoped to source directory
+
+### Elapsed Timer
+- Live timer in top bar next to context label, starts on `sendMessage()`, stops in `finally` block
+- Updates every second: `0s`, `1s`, ... `1m 23s`
+- Stays visible with final time after response completes
 
 **Frontend rendering** (app.js):
 - `extractApplets(text)` — regex-extracts `<applet>` blocks BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify
@@ -197,11 +239,15 @@ Full-width top bar spanning entire window width with: colored session `+` button
 - Large tool results: auto-saved to file, only summary sent to LLM context (markdown tables truncated to 30 rows)
 - Image data (`_images`) and rate maps (`_rateMap`) stripped from LLM context but sent to frontend via SSE
 - Vision: images sent as base64 `image_url` parts in OpenAI multipart format
+- Template `[template: name]` expansion tells LLM to fetch fresh data first, update all dates/values, keep layout intact
 - Conversations auto-titled from first visible user message text (truncated to 60 chars); hidden session init prompts skipped
 - Prompts/sessions titled by LLM via separate non-streaming completion (defensive prompt with triple-backtick wrapping, HTML stripping, error/refusal detection)
 - Weather tool auto-adjusts `startDate` to tomorrow if today or earlier (LiteAPI requirement)
 - Search engine switchable at runtime via POST `/api/health/search`
 - Applet HTML in assistant messages stripped from LLM history context (replaced with `[Applet: TYPE visualization]`), kept in stored messages for frontend re-rendering
+- `run_command` uses async `exec` (non-blocking event loop) instead of `execSync`
+- Applet bubble width: `contentSpan` appended to bubble BEFORE `renderFormattedContent()` so parent traversal works for `max-w-[80%]` removal
+- `HELP.md` — user-facing guide in plain language (no technical internals)
 
 ## Conventions
 - ES modules (`import`/`export`) throughout
