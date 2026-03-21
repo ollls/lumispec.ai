@@ -1631,6 +1631,11 @@ function showPromptVarsModal(promptText, vars) {
   const modal = document.getElementById('prompt-vars-modal');
   const fields = document.getElementById('prompt-vars-fields');
   fields.innerHTML = '';
+  // Destroy any previous flatpickr instances
+  if (modal._flatpickrInstances) {
+    modal._flatpickrInstances.forEach(fp => fp.destroy());
+  }
+  modal._flatpickrInstances = [];
 
   for (const v of vars) {
     const wrapper = document.createElement('div');
@@ -1642,28 +1647,68 @@ function showPromptVarsModal(promptText, vars) {
     const inputType = variableInputType(v.type);
 
     if (inputType === 'daterange') {
-      const row = document.createElement('div');
-      row.className = 'flex gap-2';
-      const from = document.createElement('input');
-      from.type = 'date';
-      from.className = 'flex-1 bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
-      from.dataset.varName = v.name;
-      from.dataset.rangepart = 'from';
-      const to = document.createElement('input');
-      to.type = 'date';
-      to.className = 'flex-1 bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
-      to.dataset.varName = v.name;
-      to.dataset.rangepart = 'to';
-      row.appendChild(from);
-      const sep = document.createElement('span');
-      sep.className = 'text-zinc-500 self-center text-xs';
-      sep.textContent = 'to';
-      row.appendChild(sep);
-      row.appendChild(to);
-      wrapper.appendChild(row);
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select date range...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.dataset.varType = 'daterange';
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      // Initialize flatpickr after DOM insertion
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          mode: 'range',
+          dateFormat: 'Y-m-d',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
+    } else if (inputType === 'date') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select date...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          dateFormat: 'Y-m-d',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
+    } else if (inputType === 'month') {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = 'Select month...';
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none cursor-pointer';
+      inp.dataset.varName = v.name;
+      inp.dataset.varType = 'month';
+      inp.readOnly = true;
+      wrapper.appendChild(inp);
+      setTimeout(() => {
+        const fp = flatpickr(inp, {
+          dateFormat: 'Y-m',
+          allowInput: false,
+          static: true,
+          appendTo: wrapper,
+          plugins: [],
+          disableMobile: true,
+          onChange: function(selectedDates, dateStr, instance) {
+            // flatpickr doesn't have a native month-only mode, so we use default with day hidden via CSS
+          },
+        });
+        modal._flatpickrInstances.push(fp);
+      }, 0);
     } else {
       const inp = document.createElement('input');
-      inp.type = inputType;
+      inp.type = 'text';
       inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
       inp.dataset.varName = v.name;
       wrapper.appendChild(inp);
@@ -1674,7 +1719,7 @@ function showPromptVarsModal(promptText, vars) {
 
   modal.classList.remove('hidden');
   const firstInput = fields.querySelector('input');
-  if (firstInput) firstInput.focus();
+  if (firstInput && !firstInput.readOnly) firstInput.focus();
 
   // Store prompt text on modal for submit handler
   modal._promptText = promptText;
@@ -1687,9 +1732,10 @@ function collectVarValues() {
   const inputs = fields.querySelectorAll('input[data-var-name]');
   for (const inp of inputs) {
     const name = inp.dataset.varName;
-    if (inp.dataset.rangepart) {
-      if (!values[name]) values[name] = {};
-      values[name][inp.dataset.rangepart] = inp.value;
+    if (inp.dataset.varType === 'daterange') {
+      // flatpickr range mode stores "YYYY-MM-DD to YYYY-MM-DD" in the value
+      const parts = inp.value.split(' to ');
+      values[name] = { from: parts[0] || '', to: parts[1] || '' };
     } else {
       values[name] = inp.value;
     }
@@ -1705,9 +1751,9 @@ function substituteVars(text, vars, values) {
     if (v.type === 'daterange' && val && typeof val === 'object') {
       replacement = [val.from, val.to].filter(Boolean).join(' to ');
     } else if (v.type === 'month' && val) {
-      // month input gives YYYY-MM, format to "March 2026"
-      const [y, m] = val.split('-');
-      const d = new Date(parseInt(y), parseInt(m) - 1);
+      // flatpickr gives YYYY-MM or YYYY-MM-DD, format to "March 2026"
+      const parts = val.split('-');
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1);
       replacement = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     } else {
       replacement = val || '';
@@ -1721,7 +1767,10 @@ function substituteVars(text, vars, values) {
 
 // Modal event handlers
 document.getElementById('prompt-vars-cancel').addEventListener('click', () => {
-  document.getElementById('prompt-vars-modal').classList.add('hidden');
+  const modal = document.getElementById('prompt-vars-modal');
+  if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+  modal._flatpickrInstances = [];
+  modal.classList.add('hidden');
 });
 
 document.getElementById('prompt-vars-clear').addEventListener('click', () => {
@@ -1740,13 +1789,18 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   input.focus();
+  if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+  modal._flatpickrInstances = [];
   modal.classList.add('hidden');
 });
 
 // Close modal on Escape
 document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    document.getElementById('prompt-vars-modal').classList.add('hidden');
+    const modal = document.getElementById('prompt-vars-modal');
+    if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
+    modal._flatpickrInstances = [];
+    modal.classList.add('hidden');
   }
   if (e.key === 'Enter') {
     e.preventDefault();

@@ -9,7 +9,27 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <link rel="stylesheet" href="/lib/flatpickr-dark.css">
   <link rel="stylesheet" href="/css/output.css">
+  <style>
+    /* Flatpickr zinc/indigo overrides */
+    .flatpickr-calendar { background: #1c1c22 !important; border-color: #3f3f46 !important; font-size: 13px; }
+    .flatpickr-months .flatpickr-month { background: #1c1c22 !important; }
+    .flatpickr-current-month .flatpickr-monthDropdown-months { background: #1c1c22 !important; }
+    .flatpickr-weekdays { background: #1c1c22 !important; }
+    span.flatpickr-weekday { color: #71717a !important; }
+    .flatpickr-day { color: #d4d4d8 !important; }
+    .flatpickr-day:hover { background: #27272a !important; border-color: #27272a !important; }
+    .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+      background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important;
+    }
+    .flatpickr-day.inRange { background: #312e81 !important; border-color: #312e81 !important; box-shadow: -5px 0 0 #312e81, 5px 0 0 #312e81 !important; }
+    .flatpickr-day.today { border-color: #6366f1 !important; }
+    .flatpickr-day.today:hover { background: #4f46e5 !important; }
+    .flatpickr-months .flatpickr-prev-month, .flatpickr-months .flatpickr-next-month { fill: #a1a1aa !important; }
+    .flatpickr-months .flatpickr-prev-month:hover svg, .flatpickr-months .flatpickr-next-month:hover svg { fill: #e4e4e7 !important; }
+    .flatpickr-calendar.static { position: relative !important; margin-top: 4px; }
+  </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-screen flex overflow-hidden">
 
@@ -190,5 +210,6 @@
 
 
 </body>
-<script src="/js/app.js?v=5"></script>
+<script src="/lib/flatpickr.min.js"></script>
+<script src="/js/app.js?v=6"></script>
 </html>
