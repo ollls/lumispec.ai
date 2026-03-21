@@ -33,6 +33,28 @@ export function createTemplate(name, type, html) {
   return { id: template.id, name, type, createdAt: template.createdAt };
 }
 
+export function reorderTemplates(ids) {
+  const templates = load();
+  const byId = new Map(templates.map(t => [t.id, t]));
+  const reordered = ids.map(id => byId.get(id)).filter(Boolean);
+  for (const t of templates) {
+    if (!ids.includes(t.id)) reordered.push(t);
+  }
+  save(reordered);
+  return reordered;
+}
+
+export function updateTemplate(id, { name, type, html } = {}) {
+  const templates = load();
+  const template = templates.find(t => t.id === id);
+  if (!template) return null;
+  if (name !== undefined) template.name = name;
+  if (type !== undefined) template.type = type;
+  if (html !== undefined) template.html = html;
+  save(templates);
+  return template;
+}
+
 export function deleteTemplate(id) {
   const templates = load();
   const idx = templates.findIndex(t => t.id === id);

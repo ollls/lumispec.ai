@@ -69,7 +69,7 @@ router.post('/:id/messages', async (req, res) => {
     const tpl = getTemplateByName(match[1].trim());
     if (tpl) {
       content = content.replace(match[0],
-        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block with ONLY the data filenames/configuration updated. Do NOT redesign the layout, styling, or structure:\n\`\`\`html\n${tpl.html}\n\`\`\``
+        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block. Fetch fresh data using the appropriate tools first, then populate the template with the new data. Update ALL dates, values, and content to reflect the fresh data. Keep the layout, styling, and structure intact:\n\`\`\`html\n${tpl.html}\n\`\`\``
       );
     }
   }

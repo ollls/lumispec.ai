@@ -45,6 +45,28 @@ export function upsertSession(color, text, title) {
   return session;
 }
 
+export function reorderSessions(ids) {
+  const sessions = load();
+  const byId = new Map(sessions.map(s => [s.id, s]));
+  const reordered = ids.map(id => byId.get(id)).filter(Boolean);
+  for (const s of sessions) {
+    if (!ids.includes(s.id)) reordered.push(s);
+  }
+  save(reordered);
+  return reordered;
+}
+
+export function updateSession(id, { text, title } = {}) {
+  const sessions = load();
+  const session = sessions.find(s => s.id === id);
+  if (!session) return null;
+  if (text !== undefined) session.text = text;
+  if (title !== undefined) session.title = title;
+  session.updatedAt = new Date().toISOString();
+  save(sessions);
+  return session;
+}
+
 export function deleteSession(id) {
   const sessions = load();
   const idx = sessions.findIndex(s => s.id === id);

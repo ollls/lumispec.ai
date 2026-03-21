@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listSessions, upsertSession, deleteSession } from '../services/sessions.js';
+import { listSessions, upsertSession, updateSession, deleteSession, reorderSessions } from '../services/sessions.js';
 import { collectChatCompletion } from '../services/llm.js';
 
 const router = Router();
@@ -40,6 +40,23 @@ router.post('/', async (req, res) => {
   if (!color?.trim()) return res.status(400).json({ error: 'color required' });
   const title = await generateTitle(text.trim());
   res.json(upsertSession(color.trim(), text.trim(), title));
+});
+
+router.patch('/:id', (req, res) => {
+  const { text, title } = req.body;
+  if (!text?.trim() && !title?.trim()) return res.status(400).json({ error: 'text or title required' });
+  const updates = {};
+  if (text?.trim()) updates.text = text.trim();
+  if (title?.trim()) updates.title = title.trim();
+  const session = updateSession(req.params.id, updates);
+  if (!session) return res.status(404).json({ error: 'not found' });
+  res.json(session);
+});
+
+router.put('/reorder', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array required' });
+  res.json(reorderSessions(ids));
 });
 
 router.delete('/:id', (req, res) => {

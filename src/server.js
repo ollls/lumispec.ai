@@ -31,6 +31,10 @@ app.use('/api/tools', toolRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
 
+app.get('/api/config', (_req, res) => {
+  res.json({ location: config.location });
+});
+
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));
 });

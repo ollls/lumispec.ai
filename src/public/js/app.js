@@ -11,7 +11,30 @@ const state = {
   thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
   sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
+  location: '', // from server config (LOCATION env var)
 };
+
+function flashMsg(text) {
+  let el = document.getElementById('flash-msg');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'flash-msg';
+    el.className = 'text-red-500 text-sm mt-2 transition-opacity duration-300';
+    document.getElementById('empty-state').appendChild(el);
+  }
+  el.textContent = text;
+  el.style.opacity = '1';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+function requireSession() {
+  if (!state.currentConversationId || !state.sessionType) {
+    flashMsg('Create a session first');
+    return false;
+  }
+  return true;
+}
 
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
@@ -1387,7 +1410,7 @@ newChatButtons.forEach(btn => {
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   // Must have an active session to send
-  if (!state.currentConversationId || !state.sessionType) return;
+  if (!requireSession()) return;
   const content = input.value.trim();
   const images = state.pendingImages.length > 0 ? [...state.pendingImages] : null;
   if (!content && !images) return;
@@ -1549,18 +1572,102 @@ sessionsToggle.addEventListener('click', (e) => {
 });
 sessionsDropdown.addEventListener('click', (e) => e.stopPropagation());
 
+function startTitleEdit(titleSpan, onSave) {
+  const orig = titleSpan.textContent;
+  titleSpan.contentEditable = 'true';
+  titleSpan.classList.add('bg-zinc-800', 'rounded', 'px-1', 'outline-none', 'ring-1', 'ring-zinc-600');
+  titleSpan.focus();
+  const range = document.createRange();
+  range.selectNodeContents(titleSpan);
+  range.collapse(false);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+
+  const finish = (save) => {
+    titleSpan.contentEditable = 'false';
+    titleSpan.classList.remove('bg-zinc-800', 'rounded', 'px-1', 'outline-none', 'ring-1', 'ring-zinc-600');
+    const newTitle = titleSpan.textContent.trim();
+    if (save && newTitle && newTitle !== orig) {
+      onSave(newTitle);
+    } else {
+      titleSpan.textContent = orig;
+    }
+  };
+  titleSpan.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  titleSpan.addEventListener('blur', () => finish(true), { once: true });
+  titleSpan.addEventListener('click', (e) => e.stopPropagation());
+}
+
 function renderSessions(sessions) {
   sessionList.innerHTML = '';
+  let dragSrcEl = null;
+
   for (const s of sessions) {
     const item = document.createElement('div');
     item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.dataset.id = s.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      sessionList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      sessionList.insertBefore(dragSrcEl, item);
+      const ids = [...sessionList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/sessions/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
 
     const titleSpan = document.createElement('span');
     titleSpan.className = 'flex-1 text-xs';
     titleSpan.textContent = s.title || s.text.slice(0, 60);
-    // Color the title with the session color
     const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${s.color}`).trim();
     if (cssVar) titleSpan.style.color = cssVar;
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/sessions/${s.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -1573,7 +1680,7 @@ function renderSessions(sessions) {
 
     item.addEventListener('click', () => {
       sessionsDropdown.classList.add('hidden');
-      if (!state.currentConversationId || !state.sessionType) return;
+      if (!requireSession()) return;
       const vars = extractPromptVariables(s.text);
       if (vars.length > 0) {
         showPromptVarsModal(s.text, vars);
@@ -1585,7 +1692,9 @@ function renderSessions(sessions) {
       }
     });
 
+    item.appendChild(grip);
     item.appendChild(titleSpan);
+    item.appendChild(editBtn);
     item.appendChild(delBtn);
     sessionList.appendChild(item);
   }
@@ -1604,9 +1713,50 @@ function renderTemplates(templates) {
     templateList.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-500">No templates saved yet</div>';
     return;
   }
+  let dragSrcEl = null;
+
   for (const t of templates) {
     const item = document.createElement('div');
     item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.dataset.id = t.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      templateList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      templateList.insertBefore(dragSrcEl, item);
+      const ids = [...templateList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/templates/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'flex-1 text-xs text-zinc-300';
@@ -1615,6 +1765,20 @@ function renderTemplates(templates) {
     const typeSpan = document.createElement('span');
     typeSpan.className = 'text-zinc-600 text-xs shrink-0';
     typeSpan.textContent = t.type;
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(nameSpan, async (newName) => {
+        await fetch(`/api/templates/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+      });
+    });
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -1626,7 +1790,7 @@ function renderTemplates(templates) {
     });
 
     item.addEventListener('click', () => {
-      if (!state.currentConversationId || !state.sessionType) return;
+      if (!requireSession()) return;
       const tag = `[template: ${t.name}]`;
       const pos = input.selectionStart || input.value.length;
       input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
@@ -1636,8 +1800,10 @@ function renderTemplates(templates) {
       templatesDropdown.classList.add('hidden');
     });
 
+    item.appendChild(grip);
     item.appendChild(nameSpan);
     item.appendChild(typeSpan);
+    item.appendChild(editBtn);
     item.appendChild(delBtn);
     templateList.appendChild(item);
   }
@@ -1753,11 +1919,12 @@ function expandPromptMacros(text) {
     .replace(/\{\$time\}/gi, now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }))
     .replace(/\{\$year\}/gi, String(now.getFullYear()))
     .replace(/\{\$month\}/gi, now.toLocaleDateString('en-US', { month: 'long' }))
-    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
+    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }))
+    .replace(/\{\$location\}/gi, state.location);
 }
 
 // ── Prompt Variables ─────────────────────────────────
-const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day']);
+const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day', 'location']);
 
 function extractPromptVariables(text) {
   const vars = [];
@@ -1997,9 +2164,15 @@ function renderPrompts(prompts) {
 
   for (const p of prompts) {
     const item = document.createElement('div');
-    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-grab border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
-    item.draggable = true;
+    item.className = 'group flex items-center gap-1 px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors cursor-pointer';
     item.dataset.id = p.id;
+
+    // Drag grip handle — only this enables dragging
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
 
     item.addEventListener('dragstart', (e) => {
       dragSrcEl = item;
@@ -2008,6 +2181,8 @@ function renderPrompts(prompts) {
     });
     item.addEventListener('dragend', () => {
       item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
       promptList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
     });
     item.addEventListener('dragover', (e) => {
@@ -2035,6 +2210,20 @@ function renderPrompts(prompts) {
     titleSpan.className = 'flex-1 text-xs text-zinc-300';
     titleSpan.textContent = p.title || p.text.slice(0, 60);
 
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/prompts/${p.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
+
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     delBtn.textContent = '✕';
@@ -2045,7 +2234,7 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
-      if (!state.currentConversationId || !state.sessionType) return;
+      if (!requireSession()) return;
       const vars = extractPromptVariables(p.text);
       if (vars.length > 0) {
         showPromptVarsModal(p.text, vars);
@@ -2057,7 +2246,9 @@ function renderPrompts(prompts) {
       }
     });
 
+    item.appendChild(grip);
     item.appendChild(titleSpan);
+    item.appendChild(editBtn);
     item.appendChild(delBtn);
     promptList.appendChild(item);
   }
@@ -2111,6 +2302,7 @@ saveSessionBtn.addEventListener('click', async () => {
 
 // ── Init ──────────────────────────────────────────────
 (async function init() {
+  try { const cfg = await (await fetch('/api/config')).json(); state.location = cfg.location || ''; } catch {}
   await refreshSidebar();
   // Restore active session from localStorage
   if (state.currentConversationId) {

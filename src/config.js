@@ -40,6 +40,7 @@ export default {
   llm: {
     backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
   },
+  location: process.env.LOCATION || '',
   etrade: {
     consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',
