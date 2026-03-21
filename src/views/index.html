@@ -41,41 +41,32 @@
     .flatpickr-calendar.static { position: relative !important; margin-top: 4px; }
   </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 h-screen flex overflow-hidden">
+<body class="bg-zinc-950 text-zinc-100 h-screen flex flex-col overflow-hidden">
 
-  <!-- Sidebar -->
-  <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
-    <div class="px-4 py-4 border-b border-zinc-800 flex flex-col gap-1.5">
+  <!-- Top bar (full width) -->
+  <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs shrink-0">
+    <!-- Session buttons -->
+    <div class="flex items-center gap-1.5 mr-2">
       <button id="new-chat-blue"
-        class="session-btn w-full text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        data-session="blue" style="background:var(--btn-blue);"> + New Chat
-      </button>
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="blue" style="background:var(--btn-blue);">+</button>
       <button id="new-chat-cyan"
-        class="session-btn w-full text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        data-session="cyan" style="background:var(--btn-cyan);"> + New Chat
-      </button>
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="cyan" style="background:var(--btn-cyan);">+</button>
       <button id="new-chat-amber"
-        class="session-btn w-full text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        data-session="amber" style="background:var(--btn-amber); color:#000;"> + New Chat
-      </button>
+        class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="amber" style="background:var(--btn-amber); color:#000;">+</button>
       <button id="new-chat-coral"
-        class="session-btn w-full text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        data-session="coral" style="background:var(--btn-coral);"> + New Chat
-      </button>
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="coral" style="background:var(--btn-coral);">+</button>
       <button id="new-chat-sgreen"
-        class="session-btn w-full text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        data-session="sgreen" style="background:var(--btn-sgreen);"> + New Chat
-      </button>
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="sgreen" style="background:var(--btn-sgreen);">+</button>
     </div>
-    <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
-    </div>
-  </aside>
-
-  <!-- Main area -->
-  <div class="flex-1 flex flex-col min-w-0">
-
-    <!-- Status bar -->
-    <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs">
+    <div class="w-px self-stretch bg-zinc-700"></div>
+    <!-- Status indicators: grid layout -->
+    <div class="grid gap-x-8 gap-y-0.5" style="grid-template-columns: minmax(7rem, auto) minmax(5rem, auto) auto">
+      <!-- Row 1: Core -->
       <div class="relative flex items-center gap-2">
         <span id="llm-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="llm-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
@@ -89,6 +80,14 @@
         <span id="inet-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="inet-label" class="text-zinc-500">Internet</span>
       </div>
+      <div id="etrade-status" class="relative flex items-center gap-2 hidden">
+        <span id="etrade-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
+        <button id="etrade-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors">E*TRADE</button>
+        <div id="etrade-panel" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]">
+          <div id="etrade-panel-content"></div>
+        </div>
+      </div>
+      <!-- Row 2: APIs -->
       <div class="relative flex items-center gap-2">
         <span id="search-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="search-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
@@ -102,16 +101,6 @@
         <span id="liteapi-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="liteapi-label" class="text-zinc-500">LiteAPI</span>
       </div>
-      <div id="etrade-status" class="relative flex items-center gap-2 hidden">
-        <span id="etrade-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <button id="etrade-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors">E*TRADE</button>
-        <div id="etrade-panel" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]">
-          <div id="etrade-panel-content"></div>
-        </div>
-      </div>
-      <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
-        Slots: <span id="slots-summary">—</span>
-      </button>
       <div class="relative flex items-center gap-2">
         <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1 hidden">
           <span>🔧</span>
@@ -120,6 +109,7 @@
         <div id="tool-usage-dropdown" class="hidden absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
         </div>
       </div>
+    </div>
       <div class="ml-auto mr-10 flex items-center gap-6">
         <div class="relative flex items-center">
           <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Tools</button>
@@ -134,26 +124,42 @@
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="sessions-toggle" class="text-amber-400 hover:text-amber-300 transition-colors text-xs">Sessions</button>
+          <button id="sessions-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Sessions</button>
           <div id="sessions-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="session-list" class="py-1"></div>
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="templates-toggle" class="text-rose-400 hover:text-rose-300 transition-colors text-xs">Templates</button>
+          <button id="templates-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Templates</button>
           <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="template-list" class="py-1"></div>
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <span class="text-zinc-500">Context:</span>
-        <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
-          <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="text-zinc-500">Context:</span>
+          <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
+            <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
+          </div>
+          <span id="context-label" class="text-zinc-500">0 / 131K</span>
         </div>
-        <span id="context-label" class="text-zinc-500">0 / 131K</span>
+        <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
+          Slots: <span id="slots-summary">—</span>
+        </button>
       </div>
-    </header>
+  </header>
+
+  <!-- Content: sidebar + main -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
+      <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
+      </div>
+    </aside>
+
+    <!-- Main area -->
+    <div class="flex-1 flex flex-col min-w-0">
 
     <!-- Slot panel (collapsible) -->
     <div id="slot-panel" class="border-b border-zinc-800 px-4 py-3 hidden">
@@ -244,8 +250,8 @@
         </div>
       </div>
     </form>
-  </div>
-
+    </div><!-- /main area -->
+  </div><!-- /content wrapper -->
 
 </body>
 <script src="/lib/flatpickr.min.js"></script>
