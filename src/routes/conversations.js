@@ -58,6 +58,7 @@ router.post('/:id/messages', async (req, res) => {
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
+  const hidden = !!req.body.hidden;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -518,14 +519,11 @@ router.post('/:id/messages', async (req, res) => {
   res.write('data: [DONE]\n\n');
   res.end();
 
-  // Auto-title from first user message
-  const updated = conversations.get(conv.id);
-  if (updated && updated.title === 'New conversation' && updated.messages.length >= 1) {
-    const firstUser = updated.messages.find(m => m.role === 'user');
-    if (firstUser) {
-      const text = typeof firstUser.content === 'object'
-        ? firstUser.content.text
-        : firstUser.content;
+  // Auto-title from first visible user message (skip hidden session prompts)
+  if (!hidden) {
+    const updated = conversations.get(conv.id);
+    if (updated && updated.title === 'New conversation') {
+      const text = typeof content === 'string' ? content : content.text;
       if (text) {
         const title = text.length > 60 ? text.slice(0, 60) + '…' : text;
         conversations.updateTitle(conv.id, title);

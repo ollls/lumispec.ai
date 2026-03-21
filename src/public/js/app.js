@@ -1,6 +1,6 @@
 // ── State ──────────────────────────────────────────────
 const state = {
-  currentConversationId: null,
+  currentConversationId: localStorage.getItem('activeConversationId') || null,
   conversations: [],
   abortController: null,
   healthy: false,
@@ -8,11 +8,13 @@ const state = {
   pendingImages: [], // { dataUrl, mimeType, name }
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
+  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
+  sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
 };
 
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
-const newChatBtn = document.getElementById('new-chat-btn');
+const newChatButtons = document.querySelectorAll('.session-btn');
 const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
@@ -51,6 +53,10 @@ const imagePreviewStrip = document.getElementById('image-preview-strip');
 const appletToggle = document.getElementById('applet-toggle');
 const autorunToggle = document.getElementById('autorun-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
+const saveSessionBtn = document.getElementById('save-session-btn');
+const sessionList = document.getElementById('session-list');
+const sessionsToggle = document.getElementById('sessions-toggle');
+const sessionsDropdown = document.getElementById('sessions-dropdown');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
 const promptsToggle = document.getElementById('prompts-toggle');
@@ -133,6 +139,11 @@ function renderSidebar() {
     const title = document.createElement('span');
     title.className = 'flex-1 text-sm truncate ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
     title.textContent = conv.title;
+    const convSession = state.sessionColors[conv.id];
+    if (convSession) {
+      const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
+      if (c) title.style.color = c;
+    }
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -168,6 +179,13 @@ async function switchConversation(id) {
   if (state.abortController) state.abortController.abort();
 
   state.currentConversationId = id;
+  persistActiveConversation();
+  // Restore session color for this conversation
+  const savedType = state.sessionColors[id] || null;
+  state.sessionType = savedType;
+  const color = savedType ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${savedType}`).trim() : '';
+  input.style.borderColor = color || '';
+  updateInputLock();
   renderSidebar();
 
   const conv = await api.getConversation(id);
@@ -177,8 +195,14 @@ async function switchConversation(id) {
 
 async function deleteConversation(id) {
   await api.deleteConversation(id);
+  delete state.sessionColors[id];
+  localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
   if (state.currentConversationId === id) {
     state.currentConversationId = null;
+    state.sessionType = null;
+    input.style.borderColor = '';
+    persistActiveConversation();
+    updateInputLock();
     showEmptyState();
   }
   refreshSidebar();
@@ -582,10 +606,11 @@ function appendMessage(role, text, images, meta = {}) {
 }
 
 // ── Streaming ─────────────────────────────────────────
-async function sendMessage(content, images) {
+async function sendMessage(content, images, { hideUserMessage = false } = {}) {
   if (!state.currentConversationId) return;
 
-  appendMessage('user', content, images);
+  state._hiddenMessage = hideUserMessage;
+  if (!hideUserMessage) appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
 
@@ -626,10 +651,12 @@ async function sendMessage(content, images) {
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
+        hidden: state._hiddenMessage || false,
       }),
       signal: state.abortController.signal,
     });
 
+    state._hiddenMessage = false;
     // Refresh slots shortly after backend assigns slot
     setTimeout(refreshSlots, 500);
 
@@ -1282,28 +1309,77 @@ slotsToggle.addEventListener('click', () => {
   if (slotPanelOpen) refreshSlots();
 });
 
+// ── Session color helpers ─────────────────────────────
+function applySessionColor(type) {
+  state.sessionType = type;
+  // Persist color for current conversation
+  if (state.currentConversationId && type) {
+    state.sessionColors[state.currentConversationId] = type;
+    localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
+  }
+  const color = type ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${type}`).trim() : '';
+  input.style.borderColor = color || '';
+  updateInputLock();
+  renderSidebar();
+}
+
+function persistActiveConversation() {
+  if (state.currentConversationId) {
+    localStorage.setItem('activeConversationId', state.currentConversationId);
+  } else {
+    localStorage.removeItem('activeConversationId');
+  }
+}
+
+function updateInputLock() {
+  const locked = !state.currentConversationId || !state.sessionType;
+  input.disabled = locked;
+  sendBtn.disabled = locked;
+  input.placeholder = locked ? 'Select or create a session to start…' : 'Type your message…';
+}
+
 // ── Event handlers ────────────────────────────────────
-newChatBtn.addEventListener('click', async () => {
-  const conv = await api.createConversation();
-  state.currentConversationId = conv.id;
-  await refreshSidebar();
-  renderMessages([]);
-  updateContextBar(0);
-  input.focus();
+newChatButtons.forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const sessionType = btn.dataset.session;
+    const conv = await api.createConversation();
+    state.currentConversationId = conv.id;
+    persistActiveConversation();
+    applySessionColor(sessionType);
+    await refreshSidebar();
+    renderMessages([]);
+    updateContextBar(0);
+
+    // Auto-load and submit saved session prompt for this color
+    try {
+      const sessions = await (await fetch('/api/sessions')).json();
+      const match = sessions.find(s => s.color === sessionType);
+      if (match) {
+        const vars = extractPromptVariables(match.text);
+        if (vars.length > 0) {
+          // Has variables — show modal, auto-submit hidden on confirm
+          showPromptVarsModal(match.text, vars);
+          const modal = document.getElementById('prompt-vars-modal');
+          modal._autoSubmitHidden = true;
+        } else {
+          const text = expandPromptMacros(match.text);
+          await sendMessage(text, null, { hideUserMessage: true });
+          return;
+        }
+      }
+    } catch {}
+
+    input.focus();
+  });
 });
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // Must have an active session to send
+  if (!state.currentConversationId || !state.sessionType) return;
   const content = input.value.trim();
   const images = state.pendingImages.length > 0 ? [...state.pendingImages] : null;
   if (!content && !images) return;
-  if (!state.currentConversationId) {
-    const conv = await api.createConversation();
-    state.currentConversationId = conv.id;
-    await refreshSidebar();
-    renderMessages([]);
-    updateContextBar(0);
-  }
   input.value = '';
   input.style.height = 'auto';
   clearPendingImages();
@@ -1427,6 +1503,7 @@ promptsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1437,10 +1514,70 @@ templatesToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
   toolsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
   templatesDropdown.classList.toggle('hidden');
   if (!templatesDropdown.classList.contains('hidden')) refreshTemplates();
 });
 templatesDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Sessions dropdown ──────────────────────────────────
+sessionsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
+  sessionsDropdown.classList.toggle('hidden');
+  if (!sessionsDropdown.classList.contains('hidden')) refreshSessions();
+});
+sessionsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+function renderSessions(sessions) {
+  sessionList.innerHTML = '';
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs';
+    titleSpan.textContent = s.title || s.text.slice(0, 60);
+    // Color the title with the session color
+    const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${s.color}`).trim();
+    if (cssVar) titleSpan.style.color = cssVar;
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/sessions/${s.id}`, { method: 'DELETE' });
+      refreshSessions();
+    });
+
+    item.addEventListener('click', () => {
+      sessionsDropdown.classList.add('hidden');
+      const vars = extractPromptVariables(s.text);
+      if (vars.length > 0) {
+        showPromptVarsModal(s.text, vars);
+      } else {
+        input.value = expandPromptMacros(s.text);
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        input.focus();
+      }
+    });
+
+    item.appendChild(titleSpan);
+    item.appendChild(delBtn);
+    sessionList.appendChild(item);
+  }
+}
+
+async function refreshSessions() {
+  try {
+    const sessions = await (await fetch('/api/sessions')).json();
+    renderSessions(sessions);
+  } catch {}
+}
 
 function renderTemplates(templates) {
   templateList.innerHTML = '';
@@ -1497,12 +1634,15 @@ document.addEventListener('click', (e) => {
   if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
   if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
   if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
+  if (e.target !== sessionsToggle) sessionsDropdown.classList.add('hidden');
 });
 
 // ── Tools Panel ──────────────────────────────────────
 toolsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
   toolsDropdown.classList.toggle('hidden');
   if (!toolsDropdown.classList.contains('hidden')) refreshTools();
 });
@@ -1785,13 +1925,19 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
   const values = collectVarValues();
   let text = substituteVars(modal._promptText, modal._vars, values);
   text = expandPromptMacros(text);
-  input.value = text;
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  input.focus();
+  const autoSubmitHidden = modal._autoSubmitHidden;
   if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
   modal._flatpickrInstances = [];
+  modal._autoSubmitHidden = false;
   modal.classList.add('hidden');
+  if (autoSubmitHidden) {
+    sendMessage(text, null, { hideUserMessage: true });
+  } else {
+    input.value = text;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    input.focus();
+  }
 });
 
 // Close modal on Escape
@@ -1800,6 +1946,7 @@ document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => 
     const modal = document.getElementById('prompt-vars-modal');
     if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
     modal._flatpickrInstances = [];
+    modal._autoSubmitHidden = false;
     modal.classList.add('hidden');
   }
   if (e.key === 'Enter') {
@@ -1912,9 +2059,49 @@ savePromptBtn.addEventListener('click', async () => {
   }
 });
 
+saveSessionBtn.addEventListener('click', async () => {
+  const text = input.value.trim();
+  if (!text || !state.sessionType) return;
+  saveSessionBtn.disabled = true;
+  saveSessionBtn.textContent = '…';
+  try {
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, color: state.sessionType }),
+    });
+    input.value = '';
+    input.style.height = 'auto';
+    refreshSessions();
+  } finally {
+    saveSessionBtn.disabled = false;
+    saveSessionBtn.textContent = 'Save Session';
+  }
+});
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   await refreshSidebar();
+  // Restore active session from localStorage
+  if (state.currentConversationId) {
+    const exists = state.conversations.find(c => c.id === state.currentConversationId);
+    if (exists) {
+      const savedType = state.sessionColors[state.currentConversationId] || null;
+      state.sessionType = savedType;
+      const color = savedType ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${savedType}`).trim() : '';
+      input.style.borderColor = color || '';
+      renderSidebar();
+      const conv = await api.getConversation(state.currentConversationId);
+      renderMessages(conv.messages);
+      updateContextBar(conv.tokenCount);
+    } else {
+      // Conversation no longer exists on server
+      state.currentConversationId = null;
+      state.sessionType = null;
+      persistActiveConversation();
+    }
+  }
+  updateInputLock();
   refreshPrompts();
   pollLLM();
   setInterval(pollLLM, 5000);
