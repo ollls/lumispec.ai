@@ -1,5 +1,7 @@
 # ScrapChat
 
+![ScrapChat](Screenshot_2026-03-21_17-11-43.png)
+
 A self-hosted AI assistant that runs on your own hardware. Connect any local LLM via [llama.cpp](https://github.com/ggerganov/llama.cpp) and get a full-featured chat interface with web search, code execution, interactive visualizations, travel planning, and deep E\*TRADE brokerage integration — all private, no cloud AI required.
 
 ## Install
