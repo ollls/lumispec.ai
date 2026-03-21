@@ -1596,6 +1596,164 @@ function expandPromptMacros(text) {
     .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
 }
 
+// ── Prompt Variables ─────────────────────────────────
+const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day']);
+
+function extractPromptVariables(text) {
+  const vars = [];
+  const seen = new Set();
+  const re = /\{\$(\w+)(?::(\w+))?\}/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1];
+    if (builtinMacros.has(name.toLowerCase()) || seen.has(name)) continue;
+    seen.add(name);
+    const type = (m[2] || 'string').toLowerCase();
+    vars.push({ name, type, placeholder: m[0] });
+  }
+  return vars;
+}
+
+function variableInputType(type) {
+  switch (type) {
+    case 'date': return 'date';
+    case 'daterange': return 'daterange';
+    case 'month': return 'month';
+    default: return 'text';
+  }
+}
+
+function humanLabel(name) {
+  return name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+}
+
+function showPromptVarsModal(promptText, vars) {
+  const modal = document.getElementById('prompt-vars-modal');
+  const fields = document.getElementById('prompt-vars-fields');
+  fields.innerHTML = '';
+
+  for (const v of vars) {
+    const wrapper = document.createElement('div');
+    const label = document.createElement('label');
+    label.className = 'block text-xs text-zinc-400 mb-1';
+    label.textContent = humanLabel(v.name) + (v.type !== 'string' ? ` (${v.type})` : '');
+    wrapper.appendChild(label);
+
+    const inputType = variableInputType(v.type);
+
+    if (inputType === 'daterange') {
+      const row = document.createElement('div');
+      row.className = 'flex gap-2';
+      const from = document.createElement('input');
+      from.type = 'date';
+      from.className = 'flex-1 bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
+      from.dataset.varName = v.name;
+      from.dataset.rangepart = 'from';
+      const to = document.createElement('input');
+      to.type = 'date';
+      to.className = 'flex-1 bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
+      to.dataset.varName = v.name;
+      to.dataset.rangepart = 'to';
+      row.appendChild(from);
+      const sep = document.createElement('span');
+      sep.className = 'text-zinc-500 self-center text-xs';
+      sep.textContent = 'to';
+      row.appendChild(sep);
+      row.appendChild(to);
+      wrapper.appendChild(row);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = inputType;
+      inp.className = 'w-full bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-indigo-500 outline-none';
+      inp.dataset.varName = v.name;
+      wrapper.appendChild(inp);
+    }
+
+    fields.appendChild(wrapper);
+  }
+
+  modal.classList.remove('hidden');
+  const firstInput = fields.querySelector('input');
+  if (firstInput) firstInput.focus();
+
+  // Store prompt text on modal for submit handler
+  modal._promptText = promptText;
+  modal._vars = vars;
+}
+
+function collectVarValues() {
+  const fields = document.getElementById('prompt-vars-fields');
+  const values = {};
+  const inputs = fields.querySelectorAll('input[data-var-name]');
+  for (const inp of inputs) {
+    const name = inp.dataset.varName;
+    if (inp.dataset.rangepart) {
+      if (!values[name]) values[name] = {};
+      values[name][inp.dataset.rangepart] = inp.value;
+    } else {
+      values[name] = inp.value;
+    }
+  }
+  return values;
+}
+
+function substituteVars(text, vars, values) {
+  let result = text;
+  for (const v of vars) {
+    const val = values[v.name];
+    let replacement = '';
+    if (v.type === 'daterange' && val && typeof val === 'object') {
+      replacement = [val.from, val.to].filter(Boolean).join(' to ');
+    } else if (v.type === 'month' && val) {
+      // month input gives YYYY-MM, format to "March 2026"
+      const [y, m] = val.split('-');
+      const d = new Date(parseInt(y), parseInt(m) - 1);
+      replacement = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } else {
+      replacement = val || '';
+    }
+    // Replace all occurrences of this variable (with or without type suffix)
+    const escaped = v.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\{\\$${escaped}(?::\\w+)?\\}`, 'g'), replacement);
+  }
+  return result;
+}
+
+// Modal event handlers
+document.getElementById('prompt-vars-cancel').addEventListener('click', () => {
+  document.getElementById('prompt-vars-modal').classList.add('hidden');
+});
+
+document.getElementById('prompt-vars-clear').addEventListener('click', () => {
+  const fields = document.getElementById('prompt-vars-fields');
+  fields.querySelectorAll('input').forEach(inp => inp.value = '');
+  const firstInput = fields.querySelector('input');
+  if (firstInput) firstInput.focus();
+});
+
+document.getElementById('prompt-vars-submit').addEventListener('click', () => {
+  const modal = document.getElementById('prompt-vars-modal');
+  const values = collectVarValues();
+  let text = substituteVars(modal._promptText, modal._vars, values);
+  text = expandPromptMacros(text);
+  input.value = text;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  input.focus();
+  modal.classList.add('hidden');
+});
+
+// Close modal on Escape
+document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.getElementById('prompt-vars-modal').classList.add('hidden');
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('prompt-vars-submit').click();
+  }
+});
+
 async function refreshPrompts() {
   try {
     const prompts = await (await fetch('/api/prompts')).json();
@@ -1657,10 +1815,15 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
-      input.value = expandPromptMacros(p.text);
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-      input.focus();
+      const vars = extractPromptVariables(p.text);
+      if (vars.length > 0) {
+        showPromptVarsModal(p.text, vars);
+      } else {
+        input.value = expandPromptMacros(p.text);
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        input.focus();
+      }
     });
 
     item.appendChild(titleSpan);

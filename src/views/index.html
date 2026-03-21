@@ -113,6 +113,21 @@
       </div>
     </div>
 
+    <!-- Prompt Variables Modal -->
+    <div id="prompt-vars-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
+      <div class="bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-zinc-700">
+          <h3 class="text-sm font-medium text-zinc-200">Fill in prompt variables</h3>
+          <button id="prompt-vars-cancel" class="text-zinc-500 hover:text-zinc-300 text-lg leading-none">&times;</button>
+        </div>
+        <div id="prompt-vars-fields" class="px-5 py-4 space-y-3 max-h-80 overflow-y-auto slim-scrollbar"></div>
+        <div class="flex justify-end gap-2 px-5 py-3 border-t border-zinc-700">
+          <button id="prompt-vars-clear" class="text-xs text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded transition-colors">Clear all</button>
+          <button id="prompt-vars-submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors">Apply</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Input form -->
     <form id="prompt-form" class="border-t border-zinc-800 bg-zinc-900 p-4">
       <div class="max-w-4xl mx-auto">
