@@ -4,5 +4,6 @@ src/public/css/output.css
 data/
 !data/prompts.json
 !data/templates.json
+!data/sessions.json
 logs/
 .claude/settings.local.json
