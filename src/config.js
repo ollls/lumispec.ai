@@ -42,6 +42,7 @@ export default {
   },
   location: process.env.LOCATION || '',
   sourceDir: process.env.SOURCE_DIR || '',
+  sourceTest: process.env.SOURCE_TEST || '',
   etrade: {
     consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',

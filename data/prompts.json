@@ -1,5 +1,11 @@
 [
   {
+    "id": "93222154-72d0-48b5-a674-d7a58db98e4c",
+    "title": "Major US and Ukraine News App",
+    "text": "List major news, in US and in Ukraine. use applet HTML, BIG CLEAN, SIMPLE, DARK MODE",
+    "createdAt": "2026-03-21T19:45:09.825Z"
+  },
+  {
     "id": "0f0acedf-56d5-4d5a-a059-05526682281b",
     "title": "Next Week Put Options by Volume",
     "text": "Show {$Tickler} PUT options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
@@ -10,12 +16,6 @@
     "title": "Next Week Call Options by Volume",
     "text": "Show {$Tickler} CALL options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
     "createdAt": "2026-03-21T04:41:20.145Z"
-  },
-  {
-    "id": "feae15c2-5e72-4801-ad9b-043b3984862d",
-    "title": "NEWSROOM: Single-file HTML news dashboard",
-    "text": "Build a single-file applet HTML news dashboard with these specs:\n\nLAYOUT\n- Magazine-style card grid with 3 tiers:\n  1. Breaking News — 1 hero card (large) + 1–2 standard cards, 2-column grid\n  2. Major Stories — 3-column grid of medium cards\n  3. International — 4-column compact card grid\n- Sticky header with logo, live clock, and \"LIVE\" indicator\n- Market ticker bar below header\n\nTHEME: [Dark editorial / Light minimal / Glassmorphism]\n- Use CSS variables for all colors\n- Add subtle noise or grain texture overlay\n- Cards should have gradient backgrounds, not images\n\nFEATURES\n- Category filter pills: All, Politics, Tech, Business, World, Science, Sports\n  (single-select, \"All\" is default)\n- Each card shows: category badge (color-coded), source badge (icon + name),\n  title, excerpt, timestamp\n- Breaking cards get a pulsing red \"BREAKING\" badge with animation\n- Cards animate in with staggered fade-up on load and filter change\n\nDATA\n- Use a hardcoded JS array of 15–18 sample news objects with fields:\n  tier, category, source, title, excerpt, time, live (boolean)\n- Render everything client-side with vanilla JS (no frameworks)\n\nSTYLE RULES\n- Use 2 Google Fonts: a serif display font for titles, a sans-serif for body\n- No generic fonts (Inter, Arial, Roboto)\n- Responsive: collapse to single column on mobile\n- Smooth transitions on hover (lift + shadow)\n\nOutput a single self-contained HTML file. No external dependencies\nexcept Google Fonts CDN.",
-    "createdAt": "2026-03-21T18:57:04.909Z"
   },
   {
     "id": "5bbfab15-8ead-4556-a675-7476020fd86f",
@@ -40,6 +40,12 @@
     "title": "Stock Option Chain Dashboard Template",
     "text": "Use HTML applet BIG, CLEAN SIMPLE look and feel.  Generate option chain dashboard for {$Ticker} stock.  Period {$Period:daterange}. Use applet template - [template: Option Chain]",
     "createdAt": "2026-03-21T02:49:37.733Z"
+  },
+  {
+    "id": "feae15c2-5e72-4801-ad9b-043b3984862d",
+    "title": "NEWSROOM: Single-file HTML news dashboard",
+    "text": "Build a single-file applet HTML news dashboard with these specs:\n\nLAYOUT\n- Magazine-style card grid with 3 tiers:\n  1. Breaking News — 1 hero card (large) + 1–2 standard cards, 2-column grid\n  2. Major Stories — 3-column grid of medium cards\n  3. International — 4-column compact card grid\n- Sticky header with logo, live clock, and \"LIVE\" indicator\n- Market ticker bar below header\n\nTHEME: [Dark editorial / Light minimal / Glassmorphism]\n- Use CSS variables for all colors\n- Add subtle noise or grain texture overlay\n- Cards should have gradient backgrounds, not images\n\nFEATURES\n- Category filter pills: All, Politics, Tech, Business, World, Science, Sports\n  (single-select, \"All\" is default)\n- Each card shows: category badge (color-coded), source badge (icon + name),\n  title, excerpt, timestamp\n- Breaking cards get a pulsing red \"BREAKING\" badge with animation\n- Cards animate in with staggered fade-up on load and filter change\n\nDATA\n- Use a hardcoded JS array of 15–18 sample news objects with fields:\n  tier, category, source, title, excerpt, time, live (boolean)\n- Render everything client-side with vanilla JS (no frameworks)\n\nSTYLE RULES\n- Use 2 Google Fonts: a serif display font for titles, a sans-serif for body\n- No generic fonts (Inter, Arial, Roboto)\n- Responsive: collapse to single column on mobile\n- Smooth transitions on hover (lift + shadow)\n\nOutput a single self-contained HTML file. No external dependencies\nexcept Google Fonts CDN.",
+    "createdAt": "2026-03-21T18:57:04.909Z"
   },
   {
     "id": "827f7ee6-4445-4392-a62f-2b093182f8ab",

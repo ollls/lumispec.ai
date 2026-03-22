@@ -9,12 +9,47 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **CSS**: Tailwind CSS v4 (CLI build)
 - **Frontend**: Vanilla JS, no bundler
 - **LLM Backend**: llama.cpp server (OpenAI-compatible `/v1/chat/completions` endpoint)
+- **GPU**: NVIDIA RTX 5090
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
+
+## LLM Server Configuration
+Running Qwen3.5-35B-A3B (MoE, 3B active params) on RTX 5090 with 131K context:
+
+```bash
+#!/bin/bash
+# run-qwen-server-5090.sh — GPU-exclusive configuration
+
+export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
+
+./llama.cpp/build/bin/llama-server \
+  -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
+  --ctx-size 131072 \
+  --gpu-layers 99 \
+  --flash-attn on \
+  -t 16 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --min-p 0.01 \
+  --top-k 40 \
+  --repeat-penalty 1.05 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --mmap \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+**Key settings:**
+- `--gpu-layers 99` — full GPU offload
+- `--flash-attn on` — flash attention for large context
+- `--cache-type-k/v q8_0` — quantized KV cache to fit 131K context in VRAM
+- `--mmap` — memory-mapped model loading
+- `-t 16` — 16 CPU threads for non-GPU operations
 
 ## Project Structure
 ```
 src/
-  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir)
+  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir, sourceTest)
   server.js                # Express server, entry point, starts slot polling, /api/config endpoint
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands
@@ -29,7 +64,7 @@ src/
     sessions.js            # Session prompts persistence + reorder + update
     templates.js           # Template persistence + reorder + update
   services/
-    conversations.js       # In-memory conversation store (Map-based)
+    conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
     tools.js               # Tool registry, system prompt, parser, executor, tool call logger
     slots.js               # Slot monitor (polling, assignment, pin/unpin)
@@ -42,6 +77,7 @@ src/
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json (served at /files/)
+  pinned/                  # Pinned conversation JSON files (<id>.json)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ```
 
@@ -54,6 +90,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id` | PATCH | Update title |
 | `/api/conversations/:id` | DELETE | Delete conversation + release slot |
 | `/api/conversations/:id/messages` | POST | Send message, streams SSE response |
+| `/api/conversations/:id/pin` | POST | Pin conversation (persist to disk) |
+| `/api/conversations/:id/unpin` | POST | Unpin conversation (remove from disk) |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
 | `/api/slots` | GET | Slot status enriched with conversation mapping |
 | `/api/slots/pin` | POST | Pin conversation to slot |
@@ -96,7 +134,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` — E*TRADE OAuth credentials
 - `ETRADE_SANDBOX` — `true` for sandbox mode
 - `LOCATION` — default user location for weather/travel queries and `{$location}` macro
-- `SOURCE_DIR` — project root path for `source_read` tool (self-awareness)
+- `SOURCE_DIR` — project root path for source tools (self-awareness + code editing)
+- `SOURCE_TEST` — test command for `source_test` tool (e.g. `npm test`, `pytest -x`, `cargo test`)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -123,6 +162,13 @@ Safety mechanisms:
 | `run_command` | Shell command execution via async exec (non-blocking), 30s timeout |
 | `run_python` | Execute Python script in venv, cwd=data dir, 120s timeout |
 | `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
+| `source_write` | Write/create source files. Path-escape protected, confirmation required. Scoped to SOURCE_DIR |
+| `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
+| `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |
+| `source_git` | Git commands with safety tiers: read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive (blocked). cwd=SOURCE_DIR |
+| `source_run` | Run shell commands in source project dir (e.g. python3 script.py, npm run build). Confirmation/autorun, 120s timeout |
+| `source_test` | Run project test command (SOURCE_TEST env var). No params, no confirmation, 120s timeout. Language-agnostic |
+| `source_project` | Switch source tools to a different project directory. Always requires confirmation. Actions: switch, reset, status |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -138,9 +184,9 @@ Prompt-based interactive HTML visualizations rendered in sandboxed iframes withi
 **Toggle**: Checkbox in input form next to attach button. State in `state.appletsEnabled`, persisted to localStorage (default: on). Sent as `applets: true|false` in message POST body. Backend conditionally injects applet prompt section into system prompt via `getSystemPrompt({ applets })`.
 
 ### Autorun
-Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, both `run_python` and `run_command` skip the confirmation prompt and run immediately.
+Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, `run_python`, `run_command`, and source tools (`source_write`, `source_edit`, `source_delete`, `source_git` local writes) skip the confirmation prompt and run immediately. Exception: `source_project` always requires confirmation regardless of autorun.
 
-**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context; both `run_python` and `run_command` check `context.autorun` to skip `confirmFn`.
+**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context.
 
 ### Think Toggle
 Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/thinking blocks, tool content ("Working..."), tool status messages, and tool use details ("Used web_search", etc.) during streaming.
@@ -152,9 +198,9 @@ Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/think
 ### Session System
 Colored session types that define conversation categories. Each conversation is associated with a session color. Session prompts are saved per color and auto-submitted when creating a new chat.
 
-**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`). Easy to change in one place.
+**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`, `--btn-navy`, `--btn-lavender`). Easy to change in one place.
 
-**Session buttons**: 5 compact colored `+` buttons in the top bar. Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
+**Session buttons**: 7 compact colored `+` buttons in the top bar. Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
 
 **Session persistence**:
 - `state.sessionColors` (localStorage `sessionColors`): `Map<convId, sessionType>` — per-conversation color assignment
@@ -191,12 +237,20 @@ All three dropdown menus (Prompts, Sessions, Templates) share the same UI patter
 - `{$location}` builtin macro auto-expands like `{$date}` — no modal prompt
 - Location also injected into LLM system prompt ("User Location" section) for weather/travel queries
 
-### Source Code Self-Awareness
-- `SOURCE_DIR` env var points to project root
-- `source_read` tool with three actions: `tree` (list files), `read` (file by path), `grep` (regex search)
-- Path-escape protection: resolved paths must start with `sourceRoot`
-- System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
-- No confirmation needed — read-only access scoped to source directory
+### Source Code Development Tools
+Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforce escape protection (resolved paths must start with `sourceRoot`). System prompt includes "Self-Awareness" section when `SOURCE_DIR` is configured.
+
+**Tools:**
+- `source_project`: switch all source tools to a different project directory at runtime. Always requires confirmation (never skipped by autorun). Actions: `switch` (with path + `~` expansion), `reset` (back to .env), `status`. Original dir saved at startup for reset.
+- `source_read`: three actions — `tree` (list files, excludes node_modules/.git/data/logs), `read` (file by path, 15K char limit), `grep` (regex search, 50 match limit). No confirmation needed.
+- `source_write`: create or overwrite files. Auto-creates parent dirs. Generates diff preview (new vs old content) shown in both confirmation and tool result.
+- `source_edit`: targeted string replacement. Uniqueness enforced (error with match locations if >1). Whitespace fallback for indentation mismatches. Per-file mutex for concurrent safety. Diff preview in confirmation and result.
+- `source_delete`: remove files (directories blocked). Shows file size in confirmation. Diff preview in result.
+- `source_git`: git command runner with safety tiers — safe (status/diff/log/show/blame: no confirm), local writes (add/commit/branch/checkout/stash/merge/tag: confirm/autorun), remote (push/pull/fetch: always confirm), blocked (reset --hard, push --force, clean -f, rebase).
+- `source_run` tool: run any shell command in source project dir (e.g. `python3 script.py`, `npm run build`), confirmation/autorun, 120s timeout
+- `source_test`: runs `SOURCE_TEST` env var command in source dir. No parameters, no confirmation needed, 120s timeout. Language-agnostic (npm test, pytest, cargo test, etc.).
+
+**Diff preview system:** `source_write`, `source_edit`, and `source_delete` include `_diff` field in results. Frontend renders color-coded diff blocks (green=added, red=removed, cyan=hunk headers). `_diff` stripped from LLM context to save tokens. Diffs shown in both confirmation prompt and tool_use display (visible even with autorun).
 
 ### Elapsed Timer
 - Live timer in top bar next to context label, starts on `sendMessage()`, stops in `finally` block
@@ -231,13 +285,16 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 ## UI Layout
 Full-width top bar spanning entire window width with: colored session `+` buttons (left), status indicator grid (2 rows: core + APIs), menus (Tools/Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Input area has textarea with vertical button stack (Send/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think).
 
+### Conversation Pinning
+Pin button (📌) in sidebar persists conversations to disk across server restarts. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
+
 ## Key Architecture Details
 - `.env` file is **required** — config.js exits if missing
 - `data/` dir served as static files at `/files/` path
 - llama-server sends `timings` (not OpenAI `usage`) — backend normalizes to `usage` format
 - Tool results sent to LLM as `user` role messages: `Tool "name" result: {json}`
 - Large tool results: auto-saved to file, only summary sent to LLM context (markdown tables truncated to 30 rows)
-- Image data (`_images`) and rate maps (`_rateMap`) stripped from LLM context but sent to frontend via SSE
+- Image data (`_images`), rate maps (`_rateMap`), and diff previews (`_diff`) stripped from LLM context but sent to frontend via SSE
 - Vision: images sent as base64 `image_url` parts in OpenAI multipart format
 - Template `[template: name]` expansion tells LLM to fetch fresh data first, update all dates/values, keep layout intact
 - Conversations auto-titled from first visible user message text (truncated to 60 chars); hidden session init prompts skipped

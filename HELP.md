@@ -6,7 +6,7 @@ LLM Workbench is a chat interface that connects to a local AI model. You talk to
 
 ### Creating a Chat
 
-Click one of the **colored + buttons** in the top bar to start a new chat. Each color represents a session type. If a session prompt is saved for that color, it will be auto-submitted to set up the conversation.
+Click one of the **7 colored + buttons** in the top bar to start a new chat. Each color represents a session type. If a session prompt is saved for that color, it will be auto-submitted to set up the conversation.
 
 You must create a session before you can type messages, use prompts, or access menus.
 
@@ -51,7 +51,7 @@ Saved HTML visualizations (charts, dashboards). Click a template to insert a `[t
 ## Checkboxes
 
 - **Applets** — when on, the AI can create interactive charts and visualizations in your chat
-- **Autorun** — when on, code execution and shell commands run without asking for approval first
+- **Autorun** — when on, code execution, shell commands, and source code edits run without asking for approval first (except project switching and git push, which always ask)
 - **Think** — when on, shows the AI's reasoning process and tool usage. Turn off for cleaner output
 
 ## What the AI Can Do
@@ -67,6 +67,23 @@ Ask it to write and run Python scripts. Results, charts, and files are saved aut
 
 ### Shell Commands
 Ask it to run system commands. Each command shows a preview and requires approval (unless Autorun is on). Example: "Show disk usage" or "List files in my home directory"
+
+### Code Development
+The AI can read, edit, and manage source code in any project. Point it at a project directory and it becomes a coding assistant:
+
+- **Browse code** — read files, search with regex, view project structure
+- **Edit code** — targeted find-and-replace edits with color-coded diff previews (green = added, red = removed)
+- **Write files** — create new files or fully replace existing ones, with diff preview
+- **Delete files** — remove files during refactors
+- **Git** — commit, diff, branch, push — with safety tiers that block destructive operations (force push, reset --hard)
+- **Run tests** — verify changes with your project's test command
+- **Switch projects** — tell the AI "work on ~/prj/other-project" and all tools retarget
+
+Diffs are always shown — even with Autorun enabled — so you can see exactly what changed.
+
+**Setup:** Set `SOURCE_DIR` in `.env` to your project root. Optionally set `SOURCE_TEST` to your test command (e.g. `npm test`, `pytest`, `cargo test`).
+
+**Safety:** Destructive git operations are blocked. Remote operations (push/pull) always require approval regardless of Autorun. Switching projects always requires approval.
 
 ### Charts & Dashboards
 With Applets enabled, ask for visualizations. Example: "Create a pie chart of my monthly expenses" or "Build a weather dashboard for my location"
@@ -105,7 +122,7 @@ Example prompt: "Weather in {$City} from {$CheckIn:date} to {$CheckOut:date}"
 
 ## Command Approval
 
-When the AI wants to run a shell command or Python script (with Autorun off), you'll see a preview of what it wants to execute. Press **Enter** or click **Approve** to allow it, or click **Deny** to block it.
+When the AI wants to run a shell command, Python script, or edit source code (with Autorun off), you'll see a preview of what it wants to execute. For code edits, the preview shows a color-coded diff. Press **Enter** or click **Approve** to allow it, or click **Deny** to block it.
 
 ## Keyboard Shortcuts
 
@@ -122,3 +139,5 @@ When the AI wants to run a shell command or Python script (with Autorun off), yo
 - If the AI seems stuck, check if Autorun is off — it might be waiting for command approval
 - Save visualizations you like as templates — reuse them with fresh data anytime
 - Use session prompts to set up specialized assistants (weather, coding, trading, support)
+- Set up `SOURCE_DIR` and `SOURCE_TEST` in `.env` to use the AI as a coding assistant on any project
+- Pin important conversations (📌) to keep them across server restarts

@@ -9,10 +9,16 @@ const state = {
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
   thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
-  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
+  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'|'navy'|'lavender'
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
   location: '', // from server config (LOCATION env var)
 };
+
+// Dark session colors that are unreadable on dark backgrounds → lighter text variants
+function textSafeColor(color) {
+  const lightMap = { '#1b2a4a': '#6B8FBF' };
+  return lightMap[(color || '').toLowerCase()] || color;
+}
 
 let _elapsedInterval = null;
 function startElapsedTimer() {
@@ -161,6 +167,14 @@ const api = {
       body: JSON.stringify({ conversationId }),
     });
   },
+  async pinConversation(id) {
+    const res = await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
+    return res.json();
+  },
+  async unpinConversation(id) {
+    const res = await fetch(`/api/conversations/${id}/unpin`, { method: 'POST' });
+    return res.json();
+  },
 };
 
 // ── Sidebar ───────────────────────────────────────────
@@ -184,8 +198,28 @@ function renderSidebar() {
     const convSession = state.sessionColors[conv.id];
     if (convSession) {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
-      if (c) title.style.color = c;
+      if (c) title.style.color = textSafeColor(c);
     }
+
+    const pinBtn = document.createElement('button');
+    pinBtn.className = conv.pinned
+      ? 'text-amber-400 px-1 shrink-0 cursor-pointer'
+      : 'text-zinc-600 hover:text-amber-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
+    const pinSvg = conv.pinned
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><path d="M16 2L20.5 6.5L18 9L19 16L14 11L8 17V19H6V17L12 11L7 6L14 7L16.5 4.5Z"/></svg>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 2L20.5 6.5L18 9L19 16L14 11L8 17V19H6V17L12 11L7 6L14 7L16.5 4.5Z"/></svg>';
+    pinBtn.innerHTML = pinSvg;
+    pinBtn.title = conv.pinned ? 'Unpin (remove persistence)' : 'Pin (persist across restarts)';
+    pinBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (conv.pinned) {
+        await api.unpinConversation(conv.id);
+      } else {
+        await api.pinConversation(conv.id);
+      }
+      await refreshSidebar();
+    });
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -210,6 +244,7 @@ function renderSidebar() {
 
     item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
+    item.appendChild(pinBtn);
     item.appendChild(delBtn);
     sidebar.appendChild(item);
   }
@@ -807,6 +842,14 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
                 else if (parsedResult.totalPairs != null) counts.push(`${parsedResult.totalPairs} pairs`);
                 if (parsedResult._autoSaved) counts.push('auto-saved');
                 if (parsedResult.savedFile) counts.push(parsedResult.savedFile.filename);
+                // Source tool metadata
+                if (parsedResult.path && parsedResult._diff) {
+                  counts.push(parsedResult.path);
+                  if (parsedResult.linesRemoved) counts.push(`-${parsedResult.linesRemoved}`);
+                  if (parsedResult.linesAdded) counts.push(`+${parsedResult.linesAdded}`);
+                  if (parsedResult.deleted) counts.push('deleted');
+                  if (parsedResult.created) counts.push('created');
+                }
                 if (counts.length) metaTag = ` <span class="text-zinc-600">— ${counts.join(', ')}</span>`;
               }
               summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>${sourcesTag}${metaTag}`;
@@ -817,6 +860,21 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               body.textContent = data.tool_use.result;
               detail.appendChild(summary);
               detail.appendChild(body);
+
+              // Render _diff as color-coded diff block
+              if (parsedResult?._diff) {
+                const diffPre = document.createElement('pre');
+                diffPre.className = 'mt-1 whitespace-pre-wrap text-xs max-h-60 overflow-y-auto slim-scrollbar';
+                diffPre.innerHTML = parsedResult._diff.split('\n').map(line => {
+                  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                  if (line.startsWith('+')) return `<span class="text-green-500">${esc}</span>`;
+                  if (line.startsWith('-')) return `<span class="text-red-400">${esc}</span>`;
+                  if (line.startsWith('@@')) return `<span class="text-cyan-500">${esc}</span>`;
+                  return `<span class="text-zinc-500">${esc}</span>`;
+                }).join('\n');
+                detail.appendChild(diffPre);
+                body.style.display = 'none'; // hide raw JSON when diff is shown
+              }
 
               // Render _markdown tables inside the collapsible details (user can expand to see)
               if (parsedResult?._markdown) {
@@ -1672,7 +1730,7 @@ function renderSessions(sessions) {
     titleSpan.className = 'flex-1 text-xs';
     titleSpan.textContent = s.title || s.text.slice(0, 60);
     const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${s.color}`).trim();
-    if (cssVar) titleSpan.style.color = cssVar;
+    if (cssVar) titleSpan.style.color = textSafeColor(cssVar);
 
     const editBtn = document.createElement('button');
     editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';

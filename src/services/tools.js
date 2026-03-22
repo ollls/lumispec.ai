@@ -7,12 +7,78 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { spawn } from 'child_process';
 import config from '../config.js';
+
+// Original SOURCE_DIR from .env — used by source_project to reset
+const originalSourceDir = config.sourceDir;
 import etrade from './etrade.js';
 import liteapi from './liteapi.js';
 
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
 const DATA_DIR = resolve(__dirname, '../../data');
 const LOG_DIR = resolve(__dirname, '../../logs');
+
+// ── source_edit helpers ────────────────────────────────
+const fileEditLocks = new Map();
+
+async function withFileLock(filePath, fn) {
+  const prev = fileEditLocks.get(filePath) || Promise.resolve();
+  const current = prev.then(fn, fn);
+  fileEditLocks.set(filePath, current);
+  try { return await current; }
+  finally { if (fileEditLocks.get(filePath) === current) fileEditLocks.delete(filePath); }
+}
+
+function simpleDiff(oldContent, newContent, filePath) {
+  const oldLines = oldContent.split('\n');
+  const newLines = newContent.split('\n');
+  // Find common prefix
+  let top = 0;
+  while (top < oldLines.length && top < newLines.length && oldLines[top] === newLines[top]) top++;
+  // Find common suffix (not overlapping with prefix)
+  let oldBot = oldLines.length - 1;
+  let newBot = newLines.length - 1;
+  while (oldBot > top && newBot > top && oldLines[oldBot] === newLines[newBot]) { oldBot--; newBot--; }
+  // No differences
+  if (top > oldBot && top > newBot) return `--- ${filePath}\n+++ ${filePath}\n(no changes)`;
+  // Build hunks with context
+  const ctx = 3;
+  const hunkStart = Math.max(0, top - ctx);
+  const hunkOldEnd = Math.min(oldLines.length - 1, oldBot + ctx);
+  const hunkNewEnd = Math.min(newLines.length - 1, newBot + ctx);
+  const out = [`--- ${filePath}`, `+++ ${filePath}`,
+    `@@ -${hunkStart + 1},${hunkOldEnd - hunkStart + 1} +${hunkStart + 1},${hunkNewEnd - hunkStart + 1} @@`];
+  // Context before
+  for (let i = hunkStart; i < top; i++) out.push(` ${oldLines[i]}`);
+  // Changed region — show removed then added
+  for (let i = top; i <= oldBot; i++) out.push(`-${oldLines[i]}`);
+  for (let i = top; i <= newBot; i++) out.push(`+${newLines[i]}`);
+  // Context after
+  for (let i = oldBot + 1; i <= hunkOldEnd; i++) out.push(` ${oldLines[i]}`);
+  return out.join('\n');
+}
+
+function fixPythonBooleans(code) {
+  // Auto-fix JS-style booleans/null → Python (common LLM mistake)
+  // Pass 1: keyword args (na=false → na=False, inplace=true → inplace=True)
+  code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
+             .replace(/(\w\s*=\s*)false\b/g, '$1False')
+             .replace(/(\w\s*=\s*)null\b/g, '$1None');
+  // Pass 2: standalone true/false/null → Python equivalents
+  code = code.replace(/\bwhile true\b/g, 'while True')
+             .replace(/\bwhile false\b/g, 'while False')
+             .replace(/\bif true\b/g, 'if True')
+             .replace(/\bif false\b/g, 'if False')
+             .replace(/\breturn true\b/g, 'return True')
+             .replace(/\breturn false\b/g, 'return False')
+             .replace(/\bnull\b/g, 'None');
+  return code;
+}
+
+function tagLineCount(stdout, limit) {
+  const out = (stdout || '').slice(0, limit);
+  const lines = out.split('\n').filter(Boolean);
+  return lines.length > 3 ? out + `\n[${lines.length} lines total]` : out;
+}
 
 // ── Tool call logger ────────────────────────────────
 async function logToolCall(toolName, action, { args, rawResult, formattedResult }) {
@@ -637,6 +703,76 @@ const tools = {
       }
     },
   },
+  source_project: {
+    description: 'Switch the source code working directory to a different project. All source tools (source_read, source_write, source_edit, source_delete, source_git, source_test) will operate on the new directory.\n\n'
+      + 'Actions:\n'
+      + '- "switch": switch to a new project. Requires "path" (absolute or ~/ path, e.g. "~/prj/my_app")\n'
+      + '- "reset": revert to the original project directory from .env\n'
+      + '- "status": show current and original source directories\n\n'
+      + 'Always requires user approval.',
+    parameters: {
+      action: 'string (switch, reset, status)',
+      path: 'string (optional, absolute path for switch action)',
+    },
+    execute: async ({ action, path: targetPath }, context) => {
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      switch (action) {
+        case 'status':
+          return { current: config.sourceDir || '(not set)', original: originalSourceDir || '(not set)' };
+
+        case 'reset': {
+          if (!originalSourceDir) return { error: 'No original SOURCE_DIR configured in .env' };
+          if (config.sourceDir === originalSourceDir) return { message: 'Already pointing to original project', current: config.sourceDir };
+          const prev = config.sourceDir;
+          const approved = await context.confirmFn(`Reset source directory:\n  from: ${prev}\n  to:   ${originalSourceDir}`);
+          if (!approved) return { denied: true, message: 'User denied project reset.' };
+          config.sourceDir = originalSourceDir;
+          return { switched: true, previous: prev, current: config.sourceDir };
+        }
+
+        case 'switch': {
+          if (!targetPath?.trim()) return { error: 'path is required for switch action' };
+          // Expand ~ to home directory
+          const expanded = targetPath.startsWith('~') ? targetPath.replace('~', process.env.HOME || '') : targetPath;
+          const full = resolve(expanded);
+          try {
+            const s = await stat(full);
+            if (!s.isDirectory()) return { error: `Not a directory: ${full}` };
+          } catch (err) {
+            if (err.code === 'ENOENT') return { error: `Directory not found: ${full}` };
+            return { error: err.message };
+          }
+          if (config.sourceDir === full) return { message: 'Already pointing to this directory', current: full };
+          const prev = config.sourceDir;
+          const approved = await context.confirmFn(`Switch source directory:\n  from: ${prev || '(not set)'}\n  to:   ${full}`);
+          if (!approved) return { denied: true, message: 'User denied project switch.' };
+          config.sourceDir = full;
+          return { switched: true, previous: prev || '(not set)', current: full };
+        }
+
+        case 'tree': {
+          // Delegate to source_read's tree logic
+          if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+          const { execSync } = await import('child_process');
+          const treeRoot = resolve(config.sourceDir);
+          try {
+            const output = execSync(
+              'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+              { cwd: treeRoot, encoding: 'utf-8', timeout: 5000 }
+            );
+            const files = output.trim().split('\n').filter(Boolean);
+            return { root: treeRoot, fileCount: files.length, files };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+
+        default:
+          return { error: 'Unknown action. Use: switch, reset, status, tree' };
+      }
+    },
+  },
   source_read: {
     description: 'Read this application\'s own source code. This is YOUR source code — use it to understand how you work, review your own implementation, or help the user modify you.\n\n'
       + 'Actions:\n'
@@ -650,6 +786,11 @@ const tools = {
       glob: 'string (optional, file glob for grep)',
     },
     execute: async ({ action, path: filePath, pattern, glob: fileGlob }) => {
+      // Smart defaults: infer action from provided parameters
+      if (!action && filePath) action = 'read';
+      if (!action && pattern) action = 'grep';
+      if (!action) action = 'tree';
+
       if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
       const { resolve, relative, join: pjoin } = await import('path');
       const sourceRoot = resolve(config.sourceDir);
@@ -706,6 +847,396 @@ const tools = {
       }
     },
   },
+  source_write: {
+    description: 'Create a new file or fully replace an existing file in the source code directory. For small changes to existing files, prefer source_edit instead.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path (e.g. "src/services/newFile.js")\n'
+      + '- "content": the full file content to write\n\n'
+      + 'Creates parent directories automatically. Shows a diff preview to the user. Requires user approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+      content: 'string (file content)',
+    },
+    execute: async ({ path: filePath, content }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (content == null) return { error: 'content is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const { resolve, dirname } = await import('path');
+      const { mkdir, writeFile: fsWriteFile } = await import('fs/promises');
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      // Auto-fix Python booleans for .py files (model can't reliably produce True vs true)
+      if (filePath.endsWith('.py')) content = fixPythonBooleans(content);
+
+      // Read existing content for diff (empty string if new file)
+      let oldContent = '';
+      try { oldContent = await readFile(full, 'utf-8'); } catch {}
+      const diff = simpleDiff(oldContent, content, filePath);
+
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_write] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Write file: ${filePath}\n${diff}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied file write.' };
+
+      try {
+        await mkdir(dirname(full), { recursive: true });
+        await fsWriteFile(full, content, 'utf-8');
+        const lines = content.split('\n').length;
+        return { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8'), _diff: diff };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+  },
+  source_edit: {
+    description: 'Make targeted edits to source files. Replaces an exact string with new content — use source_read first to see the current file, then specify the exact text to replace.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path (e.g. "src/services/tools.js")\n'
+      + '- "old_string": exact text to find and replace (must match exactly one location in the file). Empty string = create new file.\n'
+      + '- "new_string": replacement text. Empty string = delete the matched text.\n\n'
+      + 'Rules:\n'
+      + '- old_string must be unique in the file. If multiple matches found, the tool returns all match locations — retry with more surrounding context.\n'
+      + '- Copy old_string exactly from source_read output, including indentation.\n'
+      + '- A color-coded diff is always shown to the user. Requires approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+      old_string: 'string (exact text to find, or empty to create new file)',
+      new_string: 'string (replacement text)',
+    },
+    execute: async ({ path: filePath, old_string: oldStr, new_string: newStr }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (newStr == null) return { error: 'new_string is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      // CREATE mode: old_string is empty
+      if (!oldStr) {
+        try {
+          await stat(full);
+          return { error: 'old_string is required when editing an existing file' };
+        } catch {
+          // File doesn't exist — create it
+          let approved;
+          if (context.autorun) { approved = true; }
+          else { approved = await context.confirmFn(`Create file: ${filePath}\n(${newStr.split('\n').length} lines)`); }
+          if (!approved) return { denied: true, message: 'User denied file creation.' };
+          const { dirname } = await import('path');
+          await mkdir(dirname(full), { recursive: true });
+          await writeFile(full, newStr, 'utf-8');
+          return { path: filePath, created: true, lines: newStr.split('\n').length, size: Buffer.byteLength(newStr, 'utf-8') };
+        }
+      }
+
+      // Auto-fix Python booleans for .py files (model can't reliably produce True vs true)
+      if (filePath.endsWith('.py')) {
+        oldStr = fixPythonBooleans(oldStr);
+        newStr = fixPythonBooleans(newStr);
+      }
+
+      if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
+
+      // EDIT mode
+      return withFileLock(full, async () => {
+        let content;
+        try {
+          content = await readFile(full, 'utf-8');
+        } catch (err) {
+          if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+          return { error: err.message };
+        }
+
+        // Safety checks
+        const buf = Buffer.from(content.slice(0, 8192));
+        if (buf.includes(0)) return { error: 'Binary file — use source_write for binary content' };
+        if (Buffer.byteLength(content, 'utf-8') > 1024 * 1024) {
+          return { error: `File too large (${Buffer.byteLength(content, 'utf-8')} bytes) — use run_command with sed for large files` };
+        }
+        if (oldStr.includes('[truncated]')) {
+          return { warning: 'old_string contains "[truncated]" — this is a truncation marker from source_read, not actual file content. Re-read the file to get the real text.' };
+        }
+
+        // Find matches
+        let matchCount = 0;
+        let idx = -1;
+        let searchFrom = 0;
+        const matchPositions = [];
+        while ((idx = content.indexOf(oldStr, searchFrom)) !== -1) {
+          matchCount++;
+          const lineNum = content.slice(0, idx).split('\n').length;
+          const lines = content.split('\n');
+          const ctxStart = Math.max(0, lineNum - 3);
+          const ctxEnd = Math.min(lines.length - 1, lineNum + 1);
+          matchPositions.push({ line: lineNum, context: lines.slice(ctxStart, ctxEnd + 1).join('\n') });
+          searchFrom = idx + 1;
+        }
+
+        // Whitespace fallback
+        let whitespaceAdjusted = false;
+        if (matchCount === 0) {
+          const normalize = s => s.replace(/[ \t]+/g, ' ');
+          const normOld = normalize(oldStr);
+          const normContent = normalize(content);
+          let normIdx = -1;
+          let normCount = 0;
+          let normSearchFrom = 0;
+          while ((normIdx = normContent.indexOf(normOld, normSearchFrom)) !== -1) {
+            normCount++;
+            normSearchFrom = normIdx + 1;
+          }
+          if (normCount === 1) {
+            // Find the actual substring in original content that matches when normalized
+            const contentLines = content.split('\n');
+            const oldLines = oldStr.split('\n');
+            outer: for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
+              for (let j = 0; j < oldLines.length; j++) {
+                if (normalize(contentLines[i + j]) !== normalize(oldLines[j])) continue outer;
+              }
+              // Found the matching region — use the actual content as oldStr
+              oldStr = contentLines.slice(i, i + oldLines.length).join('\n');
+              matchCount = 1;
+              whitespaceAdjusted = true;
+              break;
+            }
+          }
+        }
+
+        if (matchCount === 0) {
+          return { error: 'No match found for old_string', hint: 'Verify current file content with source_read.', fileLines: content.split('\n').length };
+        }
+        if (matchCount > 1) {
+          return { error: `Found ${matchCount} matches — old_string must be unique. Include more surrounding context.`, matches: matchPositions };
+        }
+
+        // Apply edit
+        const newContent = content.replace(oldStr, newStr);
+        const diff = simpleDiff(content, newContent, filePath);
+
+        let approved;
+        if (context.autorun) {
+          console.log(`[source_edit] autorun enabled, skipping confirmation`);
+          approved = true;
+        } else {
+          approved = await context.confirmFn(`Edit file: ${filePath}\n${diff}`);
+        }
+        if (!approved) return { denied: true, message: 'User denied edit.' };
+
+        await writeFile(full, newContent, 'utf-8');
+        const oldLineCount = oldStr.split('\n').length;
+        const newLineCount = newStr.split('\n').length;
+        const result = { path: filePath, linesRemoved: oldLineCount, linesAdded: newLineCount, size: Buffer.byteLength(newContent, 'utf-8'), _diff: diff };
+        if (whitespaceAdjusted) result.whitespaceAdjusted = true;
+        return result;
+      });
+    },
+  },
+  source_delete: {
+    description: 'Delete a file from the application\'s source code directory. Use during refactors to remove unused files.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path to delete (e.g. "src/services/old.js")\n\n'
+      + 'Requires user approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+    },
+    execute: async ({ path: filePath }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      let fileStats;
+      try {
+        fileStats = await stat(full);
+      } catch (err) {
+        if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+        return { error: err.message };
+      }
+      if (fileStats.isDirectory()) return { error: 'Cannot delete directories — only files' };
+
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_delete] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Delete file: ${filePath} (${fileStats.size} bytes)`);
+      }
+      if (!approved) return { denied: true, message: 'User denied file deletion.' };
+
+      // Read content for diff preview before deleting
+      let diff = '';
+      try {
+        const oldContent = await readFile(full, 'utf-8');
+        diff = simpleDiff(oldContent, '', filePath);
+      } catch {}
+
+      await unlink(full);
+      return { path: filePath, deleted: true, size: fileStats.size, _diff: diff };
+    },
+  },
+  source_git: {
+    description: 'Run git commands in the source code directory. Pass the git subcommand and arguments (without the "git" prefix).\n\n'
+      + 'Examples: "status", "diff src/server.js", "log --oneline -10", "add src/", "commit -m \'fix bug\'", "branch feature-x", "push"\n\n'
+      + 'Safety tiers:\n'
+      + '- Read-only (status, diff, log, show, branch -l): no approval needed\n'
+      + '- Local writes (add, commit, checkout, branch, stash, merge, tag): approval or autorun\n'
+      + '- Remote (push, pull, fetch): always requires approval\n'
+      + '- Blocked: reset --hard, push --force, clean -f, rebase',
+    parameters: {
+      command: 'string (git subcommand + args, without "git" prefix)',
+    },
+    execute: async ({ command }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!command?.trim()) return { error: 'command is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const parts = command.trim().split(/\s+/);
+      const sub = parts[0];
+      const fullCmd = command.trim();
+
+      // Blocked commands
+      const blocked = [
+        { match: () => fullCmd.match(/reset\s+--hard/), reason: 'reset --hard discards uncommitted work — use checkout or stash instead' },
+        { match: () => fullCmd.match(/push\s+.*--force/) || fullCmd.match(/push\s+-f/), reason: 'force push can destroy remote history — not allowed' },
+        { match: () => fullCmd.match(/clean\s+.*-f/), reason: 'clean -f permanently deletes untracked files — use status to review first' },
+        { match: () => sub === 'rebase', reason: 'rebase rewrites history — use merge instead, or run via run_command if needed' },
+      ];
+      for (const b of blocked) {
+        if (b.match()) return { error: `Blocked: ${b.reason}` };
+      }
+
+      // Safety tiers
+      const safe = ['status', 'diff', 'log', 'show', 'blame', 'shortlog', 'describe', 'remote', 'ls-files', 'rev-parse'];
+      const isBranchList = sub === 'branch' && (parts.includes('-l') || parts.includes('--list') || parts.includes('-a') || parts.includes('-r') || parts.length === 1);
+      const isReadOnly = safe.includes(sub) || isBranchList;
+      const remote = ['push', 'pull', 'fetch'];
+      const isRemote = remote.includes(sub);
+
+      let approved;
+      if (isReadOnly) {
+        approved = true;
+      } else if (isRemote) {
+        // Always confirm remote operations, even with autorun
+        approved = await context.confirmFn(`git ${fullCmd}`);
+      } else if (context.autorun) {
+        console.log(`[source_git] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`git ${fullCmd}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied git command.' };
+
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(`git ${fullCmd}`, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            res({
+              command: `git ${fullCmd}`,
+              exitCode: typeof err.code === 'number' ? err.code : 1,
+              stdout: tagLineCount(stdout, 8000),
+              stderr: ((stderr || '') + (err.killed ? '\n[source_git] killed: exceeded 30s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            res({ command: `git ${fullCmd}`, exitCode: 0, stdout: tagLineCount(stdout, 8000), stderr: (stderr || '').slice(0, 4000) });
+          }
+        });
+      });
+    },
+  },
+  source_run: {
+    description: 'Run a shell command in the source project directory. Unlike run_python (which runs in the data directory), this runs in the source project directory.\n\n'
+      + 'Examples: "python3 colorful_text.py", "npm run build", "make", "go run main.go"\n\n'
+      + 'Requires user approval unless autorun is enabled.',
+    parameters: {
+      command: 'string (shell command to run in the source project directory)',
+    },
+    execute: async ({ command }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!command?.trim()) return { error: 'command is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_run] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Run in ${sourceRoot}:\n${command}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied command.' };
+
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(command, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            res({
+              command,
+              exitCode: typeof err.code === 'number' ? err.code : 1,
+              stdout: tagLineCount(stdout, 8000),
+              stderr: ((stderr || '') + (err.killed ? '\n[source_run] killed: exceeded 120s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            res({ command, exitCode: 0, stdout: tagLineCount(stdout, 8000), stderr: (stderr || '').slice(0, 4000) });
+          }
+        });
+      });
+    },
+  },
+  source_test: {
+    description: 'Run the project\'s test/check command to verify code changes work. No parameters needed — runs the command configured in SOURCE_TEST env var.\n\n'
+      + 'Call this after making code changes with source_edit or source_write to catch errors early. '
+      + 'If tests fail, review the output, fix the issue with source_edit, and run source_test again.',
+    parameters: {},
+    execute: async () => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!config.sourceTest) return { error: 'SOURCE_TEST not configured in .env — set it to your project\'s test command (e.g. "npm test", "pytest -x", "cargo test", "go test ./...")' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(config.sourceTest, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+          const timedOut = err?.killed || false;
+          res({
+            command: config.sourceTest,
+            exitCode,
+            passed: exitCode === 0,
+            stdout: tagLineCount(stdout, 8000),
+            stderr: ((stderr || '') + (timedOut ? '\n[source_test] killed: exceeded 120s timeout' : '')).slice(0, 4000),
+          });
+        });
+      });
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -734,11 +1265,11 @@ const tools = {
             resolve({
               command,
               exitCode: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 1 : (err.code ?? 1),
-              stdout: (stdout || '').slice(0, 4000),
+              stdout: tagLineCount(stdout, 4000),
               stderr: ((stderr || '') + (err.killed ? '\n[run_command] Process killed: exceeded 30s timeout' : '')).slice(0, 4000),
             });
           } else {
-            resolve({ command, exitCode: 0, stdout: (stdout || '').slice(0, 8000) });
+            resolve({ command, exitCode: 0, stdout: tagLineCount(stdout, 8000) });
           }
         });
       });
@@ -763,13 +1294,7 @@ const tools = {
       }
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
 
-      // Auto-fix JS-style booleans/null → Python (common LLM mistake)
-      // Pass 1: keyword args (na=false → na=False, inplace=true → inplace=True)
-      code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
-                 .replace(/(\w\s*=\s*)false\b/g, '$1False')
-                 .replace(/(\w\s*=\s*)null\b/g, '$1None');
-      // Pass 2: standalone null → None (null is never valid Python, always means None)
-      code = code.replace(/\bnull\b/g, 'None');
+      code = fixPythonBooleans(code);
 
       await mkdir(DATA_DIR, { recursive: true });
       const tmpFile = join(DATA_DIR, '.tmp_script.py');
@@ -824,7 +1349,7 @@ const tools = {
       }
       console.log(`[run_python] detected ${outputFiles.length} new/modified files (${elapsed()})`);
 
-      const result = { exitCode, stdout: stdout.slice(0, 8000) };
+      const result = { exitCode, stdout: tagLineCount(stdout, 8000) };
       if (timedOut) result.timedOut = true;
       if (stderr) result.stderr = stderr.slice(0, 4000);
       if (outputFiles.length) result.files = outputFiles;
@@ -1499,7 +2024,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read tool. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation when the user asks about how you work, wants to modify your code, or debug issues.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_run to execute scripts and commands in the project directory\n7. Use source_test to verify changes work\n8. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
@@ -1807,6 +2332,8 @@ function repairToolCallJson(raw) {
     run_python: { primary: 'code' },
     run_command: { primary: 'command' },
     save_file: { primary: 'content', extra: ['filename'] },
+    source_write: { primary: 'content', extra: ['path'] },
+    source_edit: { primary: 'new_string', extra: ['path', 'old_string'] },
   };
   const argConfig = toolArgMap[name];
   if (argConfig) {
@@ -1977,21 +2504,23 @@ export async function executeTool(name, args, context) {
     const t0 = Date.now();
     const result = await tool.execute(args, context);
     console.log(`[tools] "${name}" completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    // Log LiteAPI tool calls (hotel, travel, booking) — etrade has its own internal logging
-    if (['hotel', 'travel', 'booking'].includes(name)) {
-      const action = args?.action || 'unknown';
-      // Strip _images and _rateMap from logged result to keep logs readable
-      const { _images, _rateMap, ...loggableResult } = result || {};
-      if (_images) loggableResult._imageCount = _images.length;
-      if (_rateMap) loggableResult._rateCount = Object.keys(_rateMap).length;
-      logToolCall(name, action, { args, rawResult: loggableResult, formattedResult: loggableResult });
-    }
+    // Log tool calls to file — strip heavy data to keep logs readable
+    const action = args?.action || 'call';
+    const { _images, _rateMap, _diff, ...loggableResult } = result || {};
+    if (_images) loggableResult._imageCount = _images.length;
+    if (_rateMap) loggableResult._rateCount = Object.keys(_rateMap).length;
+    if (_diff) loggableResult._hasDiff = true;
+    // Strip large content from source_write/source_edit args in logs
+    const loggableArgs = { ...args };
+    if (loggableArgs.content && loggableArgs.content.length > 200) loggableArgs.content = loggableArgs.content.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.code && loggableArgs.code.length > 200) loggableArgs.code = loggableArgs.code.slice(0, 200) + '...[truncated]';
+    logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);
-    if (['hotel', 'travel', 'booking'].includes(name)) {
-      logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
-    }
+    logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
     return JSON.stringify({ error: err.message });
   }
 }
