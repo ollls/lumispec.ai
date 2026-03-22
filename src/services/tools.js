@@ -751,8 +751,25 @@ const tools = {
           return { switched: true, previous: prev || '(not set)', current: full };
         }
 
+        case 'tree': {
+          // Delegate to source_read's tree logic
+          if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+          const { execSync } = await import('child_process');
+          const treeRoot = resolve(config.sourceDir);
+          try {
+            const output = execSync(
+              'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+              { cwd: treeRoot, encoding: 'utf-8', timeout: 5000 }
+            );
+            const files = output.trim().split('\n').filter(Boolean);
+            return { root: treeRoot, fileCount: files.length, files };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+
         default:
-          return { error: 'Unknown action. Use: switch, reset, status' };
+          return { error: 'Unknown action. Use: switch, reset, status, tree' };
       }
     },
   },
@@ -769,6 +786,11 @@ const tools = {
       glob: 'string (optional, file glob for grep)',
     },
     execute: async ({ action, path: filePath, pattern, glob: fileGlob }) => {
+      // Smart defaults: infer action from provided parameters
+      if (!action && filePath) action = 'read';
+      if (!action && pattern) action = 'grep';
+      if (!action) action = 'tree';
+
       if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
       const { resolve, relative, join: pjoin } = await import('path');
       const sourceRoot = resolve(config.sourceDir);
@@ -1141,7 +1163,7 @@ const tools = {
     },
   },
   source_run: {
-    description: 'Run a shell command in the source project directory. Use this to execute scripts, build commands, or any shell operation in the project.\n\n'
+    description: 'Run a shell command in the source project directory. Unlike run_python (which runs in the data directory), this runs in the source project directory.\n\n'
       + 'Examples: "python3 colorful_text.py", "npm run build", "make", "go run main.go"\n\n'
       + 'Requires user approval unless autorun is enabled.',
     parameters: {
