@@ -92,6 +92,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id/messages` | POST | Send message, streams SSE response |
 | `/api/conversations/:id/pin` | POST | Pin conversation (persist to disk) |
 | `/api/conversations/:id/unpin` | POST | Unpin conversation (remove from disk) |
+| `/api/conversations/:id/compact` | POST | LLM summarizes conversation, replaces messages with summary |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
 | `/api/slots` | GET | Slot status enriched with conversation mapping |
 | `/api/slots/pin` | POST | Pin conversation to slot |
@@ -286,7 +287,7 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 Full-width top bar spanning entire window width with: colored session `+` buttons (left), status indicator grid (2 rows: core + APIs), menus (Tools/Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Input area has textarea with vertical button stack (Send/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think).
 
 ### Conversation Pinning
-Pin button (📌) in sidebar persists conversations to disk across server restarts. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
+Pin button (📌) in sidebar persists conversations to disk across server restarts. Compact button (≡) on pinned conversations sends the full conversation to the LLM for summarization — messages are irreversibly replaced with a structured summary preserving outcomes, decisions, and lessons learned. Two-click confirmation (click → "Compact?" → click again). Especially useful for long coding sessions with many tool rounds. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
 
 ## Key Architecture Details
 - `.env` file is **required** — config.js exits if missing

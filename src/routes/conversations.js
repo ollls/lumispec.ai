@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 
@@ -53,6 +53,49 @@ router.post('/:id/unpin', (req, res) => {
   const conv = conversations.unpin(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
   res.json(conv);
+});
+
+// Compact conversation — LLM summarizes, replaces messages
+router.post('/:id/compact', async (req, res) => {
+  const conv = conversations.get(req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  if (conv.messages.length < 2) return res.status(400).json({ error: 'Nothing to compact' });
+
+  // Build conversation text for summarization
+  const transcript = conv.messages.map(m => {
+    const text = typeof m.content === 'object' ? m.content.text : m.content;
+    // Include tool uses summary for assistant messages
+    const tools = typeof m.content === 'object' && m.content.toolUses
+      ? '\n[Tools used: ' + m.content.toolUses.map(t => t.name).join(', ') + ']'
+      : '';
+    return `${m.role.toUpperCase()}: ${(text || '').slice(0, 2000)}${tools}`;
+  }).join('\n\n');
+
+  try {
+    const { content: summary } = await collectChatCompletion([
+      {
+        role: 'system',
+        content: `You are summarizing a coding/work session. Create a compact summary that preserves:
+- What was accomplished (files created, modified, deleted)
+- Key decisions and why they were made
+- What worked and what failed (so mistakes aren't repeated)
+- Current state of the project
+- Any unfinished tasks or next steps
+
+Format as a brief structured summary with sections. Be concise — this replaces the full conversation. Drop all back-and-forth, debugging noise, and intermediate tool outputs. Focus on outcomes and lessons.`
+      },
+      { role: 'user', content: transcript.slice(0, 12000) },
+    ], { signal: AbortSignal.timeout(60000), maxTokens: 2000 });
+
+    let cleaned = (summary || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!cleaned) return res.status(500).json({ error: 'LLM returned empty summary' });
+
+    const result = conversations.compact(conv.id, cleaned);
+    res.json({ ok: true, messageCount: 1, summary: cleaned.slice(0, 200) + '...' });
+  } catch (err) {
+    console.error('[compact] failed:', err.message);
+    res.status(500).json({ error: 'Compaction failed: ' + err.message });
+  }
 });
 
 // Confirm/deny a pending command
