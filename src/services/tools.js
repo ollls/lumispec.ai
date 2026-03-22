@@ -819,7 +819,11 @@ const tools = {
             if (content.length > 15000) content = content.slice(0, 15000) + '\n...[truncated]';
             return { path: filePath, lines, content };
           } catch (err) {
-            if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+            if (err.code === 'ENOENT') {
+              const dirName = basename(sourceRoot);
+              const hint = filePath.startsWith(dirName) ? ` (hint: you are already in ${dirName}/ — use "${filePath.replace(dirName + '/', '')}" instead)` : '';
+              return { error: `File not found: ${filePath}${hint}` };
+            }
             return { error: err.message };
           }
         }
@@ -2024,7 +2028,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_run to execute scripts and commands in the project directory\n7. Use source_test to verify changes work\n8. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_run to execute scripts and commands in the project directory\n7. Use source_test to verify changes work\n8. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).\n\nCRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_write. Do NOT show code snippets, examples, or previews in chat — apply the change directly with tools. Never describe what you would change — just change it. Read the file first with source_read if needed, then edit it.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 

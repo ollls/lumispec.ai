@@ -358,7 +358,19 @@ router.post('/:id/messages', async (req, res) => {
               llmResult = JSON.stringify(rest);
             }
           } catch {}
-          resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
+          // Make errors impossible to ignore — prefix with ⚠ ERROR
+          try {
+            const p = JSON.parse(llmResult);
+            if (p.error) {
+              resultParts.push(`⚠ TOOL ERROR — "${toolCallsFound[i].name}" FAILED: ${p.error}. You MUST acknowledge this error to the user. Do NOT report success.`);
+            } else if (p.denied) {
+              resultParts.push(`⚠ DENIED — "${toolCallsFound[i].name}": ${p.message}. The operation was NOT performed.`);
+            } else {
+              resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
+            }
+          } catch {
+            resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
+          }
         }
         llmMessages.push({ role: 'assistant', content: result.content });
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
