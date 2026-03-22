@@ -706,6 +706,47 @@ const tools = {
       }
     },
   },
+  source_write: {
+    description: 'Write or create a file in the application\'s source code directory. Use this to implement changes, create new files, or modify existing code.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path (e.g. "src/services/newFile.js")\n'
+      + '- "content": the full file content to write\n\n'
+      + 'Creates parent directories automatically. Requires user approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+      content: 'string (file content)',
+    },
+    execute: async ({ path: filePath, content }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (content == null) return { error: 'content is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const { resolve, dirname } = await import('path');
+      const { mkdir, writeFile: fsWriteFile } = await import('fs/promises');
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_write] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Write file: ${filePath}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied file write.' };
+
+      try {
+        await mkdir(dirname(full), { recursive: true });
+        await fsWriteFile(full, content, 'utf-8');
+        const lines = content.split('\n').length;
+        return { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8') };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -1499,7 +1540,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read tool. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation when the user asks about how you work, wants to modify your code, or debug issues.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation and source_write to create or overwrite source files when the user asks you to modify your code.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
