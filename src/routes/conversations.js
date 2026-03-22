@@ -41,6 +41,20 @@ router.patch('/:id', (req, res) => {
   res.json(conv);
 });
 
+// Pin conversation (persist to disk)
+router.post('/:id/pin', (req, res) => {
+  const conv = conversations.pin(req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  res.json(conv);
+});
+
+// Unpin conversation (remove from disk)
+router.post('/:id/unpin', (req, res) => {
+  const conv = conversations.unpin(req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  res.json(conv);
+});
+
 // Confirm/deny a pending command
 router.post('/:id/confirm', (req, res) => {
   const { approved } = req.body;
@@ -337,8 +351,8 @@ router.post('/:id/messages', async (req, res) => {
               llmResult = truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
             }
             // Strip heavy data from LLM context (keep for frontend via SSE)
-            if (parsed._images || parsed._rateMap) {
-              const { _images, _rateMap, ...rest } = parsed;
+            if (parsed._images || parsed._rateMap || parsed._diff) {
+              const { _images, _rateMap, _diff, ...rest } = parsed;
               if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
               if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
               llmResult = JSON.stringify(rest);

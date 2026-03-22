@@ -743,7 +743,7 @@ const tools = {
       + 'Parameters:\n'
       + '- "path": relative file path (e.g. "src/services/newFile.js")\n'
       + '- "content": the full file content to write\n\n'
-      + 'Creates parent directories automatically. Requires user approval unless autorun is enabled.',
+      + 'Creates parent directories automatically. Shows a diff preview to the user. Requires user approval unless autorun is enabled.',
     parameters: {
       path: 'string (relative file path)',
       content: 'string (file content)',
@@ -760,12 +760,17 @@ const tools = {
       const full = resolve(sourceRoot, filePath);
       if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
 
+      // Read existing content for diff (empty string if new file)
+      let oldContent = '';
+      try { oldContent = await readFile(full, 'utf-8'); } catch {}
+      const diff = simpleDiff(oldContent, content, filePath);
+
       let approved;
       if (context.autorun) {
         console.log(`[source_write] autorun enabled, skipping confirmation`);
         approved = true;
       } else {
-        approved = await context.confirmFn(`Write file: ${filePath}`);
+        approved = await context.confirmFn(`Write file: ${filePath}\n${diff}`);
       }
       if (!approved) return { denied: true, message: 'User denied file write.' };
 
@@ -773,7 +778,7 @@ const tools = {
         await mkdir(dirname(full), { recursive: true });
         await fsWriteFile(full, content, 'utf-8');
         const lines = content.split('\n').length;
-        return { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8') };
+        return { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8'), _diff: diff };
       } catch (err) {
         return { error: err.message };
       }
@@ -788,7 +793,7 @@ const tools = {
       + 'Rules:\n'
       + '- old_string must be unique in the file. If multiple matches found, the tool returns all match locations — retry with more surrounding context.\n'
       + '- Copy old_string exactly from source_read output, including indentation.\n'
-      + '- Requires user approval unless autorun is enabled.',
+      + '- A color-coded diff is always shown to the user. Requires approval unless autorun is enabled.',
     parameters: {
       path: 'string (relative file path)',
       old_string: 'string (exact text to find, or empty to create new file)',
@@ -911,7 +916,7 @@ const tools = {
         await writeFile(full, newContent, 'utf-8');
         const oldLineCount = oldStr.split('\n').length;
         const newLineCount = newStr.split('\n').length;
-        const result = { path: filePath, linesRemoved: oldLineCount, linesAdded: newLineCount, size: Buffer.byteLength(newContent, 'utf-8') };
+        const result = { path: filePath, linesRemoved: oldLineCount, linesAdded: newLineCount, size: Buffer.byteLength(newContent, 'utf-8'), _diff: diff };
         if (whitespaceAdjusted) result.whitespaceAdjusted = true;
         return result;
       });
@@ -952,8 +957,15 @@ const tools = {
       }
       if (!approved) return { denied: true, message: 'User denied file deletion.' };
 
+      // Read content for diff preview before deleting
+      let diff = '';
+      try {
+        const oldContent = await readFile(full, 'utf-8');
+        diff = simpleDiff(oldContent, '', filePath);
+      } catch {}
+
       await unlink(full);
-      return { path: filePath, deleted: true, size: fileStats.size };
+      return { path: filePath, deleted: true, size: fileStats.size, _diff: diff };
     },
   },
   source_git: {
