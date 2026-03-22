@@ -279,7 +279,7 @@ function renderSidebar() {
           await refreshSidebar();
         } else {
           compactBtn.dataset.confirm = '1';
-          compactBtn.innerHTML = '<span class="text-cyan-400 text-xs font-medium">Compact?</span>';
+          compactBtn.innerHTML = '<span class="text-red-400 text-xs font-medium">Compact?</span>';
           compactConfirmTimeout = setTimeout(() => {
             delete compactBtn.dataset.confirm;
             compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
