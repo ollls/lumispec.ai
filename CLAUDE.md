@@ -14,7 +14,7 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 ## Project Structure
 ```
 src/
-  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir)
+  config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir, sourceTest)
   server.js                # Express server, entry point, starts slot polling, /api/config endpoint
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands
@@ -148,9 +148,9 @@ Prompt-based interactive HTML visualizations rendered in sandboxed iframes withi
 **Toggle**: Checkbox in input form next to attach button. State in `state.appletsEnabled`, persisted to localStorage (default: on). Sent as `applets: true|false` in message POST body. Backend conditionally injects applet prompt section into system prompt via `getSystemPrompt({ applets })`.
 
 ### Autorun
-Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, both `run_python` and `run_command` skip the confirmation prompt and run immediately.
+Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, `run_python`, `run_command`, and source tools (`source_write`, `source_edit`, `source_delete`, `source_git` local writes) skip the confirmation prompt and run immediately. Exception: `source_project` always requires confirmation regardless of autorun.
 
-**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context; both `run_python` and `run_command` check `context.autorun` to skip `confirmFn`.
+**Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context.
 
 ### Think Toggle
 Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/thinking blocks, tool content ("Working..."), tool status messages, and tool use details ("Used web_search", etc.) during streaming.
@@ -201,18 +201,19 @@ All three dropdown menus (Prompts, Sessions, Templates) share the same UI patter
 - `{$location}` builtin macro auto-expands like `{$date}` — no modal prompt
 - Location also injected into LLM system prompt ("User Location" section) for weather/travel queries
 
-### Source Code Self-Awareness
-- `SOURCE_DIR` env var points to project root
-- `source_read` tool with three actions: `tree` (list files), `read` (file by path), `grep` (regex search)
-- `source_write` tool: create or overwrite source files with full content
-- `source_edit` tool: targeted string replacement with uniqueness enforcement, whitespace fallback, diff preview in confirmation, per-file mutex for concurrent safety
-- `source_delete` tool: remove source files with confirmation, directory protection (files only)
-- `source_git` tool: git commands with safety tiers — read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive ops blocked
-- `source_test` tool: runs `SOURCE_TEST` command in source dir, no confirmation needed, 120s timeout, language-agnostic
-- `source_project` tool: switch all source tools to a different project directory at runtime. Always requires confirmation (never skipped by autorun). Actions: switch (with path), reset (back to .env), status
-- Path-escape protection on all source tools: resolved paths must start with `sourceRoot`
-- System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
-- No confirmation needed — read-only access scoped to source directory
+### Source Code Development Tools
+Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforce escape protection (resolved paths must start with `sourceRoot`). System prompt includes "Self-Awareness" section when `SOURCE_DIR` is configured.
+
+**Tools:**
+- `source_project`: switch all source tools to a different project directory at runtime. Always requires confirmation (never skipped by autorun). Actions: `switch` (with path + `~` expansion), `reset` (back to .env), `status`. Original dir saved at startup for reset.
+- `source_read`: three actions — `tree` (list files, excludes node_modules/.git/data/logs), `read` (file by path, 15K char limit), `grep` (regex search, 50 match limit). No confirmation needed.
+- `source_write`: create or overwrite files. Auto-creates parent dirs. Generates diff preview (new vs old content) shown in both confirmation and tool result.
+- `source_edit`: targeted string replacement. Uniqueness enforced (error with match locations if >1). Whitespace fallback for indentation mismatches. Per-file mutex for concurrent safety. Diff preview in confirmation and result.
+- `source_delete`: remove files (directories blocked). Shows file size in confirmation. Diff preview in result.
+- `source_git`: git command runner with safety tiers — safe (status/diff/log/show/blame: no confirm), local writes (add/commit/branch/checkout/stash/merge/tag: confirm/autorun), remote (push/pull/fetch: always confirm), blocked (reset --hard, push --force, clean -f, rebase).
+- `source_test`: runs `SOURCE_TEST` env var command in source dir. No parameters, no confirmation needed, 120s timeout. Language-agnostic (npm test, pytest, cargo test, etc.).
+
+**Diff preview system:** `source_write`, `source_edit`, and `source_delete` include `_diff` field in results. Frontend renders color-coded diff blocks (green=added, red=removed, cyan=hunk headers). `_diff` stripped from LLM context to save tokens. Diffs shown in both confirmation prompt and tool_use display (visible even with autorun).
 
 ### Elapsed Timer
 - Live timer in top bar next to context label, starts on `sendMessage()`, stops in `finally` block
@@ -256,7 +257,7 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 - llama-server sends `timings` (not OpenAI `usage`) — backend normalizes to `usage` format
 - Tool results sent to LLM as `user` role messages: `Tool "name" result: {json}`
 - Large tool results: auto-saved to file, only summary sent to LLM context (markdown tables truncated to 30 rows)
-- Image data (`_images`) and rate maps (`_rateMap`) stripped from LLM context but sent to frontend via SSE
+- Image data (`_images`), rate maps (`_rateMap`), and diff previews (`_diff`) stripped from LLM context but sent to frontend via SSE
 - Vision: images sent as base64 `image_url` parts in OpenAI multipart format
 - Template `[template: name]` expansion tells LLM to fetch fresh data first, update all dates/values, keep layout intact
 - Conversations auto-titled from first visible user message text (truncated to 60 chars); hidden session init prompts skipped
