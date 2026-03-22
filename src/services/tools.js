@@ -31,22 +31,47 @@ async function withFileLock(filePath, fn) {
 function simpleDiff(oldContent, newContent, filePath) {
   const oldLines = oldContent.split('\n');
   const newLines = newContent.split('\n');
-  let firstDiff = 0;
-  while (firstDiff < oldLines.length && firstDiff < newLines.length && oldLines[firstDiff] === newLines[firstDiff]) firstDiff++;
-  let oldEnd = oldLines.length - 1;
-  let newEnd = newLines.length - 1;
-  while (oldEnd > firstDiff && newEnd > firstDiff && oldLines[oldEnd] === newLines[newEnd]) { oldEnd--; newEnd--; }
-  const ctx = 2;
-  const start = Math.max(0, firstDiff - ctx);
-  const oEnd = Math.min(oldLines.length - 1, oldEnd + ctx);
-  const nEnd = Math.min(newLines.length - 1, newEnd + ctx);
-  const lines = [`--- ${filePath}`, `+++ ${filePath}`, `@@ -${start + 1},${oEnd - start + 1} +${start + 1},${nEnd - start + 1} @@`];
-  for (let i = start; i <= Math.max(oEnd, nEnd); i++) {
-    if (i >= firstDiff && i <= oldEnd) lines.push(`-${oldLines[i]}`);
-    if (i >= firstDiff && i <= newEnd) lines.push(`+${newLines[i]}`);
-    if (i < firstDiff || i > Math.max(oldEnd, newEnd)) lines.push(` ${oldLines[i] || newLines[i]}`);
-  }
-  return lines.join('\n');
+  // Find common prefix
+  let top = 0;
+  while (top < oldLines.length && top < newLines.length && oldLines[top] === newLines[top]) top++;
+  // Find common suffix (not overlapping with prefix)
+  let oldBot = oldLines.length - 1;
+  let newBot = newLines.length - 1;
+  while (oldBot > top && newBot > top && oldLines[oldBot] === newLines[newBot]) { oldBot--; newBot--; }
+  // No differences
+  if (top > oldBot && top > newBot) return `--- ${filePath}\n+++ ${filePath}\n(no changes)`;
+  // Build hunks with context
+  const ctx = 3;
+  const hunkStart = Math.max(0, top - ctx);
+  const hunkOldEnd = Math.min(oldLines.length - 1, oldBot + ctx);
+  const hunkNewEnd = Math.min(newLines.length - 1, newBot + ctx);
+  const out = [`--- ${filePath}`, `+++ ${filePath}`,
+    `@@ -${hunkStart + 1},${hunkOldEnd - hunkStart + 1} +${hunkStart + 1},${hunkNewEnd - hunkStart + 1} @@`];
+  // Context before
+  for (let i = hunkStart; i < top; i++) out.push(` ${oldLines[i]}`);
+  // Changed region — show removed then added
+  for (let i = top; i <= oldBot; i++) out.push(`-${oldLines[i]}`);
+  for (let i = top; i <= newBot; i++) out.push(`+${newLines[i]}`);
+  // Context after
+  for (let i = oldBot + 1; i <= hunkOldEnd; i++) out.push(` ${oldLines[i]}`);
+  return out.join('\n');
+}
+
+function fixPythonBooleans(code) {
+  // Auto-fix JS-style booleans/null → Python (common LLM mistake)
+  // Pass 1: keyword args (na=false → na=False, inplace=true → inplace=True)
+  code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
+             .replace(/(\w\s*=\s*)false\b/g, '$1False')
+             .replace(/(\w\s*=\s*)null\b/g, '$1None');
+  // Pass 2: standalone true/false/null → Python equivalents
+  code = code.replace(/\bwhile true\b/g, 'while True')
+             .replace(/\bwhile false\b/g, 'while False')
+             .replace(/\bif true\b/g, 'if True')
+             .replace(/\bif false\b/g, 'if False')
+             .replace(/\breturn true\b/g, 'return True')
+             .replace(/\breturn false\b/g, 'return False')
+             .replace(/\bnull\b/g, 'None');
+  return code;
 }
 
 function tagLineCount(stdout, limit) {
@@ -801,7 +826,7 @@ const tools = {
     },
   },
   source_write: {
-    description: 'Write or create a file in the application\'s source code directory. Use this to implement changes, create new files, or modify existing code.\n\n'
+    description: 'Create a new file or fully replace an existing file in the source code directory. For small changes to existing files, prefer source_edit instead.\n\n'
       + 'Parameters:\n'
       + '- "path": relative file path (e.g. "src/services/newFile.js")\n'
       + '- "content": the full file content to write\n\n'
@@ -821,6 +846,9 @@ const tools = {
       const sourceRoot = resolve(config.sourceDir);
       const full = resolve(sourceRoot, filePath);
       if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      // Auto-fix Python booleans for .py files
+      if (filePath.endsWith('.py')) content = fixPythonBooleans(content);
 
       // Read existing content for diff (empty string if new file)
       let oldContent = '';
@@ -888,6 +916,9 @@ const tools = {
           return { path: filePath, created: true, lines: newStr.split('\n').length, size: Buffer.byteLength(newStr, 'utf-8') };
         }
       }
+
+      // Auto-fix Python booleans for .py files
+      if (filePath.endsWith('.py')) newStr = fixPythonBooleans(newStr);
 
       // EDIT mode
       return withFileLock(full, async () => {
@@ -1193,13 +1224,7 @@ const tools = {
       }
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
 
-      // Auto-fix JS-style booleans/null → Python (common LLM mistake)
-      // Pass 1: keyword args (na=false → na=False, inplace=true → inplace=True)
-      code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
-                 .replace(/(\w\s*=\s*)false\b/g, '$1False')
-                 .replace(/(\w\s*=\s*)null\b/g, '$1None');
-      // Pass 2: standalone null → None (null is never valid Python, always means None)
-      code = code.replace(/\bnull\b/g, 'None');
+      code = fixPythonBooleans(code);
 
       await mkdir(DATA_DIR, { recursive: true });
       const tmpFile = join(DATA_DIR, '.tmp_script.py');
@@ -1929,7 +1954,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, source_git for version control, and source_test to verify your changes work. Use source_project to switch all source tools to a different project directory.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_test to verify changes work\n7. Use source_git for version control\n\nPython files: true/false/null are auto-corrected to True/False/None in source_write and source_edit.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
