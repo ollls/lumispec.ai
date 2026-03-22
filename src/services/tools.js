@@ -2429,21 +2429,23 @@ export async function executeTool(name, args, context) {
     const t0 = Date.now();
     const result = await tool.execute(args, context);
     console.log(`[tools] "${name}" completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    // Log LiteAPI tool calls (hotel, travel, booking) — etrade has its own internal logging
-    if (['hotel', 'travel', 'booking'].includes(name)) {
-      const action = args?.action || 'unknown';
-      // Strip _images and _rateMap from logged result to keep logs readable
-      const { _images, _rateMap, ...loggableResult } = result || {};
-      if (_images) loggableResult._imageCount = _images.length;
-      if (_rateMap) loggableResult._rateCount = Object.keys(_rateMap).length;
-      logToolCall(name, action, { args, rawResult: loggableResult, formattedResult: loggableResult });
-    }
+    // Log tool calls to file — strip heavy data to keep logs readable
+    const action = args?.action || 'call';
+    const { _images, _rateMap, _diff, ...loggableResult } = result || {};
+    if (_images) loggableResult._imageCount = _images.length;
+    if (_rateMap) loggableResult._rateCount = Object.keys(_rateMap).length;
+    if (_diff) loggableResult._hasDiff = true;
+    // Strip large content from source_write/source_edit args in logs
+    const loggableArgs = { ...args };
+    if (loggableArgs.content && loggableArgs.content.length > 200) loggableArgs.content = loggableArgs.content.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.code && loggableArgs.code.length > 200) loggableArgs.code = loggableArgs.code.slice(0, 200) + '...[truncated]';
+    logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);
-    if (['hotel', 'travel', 'booking'].includes(name)) {
-      logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
-    }
+    logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
     return JSON.stringify({ error: err.message });
   }
 }
