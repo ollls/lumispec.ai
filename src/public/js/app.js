@@ -14,6 +14,17 @@ const state = {
   location: '', // from server config (LOCATION env var)
 };
 
+// Colorize diff text — lines starting with +/-/@@ get green/red/cyan
+function colorizeDiff(text) {
+  return text.split('\n').map(line => {
+    const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (line.startsWith('+')) return `<span class="text-green-500">${esc}</span>`;
+    if (line.startsWith('-')) return `<span class="text-red-400">${esc}</span>`;
+    if (line.startsWith('@@')) return `<span class="text-cyan-500">${esc}</span>`;
+    return `<span class="text-zinc-400">${esc}</span>`;
+  }).join('\n');
+}
+
 // Dark session colors that are unreadable on dark backgrounds → lighter text variants
 function textSafeColor(color) {
   const lightMap = { '#1b2a4a': '#6B8FBF' };
@@ -865,13 +876,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               if (parsedResult?._diff) {
                 const diffPre = document.createElement('pre');
                 diffPre.className = 'mt-1 whitespace-pre-wrap text-xs max-h-60 overflow-y-auto slim-scrollbar';
-                diffPre.innerHTML = parsedResult._diff.split('\n').map(line => {
-                  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                  if (line.startsWith('+')) return `<span class="text-green-500">${esc}</span>`;
-                  if (line.startsWith('-')) return `<span class="text-red-400">${esc}</span>`;
-                  if (line.startsWith('@@')) return `<span class="text-cyan-500">${esc}</span>`;
-                  return `<span class="text-zinc-500">${esc}</span>`;
-                }).join('\n');
+                diffPre.innerHTML = colorizeDiff(parsedResult._diff);
                 detail.appendChild(diffPre);
                 body.style.display = 'none'; // hide raw JSON when diff is shown
               }
@@ -932,9 +937,12 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               }
               const confirmDiv = document.createElement('div');
               confirmDiv.className = 'my-2 p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-xs';
+              const cmdText = data.confirm_command.command;
+              const hasDiff = cmdText.includes('\n---') || cmdText.includes('\n@@');
+              const cmdHtml = hasDiff ? colorizeDiff(cmdText) : cmdText.replace(/&/g, '&amp;').replace(/</g, '&lt;');
               confirmDiv.innerHTML = `
-                <div class="text-zinc-400 mb-2">Run command:</div>
-                <pre class="text-amber-400 mb-2 whitespace-pre-wrap">${data.confirm_command.command.replace(/</g, '&lt;')}</pre>
+                <div class="text-zinc-400 mb-2">${hasDiff ? 'Review changes:' : 'Run command:'}</div>
+                <pre class="${hasDiff ? '' : 'text-amber-400 '}mb-2 whitespace-pre-wrap text-xs">${cmdHtml}</pre>
                 <div class="flex gap-2">
                   <button class="cmd-approve px-3 py-1 rounded font-medium" style="color:#4ade80">✓ Approve</button>
                   <button class="cmd-deny px-3 py-1 rounded font-medium" style="color:#f87171">✕ Deny</button>
