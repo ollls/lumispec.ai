@@ -9,7 +9,42 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **CSS**: Tailwind CSS v4 (CLI build)
 - **Frontend**: Vanilla JS, no bundler
 - **LLM Backend**: llama.cpp server (OpenAI-compatible `/v1/chat/completions` endpoint)
+- **GPU**: NVIDIA RTX 5090
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
+
+## LLM Server Configuration
+Running Qwen3.5-35B-A3B (MoE, 3B active params) on RTX 5090 with 131K context:
+
+```bash
+#!/bin/bash
+# run-qwen-server-5090.sh — GPU-exclusive configuration
+
+export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
+
+./llama.cpp/build/bin/llama-server \
+  -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
+  --ctx-size 131072 \
+  --gpu-layers 99 \
+  --flash-attn on \
+  -t 16 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --min-p 0.01 \
+  --top-k 40 \
+  --repeat-penalty 1.05 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --mmap \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+**Key settings:**
+- `--gpu-layers 99` — full GPU offload
+- `--flash-attn on` — flash attention for large context
+- `--cache-type-k/v q8_0` — quantized KV cache to fit 131K context in VRAM
+- `--mmap` — memory-mapped model loading
+- `-t 16` — 16 CPU threads for non-GPU operations
 
 ## Project Structure
 ```
