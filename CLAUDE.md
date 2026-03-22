@@ -197,9 +197,9 @@ Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/think
 ### Session System
 Colored session types that define conversation categories. Each conversation is associated with a session color. Session prompts are saved per color and auto-submitted when creating a new chat.
 
-**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`). Easy to change in one place.
+**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`, `--btn-navy`, `--btn-lavender`). Easy to change in one place.
 
-**Session buttons**: 5 compact colored `+` buttons in the top bar. Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
+**Session buttons**: 7 compact colored `+` buttons in the top bar. Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
 
 **Session persistence**:
 - `state.sessionColors` (localStorage `sessionColors`): `Map<convId, sessionType>` — per-conversation color assignment

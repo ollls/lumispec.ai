@@ -9,7 +9,7 @@ const state = {
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
   thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
-  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
+  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'|'navy'|'lavender'
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
   location: '', // from server config (LOCATION env var)
 };
