@@ -956,6 +956,81 @@ const tools = {
       return { path: filePath, deleted: true, size: fileStats.size };
     },
   },
+  source_git: {
+    description: 'Run git commands in the source code directory. Pass the git subcommand and arguments (without the "git" prefix).\n\n'
+      + 'Examples: "status", "diff src/server.js", "log --oneline -10", "add src/", "commit -m \'fix bug\'", "branch feature-x", "push"\n\n'
+      + 'Safety tiers:\n'
+      + '- Read-only (status, diff, log, show, branch -l): no approval needed\n'
+      + '- Local writes (add, commit, checkout, branch, stash, merge, tag): approval or autorun\n'
+      + '- Remote (push, pull, fetch): always requires approval\n'
+      + '- Blocked: reset --hard, push --force, clean -f, rebase',
+    parameters: {
+      command: 'string (git subcommand + args, without "git" prefix)',
+    },
+    execute: async ({ command }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!command?.trim()) return { error: 'command is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const parts = command.trim().split(/\s+/);
+      const sub = parts[0];
+      const fullCmd = command.trim();
+
+      // Blocked commands
+      const blocked = [
+        { match: () => fullCmd.match(/reset\s+--hard/), reason: 'reset --hard discards uncommitted work — use checkout or stash instead' },
+        { match: () => fullCmd.match(/push\s+.*--force/) || fullCmd.match(/push\s+-f/), reason: 'force push can destroy remote history — not allowed' },
+        { match: () => fullCmd.match(/clean\s+.*-f/), reason: 'clean -f permanently deletes untracked files — use status to review first' },
+        { match: () => sub === 'rebase', reason: 'rebase rewrites history — use merge instead, or run via run_command if needed' },
+      ];
+      for (const b of blocked) {
+        if (b.match()) return { error: `Blocked: ${b.reason}` };
+      }
+
+      // Safety tiers
+      const safe = ['status', 'diff', 'log', 'show', 'blame', 'shortlog', 'describe', 'remote', 'ls-files', 'rev-parse'];
+      const isBranchList = sub === 'branch' && (parts.includes('-l') || parts.includes('--list') || parts.includes('-a') || parts.includes('-r') || parts.length === 1);
+      const isReadOnly = safe.includes(sub) || isBranchList;
+      const remote = ['push', 'pull', 'fetch'];
+      const isRemote = remote.includes(sub);
+
+      let approved;
+      if (isReadOnly) {
+        approved = true;
+      } else if (isRemote) {
+        // Always confirm remote operations, even with autorun
+        approved = await context.confirmFn(`git ${fullCmd}`);
+      } else if (context.autorun) {
+        console.log(`[source_git] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`git ${fullCmd}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied git command.' };
+
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(`git ${fullCmd}`, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            res({
+              command: `git ${fullCmd}`,
+              exitCode: typeof err.code === 'number' ? err.code : 1,
+              stdout: (stdout || '').slice(0, 8000),
+              stderr: ((stderr || '') + (err.killed ? '\n[source_git] killed: exceeded 30s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            res({ command: `git ${fullCmd}`, exitCode: 0, stdout: (stdout || '').slice(0, 8000), stderr: (stderr || '').slice(0, 4000) });
+          }
+        });
+      });
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -1749,7 +1824,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, and source_delete to remove files during refactors.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, and source_git for version control.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
