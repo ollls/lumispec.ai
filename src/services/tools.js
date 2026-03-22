@@ -847,6 +847,9 @@ const tools = {
       const full = resolve(sourceRoot, filePath);
       if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
 
+      // Auto-fix Python booleans for .py files (model can't reliably produce True vs true)
+      if (filePath.endsWith('.py')) content = fixPythonBooleans(content);
+
       // Read existing content for diff (empty string if new file)
       let oldContent = '';
       try { oldContent = await readFile(full, 'utf-8'); } catch {}
@@ -912,6 +915,12 @@ const tools = {
           await writeFile(full, newStr, 'utf-8');
           return { path: filePath, created: true, lines: newStr.split('\n').length, size: Buffer.byteLength(newStr, 'utf-8') };
         }
+      }
+
+      // Auto-fix Python booleans for .py files (model can't reliably produce True vs true)
+      if (filePath.endsWith('.py')) {
+        oldStr = fixPythonBooleans(oldStr);
+        newStr = fixPythonBooleans(newStr);
       }
 
       if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
