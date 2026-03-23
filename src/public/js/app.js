@@ -433,7 +433,7 @@ window.addEventListener('load', () => {
   iframe.className = 'applet-iframe';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;max-width:900px;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:auto;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:auto;display:block';
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
