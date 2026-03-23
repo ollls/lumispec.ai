@@ -2480,7 +2480,7 @@ export function parseToolCalls(text) {
       const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
       calls.push({ name: parsed.name, arguments: args });
     }
-    i = end;
+    i = end > start ? end : start + 1;
   }
   return calls;
 }
