@@ -2521,7 +2521,7 @@ export async function executeTool(name, args, context) {
     if (loggableArgs.content && loggableArgs.content.length > 200) loggableArgs.content = loggableArgs.content.slice(0, 200) + '...[truncated]';
     if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
-    if (loggableArgs.code && loggableArgs.code.length > 200) loggableArgs.code = loggableArgs.code.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.code && loggableArgs.code.length > 2000) loggableArgs.code = loggableArgs.code.slice(0, 2000) + '...[truncated]';
     logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
