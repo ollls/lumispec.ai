@@ -854,7 +854,9 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               const statusMsg = toolUseContainer.querySelector('.tool-status-msg');
               if (statusMsg) statusMsg.remove();
               if (toolUseContainer._thinkingEl) {
-                toolUseContainer._thinkingEl.closest('details').remove();
+                const thinkDetails = toolUseContainer._thinkingEl.closest('details');
+                thinkDetails.open = false;
+                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
                 delete toolUseContainer._thinkingEl;
               }
               trackToolUse(data.tool_use.name);
@@ -1007,9 +1009,11 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               document.addEventListener('keydown', onEnter);
             }
             if (data.content) {
-              // Clear the "Working..." indicator when final content arrives
+              // Collapse the "Working..." indicator when final content arrives
               if (toolUseContainer._thinkingEl) {
-                toolUseContainer._thinkingEl.closest('details').remove();
+                const thinkDetails = toolUseContainer._thinkingEl.closest('details');
+                thinkDetails.open = false;
+                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
                 delete toolUseContainer._thinkingEl;
               }
               if (hasReasoning) reasoningSummary.textContent = 'Thought process';
