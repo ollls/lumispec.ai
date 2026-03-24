@@ -120,6 +120,13 @@ router.post('/:id/messages', async (req, res) => {
     return res.status(400).json({ error: 'Content is required' });
   }
 
+  // Store user message BEFORE template expansion (keep display clean)
+  const displayContent = content;
+  const storedContent = images && images.length > 0
+    ? { text: displayContent, images }
+    : displayContent;
+  conversations.addMessage(conv.id, 'user', storedContent);
+
   // Expand [template: name] tags — inject saved applet HTML as context for the LLM
   const templateRe = /\[template:\s*([^\]]+)\]/gi;
   for (const match of [...content.matchAll(templateRe)]) {
@@ -130,12 +137,6 @@ router.post('/:id/messages', async (req, res) => {
       );
     }
   }
-
-  // Store user message — structured content when images are present
-  const storedContent = images && images.length > 0
-    ? { text: content, images }
-    : content;
-  conversations.addMessage(conv.id, 'user', storedContent);
 
   // Resolve slot
   let slotId = slots.getSlotForConversation(conv.id);

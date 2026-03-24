@@ -424,6 +424,16 @@ function createAppletIframe(applet) {
     }
   }
 
+  // Inject style reset to prevent scrollbars inside iframe
+  const iframeReset = '<style>html,body{overflow:hidden;min-height:0!important;margin:0}</style>';
+  if (html.includes('<head>')) {
+    html = html.replace(/<head>/i, '<head>' + iframeReset);
+  } else if (html.includes('<html>')) {
+    html = html.replace(/<html>/i, '<html><head>' + iframeReset + '</head>');
+  } else {
+    html = iframeReset + html;
+  }
+
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
@@ -442,7 +452,7 @@ window.addEventListener('load', () => {
   iframe.className = 'applet-iframe';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:auto;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:hidden;display:block';
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
@@ -2420,8 +2430,9 @@ clearPromptBtn.addEventListener('click', () => {
 savePromptBtn.addEventListener('click', async () => {
   const text = input.value.trim();
   if (!text) return;
+  const origHTML = savePromptBtn.innerHTML;
   savePromptBtn.disabled = true;
-  savePromptBtn.textContent = '…';
+  savePromptBtn.style.opacity = '0.5';
   try {
     await fetch('/api/prompts', {
       method: 'POST',
@@ -2433,15 +2444,17 @@ savePromptBtn.addEventListener('click', async () => {
     refreshPrompts();
   } finally {
     savePromptBtn.disabled = false;
-    savePromptBtn.textContent = 'Save';
+    savePromptBtn.style.opacity = '';
+    savePromptBtn.innerHTML = origHTML;
   }
 });
 
 saveSessionBtn.addEventListener('click', async () => {
   const text = input.value.trim();
   if (!text || !state.sessionType) return;
+  const origHTML = saveSessionBtn.innerHTML;
   saveSessionBtn.disabled = true;
-  saveSessionBtn.textContent = '…';
+  saveSessionBtn.style.opacity = '0.5';
   try {
     await fetch('/api/sessions', {
       method: 'POST',
@@ -2453,7 +2466,8 @@ saveSessionBtn.addEventListener('click', async () => {
     refreshSessions();
   } finally {
     saveSessionBtn.disabled = false;
-    saveSessionBtn.textContent = 'Save Session';
+    saveSessionBtn.style.opacity = '';
+    saveSessionBtn.innerHTML = origHTML;
   }
 });
 
