@@ -68,6 +68,22 @@ Point the AI at any project directory and it becomes a coding assistant. It can 
 
 Works on any language or framework. Set `SOURCE_DIR` in `.env` to get started.
 
+### Example Dialog
+
+A real conversation showing project switching, file management, image display, and code editing — all in natural language:
+
+```
+> select WORKBENCH_TEST_PRJ as my project
+> show pictures there
+> copy this picture to ~/prj/llm
+> switch to default project
+> add Screenshot_2026-03-24_13-57-42.png to README.md, it needs to be displayed as second picture after the one which is already there
+> go to Pictures directory
+> yes
+> show them
+> can you display them as small thumbnails?
+```
+
 ### Financial Analysis
 
 The LLM doesn't do math — Python does. When you ask "what's my portfolio beta?", the LLM fetches your holdings via E\*TRADE, writes a Python script with pandas/numpy, runs it, and renders the result as an interactive chart. Full precision, no hallucinated numbers.
