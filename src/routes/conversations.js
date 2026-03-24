@@ -450,6 +450,18 @@ router.post('/:id/messages', async (req, res) => {
           llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
           continue;
         }
+        // Detect fabricated option data: LLM presents Greeks/prices without ever calling optionchains
+        if (!hadChainData && round < MAX_TOOL_ROUNDS - 1) {
+          const greeksRe = /\b(delta|gamma|theta|vega|rho)\b.*?-?\d+\.\d{2,}/i;
+          const optionTableRe = /\b(strike|premium|call|put)\b.*?\$?\d+(\.\d+)?/i;
+          const looksLikeOptionData = greeksRe.test(result.content) || (optionTableRe.test(result.content) && /\b(expir|strike|IV|implied.?vol)/i.test(result.content));
+          if (looksLikeOptionData) {
+            console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use`);
+            llmMessages.push({ role: 'assistant', content: result.content });
+            llmMessages.push({ role: 'user', content: 'STOP. You are presenting option prices, Greeks, or strike data WITHOUT having fetched real data via the etrade_account tool. This data is fabricated. You MUST call etrade_account with action "optionchains" to get real data before presenting any option analysis. First call optionexpiry to get available dates, then optionchains with the expiry you need.' });
+            continue;
+          }
+        }
         // Detect bare JSON or truncated tool calls and retry the round
         // Skip this check if content contains applet blocks (HTML/JS may have {"name": patterns)
         const hasApplet = /<applet[\s>]/i.test(result.content);

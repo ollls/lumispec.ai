@@ -203,14 +203,23 @@ function renderSidebar() {
   for (const conv of state.conversations) {
     const item = document.createElement('div');
     const isActive = conv.id === state.currentConversationId;
-    item.className = `group flex items-center gap-2 px-4 py-3 cursor-pointer border-b border-zinc-800/50 transition-colors ${
+    item.className = `group flex items-center gap-2 py-3 cursor-pointer border-b border-zinc-800/50 transition-colors ${
       isActive ? 'bg-zinc-800/70' : 'hover:bg-zinc-900'
     }`;
 
-    const title = document.createElement('span');
-    title.className = 'flex-1 text-sm truncate ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
-    title.textContent = conv.title;
+    // Color strip on left edge matching session color
     const convSession = state.sessionColors[conv.id];
+    const strip = document.createElement('div');
+    strip.className = 'self-stretch w-1 shrink-0 rounded-r';
+    if (convSession) {
+      const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
+      if (c) strip.style.backgroundColor = c;
+    }
+    item.appendChild(strip);
+
+    const title = document.createElement('span');
+    title.className = 'flex-1 text-sm truncate pl-3 ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
+    title.textContent = conv.title;
     if (convSession) {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
       if (c) title.style.color = textSafeColor(c);
