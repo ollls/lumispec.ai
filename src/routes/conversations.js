@@ -608,7 +608,8 @@ router.post('/:id/messages', async (req, res) => {
     if (updated && updated.title === 'New conversation') {
       const text = typeof content === 'string' ? content : content.text;
       if (text) {
-        const title = text.length > 60 ? text.slice(0, 60) + '…' : text;
+        const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0]?.trim() || text;
+        const title = firstSentence.length > 120 ? firstSentence.slice(0, 120) + '…' : firstSentence;
         conversations.updateTitle(conv.id, title);
       }
     }
