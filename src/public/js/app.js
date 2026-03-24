@@ -2488,6 +2488,37 @@ saveSessionBtn.addEventListener('click', async () => {
   if (saved) form.style.height = saved;
 }
 
+// ── Resize divider (sidebar) ─────────────────────────
+{
+  const divider = document.getElementById('sidebar-divider');
+  const sidebar = document.getElementById('sidebar');
+  let dragging = false;
+  let startX, startW;
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const delta = e.clientX - startX;
+    const newW = Math.max(150, Math.min(window.innerWidth * 0.4, startW + delta));
+    sidebar.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('sidebarWidth', sidebar.style.width);
+  });
+  const savedW = localStorage.getItem('sidebarWidth');
+  if (savedW) sidebar.style.width = savedW;
+}
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   try {
