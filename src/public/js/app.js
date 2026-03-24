@@ -397,8 +397,8 @@ function extractApplets(text) {
 function createAppletIframe(applet) {
   let html = applet.html;
 
-  // Validate: html type applets are always valid; others need <script>, <svg>, or <canvas>
-  if (applet.type !== 'html' && !/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
+  // Validate: html type applets are always valid; others need <script>, <svg>, <canvas>, or <img>
+  if (applet.type !== 'html' && !/<script[\s>]|<svg[\s>]|<canvas[\s>]|<img[\s>]/i.test(html)) {
     // Fallback: collapsible code block
     const details = document.createElement('details');
     details.className = 'applet-fallback';

@@ -1,7 +1,9 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, resolve, extname } from 'path';
 import { exec } from 'child_process';
+import { stat } from 'fs/promises';
+import { createReadStream } from 'fs';
 import config from './config.js';
 import conversationRoutes from './routes/conversations.js';
 import slotRoutes from './routes/slots.js';
@@ -52,6 +54,41 @@ app.post('/api/terminal', (_req, res) => {
     if (err) console.warn('[terminal]', err.message);
   });
   res.json({ ok: true, cwd });
+});
+
+// File proxy — serves local files by absolute path
+// Allowed MIME type prefixes (extend as needed)
+const PROXY_ALLOWED = ['image/'];
+app.get('/api/file', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'Missing ?path= parameter' });
+  const resolved = resolve(filePath);
+  const ext = extname(resolved).toLowerCase();
+  const mimeMap = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+    '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
+    '.pdf': 'application/pdf', '.json': 'application/json',
+    '.txt': 'text/plain', '.csv': 'text/csv', '.html': 'text/html',
+    '.md': 'text/markdown', '.xml': 'text/xml',
+    '.mp4': 'video/mp4', '.webm': 'video/webm',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+  };
+  const mime = mimeMap[ext];
+  if (!mime) return res.status(403).json({ error: `File type ${ext} not allowed` });
+  if (!PROXY_ALLOWED.some(prefix => mime.startsWith(prefix))) {
+    return res.status(403).json({ error: `MIME type ${mime} not in allowed list` });
+  }
+  try {
+    const info = await stat(resolved);
+    if (!info.isFile()) return res.status(400).json({ error: 'Not a file' });
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', info.size);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    createReadStream(resolved).pipe(res);
+  } catch (e) {
+    res.status(404).json({ error: 'File not found' });
+  }
 });
 
 app.get('/', (_req, res) => {
