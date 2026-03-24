@@ -2457,6 +2457,37 @@ saveSessionBtn.addEventListener('click', async () => {
   }
 });
 
+// ── Resize divider (chat/prompt) ──────────────────────
+{
+  const divider = document.getElementById('resize-divider');
+  const form = document.getElementById('prompt-form');
+  let dragging = false;
+  let startY, startH;
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = form.offsetHeight;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const delta = startY - e.clientY;
+    const newH = Math.max(80, Math.min(window.innerHeight * 0.6, startH + delta));
+    form.style.height = newH + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('promptFormHeight', form.style.height);
+  });
+  const saved = localStorage.getItem('promptFormHeight');
+  if (saved) form.style.height = saved;
+}
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   try {
