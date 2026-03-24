@@ -22,37 +22,22 @@ Requires: **Node.js >= 20** and a running **llama.cpp server** (see setup below)
 
 ## LLM Server Setup
 
-ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. Tested and running great on an **NVIDIA RTX 5090** with the Qwen3.5-35B-A3B mixture-of-experts model (only 3B active parameters — fast inference with strong reasoning at 131K context).
+ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. Tested and running great on an **NVIDIA RTX 5090** with the Qwen3.5-35B-A3B mixture-of-experts model (only 3B active parameters — fast inference with strong reasoning).
 
 ```bash
-#!/bin/bash
-# run-qwen-server-5090.sh
-
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
-  --ctx-size 131072 \
-  --gpu-layers 99 \
-  --flash-attn on \
-  -t 16 \
-  --temp 1.0 \
+  --jinja \
+  -ngl 99 \
+  --ctx-size 65536 \
+  -fa auto \
+  --temp 0.7 \
   --top-p 0.95 \
   --min-p 0.01 \
-  --top-k 40 \
-  --repeat-penalty 1.05 \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-  --mmap \
-  --host 0.0.0.0 \
-  --port 8080
+  --top-k 40
 ```
-
-**Why this works well:**
-- `--gpu-layers 99` — full GPU offload, the 5090 has plenty of VRAM
-- `--flash-attn on` — flash attention enables the full 131K context window
-- `--cache-type-k/v q8_0` — quantized KV cache fits 131K context in VRAM
-- Qwen3.5-35B-A3B is a MoE model — only 3B params active per token, so inference is fast while total knowledge spans 35B
 
 Any llama.cpp-compatible model works. Adjust `--ctx-size` and quantization for your GPU. Smaller models like Qwen3-8B or Llama-3.1-8B run fine on GPUs with less VRAM.
 

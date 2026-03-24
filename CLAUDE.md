@@ -13,38 +13,22 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
 
 ## LLM Server Configuration
-Running Qwen3.5-35B-A3B (MoE, 3B active params) on RTX 5090 with 131K context:
+Running Qwen3.5-35B-A3B (MoE, 3B active params) on RTX 5090:
 
 ```bash
-#!/bin/bash
-# run-qwen-server-5090.sh — GPU-exclusive configuration
-
 export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
-  --ctx-size 131072 \
-  --gpu-layers 99 \
-  --flash-attn on \
-  -t 16 \
-  --temp 1.0 \
+  --jinja \
+  -ngl 99 \
+  --ctx-size 65536 \
+  -fa auto \
+  --temp 0.7 \
   --top-p 0.95 \
   --min-p 0.01 \
-  --top-k 40 \
-  --repeat-penalty 1.05 \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-  --mmap \
-  --host 0.0.0.0 \
-  --port 8080
+  --top-k 40
 ```
-
-**Key settings:**
-- `--gpu-layers 99` — full GPU offload
-- `--flash-attn on` — flash attention for large context
-- `--cache-type-k/v q8_0` — quantized KV cache to fit 131K context in VRAM
-- `--mmap` — memory-mapped model loading
-- `-t 16` — 16 CPU threads for non-GPU operations
 
 ## Project Structure
 ```
@@ -125,7 +109,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ## Environment Variables (via .env, required)
 - `PORT` — server port (default: 3000)
 - `LLAMA_URL` — llama-server base URL (default: `http://localhost:8080`)
-- `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 131072, overridden by slot `n_ctx`)
+- `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 65536, overridden by slot `n_ctx`)
 - `SEARCH_ENGINE` — `keiro`, `tavily`, or `both` (default: `keiro`)
 - `TAVILY_API_KEY` — Tavily search API key
 - `KEIRO_API_KEY` — Keiro search API key
