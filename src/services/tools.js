@@ -1092,8 +1092,8 @@ const tools = {
     },
   },
   source_git: {
-    description: 'Run git commands in the source code directory. Pass the git subcommand and arguments (without the "git" prefix).\n\n'
-      + 'Examples: "status", "diff src/server.js", "log --oneline -10", "add src/", "commit -m \'fix bug\'", "branch feature-x", "push"\n\n'
+    description: 'Run git commands in the source code directory. Pass the git subcommand and arguments as "command" (without the "git" prefix).\n\n'
+      + 'Examples: {"command": "status"}, {"command": "diff src/server.js"}, {"command": "log --oneline -10"}, {"command": "add src/"}, {"command": "commit -m \'fix bug\'"}, {"command": "push"}\n\n'
       + 'Safety tiers:\n'
       + '- Read-only (status, diff, log, show, branch -l): no approval needed\n'
       + '- Local writes (add, commit, checkout, branch, stash, merge, tag): approval or autorun\n'
@@ -1104,7 +1104,7 @@ const tools = {
     },
     execute: async ({ command }, context) => {
       if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
-      if (!command?.trim()) return { error: 'command is required' };
+      if (!command?.trim()) return { error: 'command is required — use {"command": "status"} not {"action": "status"}' };
       if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
       const sourceRoot = resolve(config.sourceDir);
@@ -1242,10 +1242,14 @@ const tools = {
     },
   },
   run_command: {
-    description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
+    description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests. Do NOT use for git commands in source projects — use source_git instead.',
     parameters: { command: 'string' },
     execute: async ({ command }, context) => {
       if (!command?.trim()) return { error: 'command is required' };
+      // Block git commands when source_git is available
+      if (config.sourceDir && /\bgit\s+/.test(command.trim())) {
+        return { error: 'Use source_git for git commands in source projects (e.g. source_git with {"command": "status"}). run_command is for non-git shell commands.' };
+      }
       if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
       let approved;
