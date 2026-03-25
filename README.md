@@ -5,6 +5,7 @@ A production-grade personal assistant that runs entirely on your own hardware â€
 ![ScrapChat](Screenshot_2026-03-21_17-11-43.png)
 ![Screenshot](Screenshot_2026-03-24_13-57-42.png)
 ![ScrapChat Options](Screenshot_2026-03-21_17-17-57.png)
+![2Watches](2Watches.png)
 
 Connect any local LLM via [llama.cpp](https://github.com/ggerganov/llama.cpp) and get a full-featured chat interface with web search, code execution, interactive visualizations, AI-powered code development, travel planning, and deep E\*TRADE brokerage integration.
 
