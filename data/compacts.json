@@ -1,0 +1,9 @@
+[
+  {
+    "id": "bd8dac5b-de48-4633-9111-9c8d023bab4c",
+    "color": "navy",
+    "title": "coding/work session",
+    "text": "You are summarizing a coding/work session. Create a compact summary that preserves:\n  - What was accomplished (files created, modified, deleted)\n  - Key decisions and why they were made\n  - What worked and what failed (so mistakes aren't repeated)\n  - Current state of the project\n  - Any unfinished tasks or next steps\n\n  Format as a brief structured summary with sections. Be concise — this replaces the full conversation. Drop all\n  back-and-forth, debugging noise, and intermediate tool outputs. Focus on outcomes and lessons.",
+    "updatedAt": "2026-03-25T16:54:01.326Z"
+  }
+]
