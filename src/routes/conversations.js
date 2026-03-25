@@ -130,7 +130,9 @@ router.post('/:id/messages', async (req, res) => {
   // Expand [template: name] tags — inject saved applet HTML as context for the LLM
   const templateRe = /\[template:\s*([^\]]+)\]/gi;
   for (const match of [...content.matchAll(templateRe)]) {
-    const tpl = getTemplateByName(match[1].trim());
+    const tplName = match[1].trim();
+    const tpl = getTemplateByName(tplName);
+    console.log(`[template] expanding "${tplName}" → ${tpl ? `found (${tpl.html.length} chars)` : 'NOT FOUND'}`);
     if (tpl) {
       content = content.replace(match[0],
         `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block. Fetch fresh data using the appropriate tools first, then populate the template with the new data. Update ALL dates, values, and content to reflect the fresh data. Keep the layout, styling, and structure intact:\n\`\`\`html\n${tpl.html}\n\`\`\``
@@ -189,9 +191,15 @@ router.post('/:id/messages', async (req, res) => {
       return msg;
     });
 
+    // Use expanded content (with template HTML) for the current user message
+    // History stores unexpanded version for clean display, but LLM needs the expanded one
+    const currentUserMsg = images && images.length > 0
+      ? { role: 'user', content: [{ type: 'text', text: content }, ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } }))] }
+      : { role: 'user', content };
     const llmMessages = [
       { role: 'system', content: systemPrompt },
-      ...historyMessages,
+      ...historyMessages.slice(0, -1),
+      currentUserMsg,
     ];
 
     // Stream one LLM round: forwards reasoning chunks to client in real-time,

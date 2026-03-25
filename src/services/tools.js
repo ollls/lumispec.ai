@@ -110,7 +110,7 @@ async function saveToFile(filename, content) {
   await mkdir(DATA_DIR, { recursive: true });
   const filePath = join(DATA_DIR, safe);
   await writeFile(filePath, content, 'utf-8');
-  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, pythonPath: safe, size: Buffer.byteLength(content, 'utf-8') };
+  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, size: Buffer.byteLength(content, 'utf-8') };
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -664,7 +664,7 @@ const tools = {
     },
   },
   list_files: {
-    description: 'List files in the data directory. No arguments needed. Returns filename, size, and last modified date for each file.',
+    description: 'List saved files. No arguments needed. Returns filename, size, and last modified date for each file.',
     parameters: {},
     execute: async () => {
       await mkdir(DATA_DIR, { recursive: true });
@@ -678,7 +678,7 @@ const tools = {
     },
   },
   file_read: {
-    description: 'Read contents of a file from the data directory. Requires "filename". Optional "head" (number of lines from start). Use to inspect CSVs, downloaded files, or results from other tools.',
+    description: 'Read contents of a saved file. Requires "filename". Optional "head" (number of lines from start). Use to inspect CSVs, downloaded files, or results from other tools.',
     parameters: { filename: 'string', head: 'number (optional)' },
     execute: async ({ filename, head }) => {
       if (!filename?.trim()) return { error: 'filename is required' };
@@ -1167,7 +1167,7 @@ const tools = {
     },
   },
   source_run: {
-    description: 'Run a shell command in the source project directory. Unlike run_python (which runs in the data directory), this runs in the source project directory.\n\n'
+    description: 'Run a shell command in the source project directory. Unlike run_python (which runs in the saved files directory), this runs in the source project directory.\n\n'
       + 'Examples: "python3 colorful_text.py", "npm run build", "make", "go run main.go"\n\n'
       + 'Requires user approval unless autorun is enabled.',
     parameters: {
@@ -1280,7 +1280,7 @@ const tools = {
     },
   },
   run_python: {
-    description: 'Execute a Python script. Requires user approval. Requires "code" (Python source). The script runs with cwd set to the data directory, so it can read/write data files directly by filename. Any new or modified files are auto-detected and returned with download URLs.\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → save to a file (CSV, MD, or HTML) AND print() a brief summary. Example: write a CSV then print("Saved net_income_report.csv — 12 rows, total: $45,230").\n- Charts/visualizations → save as PNG/HTML file. Use matplotlib, plotly, etc.\n- ALWAYS print() something so the user sees immediate feedback, even when saving files.\n- NEVER hardcode or inline data in the script. If data files exist in the data directory (check with list_files first), read them with Python (e.g. pandas.read_csv, open()). The script runs in the data directory so just use the filename directly.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
+    description: 'Execute a Python script. Requires user approval. Requires "code" (Python source). The script runs in the same directory as saved files, so it can read/write them directly by filename. Any new or modified files are auto-detected and returned with download URLs.\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → save to a file (CSV, MD, or HTML) AND print() a brief summary. Example: write a CSV then print("Saved net_income_report.csv — 12 rows, total: $45,230").\n- Charts/visualizations → save as PNG/HTML file. Use matplotlib, plotly, etc.\n- ALWAYS print() something so the user sees immediate feedback, even when saving files.\n- NEVER hardcode or inline data in the script. If saved files exist (check with list_files first), read them with Python (e.g. pandas.read_csv, open()) using just the filename.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
     parameters: { code: 'string' },
     execute: async ({ code }, context) => {
       const t0 = Date.now();
@@ -2037,7 +2037,7 @@ ${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source co
 To display local files (images, etc.) in applets or responses, use the file proxy endpoint:
 \`/api/file?path=ABSOLUTE_PATH\`
 Example: \`<img src="/api/file?path=/home/ols/Pictures/screenshot.png">\`
-This serves files directly from the local filesystem. Currently allowed: images (png, jpg, gif, webp, svg, bmp, avif). Use absolute paths only. Do NOT copy files to the data directory — use this proxy instead.
+This serves files directly from the local filesystem. Currently allowed: images (png, jpg, gif, webp, svg, bmp, avif). Use absolute paths only. Do NOT copy files to the saved files directory — use this proxy instead.
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
@@ -2098,7 +2098,7 @@ Tool rules:
 - To save E*TRADE data to a file — use etrade_account with the "saveAs" parameter (e.g. saveAs: "CURRENT_TRANSACTIONS.csv"). This is the ONLY correct way. NEVER use run_python or save_file to save E*TRADE data — the data would be fabricated. Only etrade_account has real data.
 - To see what data files are available — use list_files.
 - To read file contents (CSVs, text files, downloaded data) — use file_read. Use head parameter for large files.
-- To run Python scripts for data analysis, calculations, or CSV processing — use run_python. Scripts run in the data directory and can read/write files there directly. ONLY use run_python to process data that already exists in files — never to fetch or fabricate data.
+- To run Python scripts for data analysis, calculations, or CSV processing — use run_python. Scripts run in the same directory as saved files and can read/write them directly by filename. ONLY use run_python to process data that already exists in files — never to fetch or fabricate data.
 - run_python output strategy: For quick calculations, just print(). For reports, tables, or analysis results — ALWAYS save to a file (CSV for data, MD for formatted reports, HTML for rich reports, PNG for charts) AND print a short summary. The tool auto-detects created files and returns download URLs. Never dump large tables to stdout — save them to a file instead.
 - run_python data workflow: When the user asks for a CALCULATION, write the calculation script DIRECTLY — do NOT waste rounds on diagnostic scripts (list_files, file_read, print columns) unless the calculation script fails. You already know the column names from the tool results and CSV format. Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. If etrade_account auto-saved a file (you see "_autoSaved" and "savedFile"), use that filename directly. Only run a diagnostic script (print columns, head) AFTER a calculation script fails — never as a first step. NEVER do mental arithmetic on financial data — if the user asked for a calculation, you MUST produce the answer from a Python script, not from eyeballing data.
 - run_python code quality — MANDATORY rules:
