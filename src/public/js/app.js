@@ -473,7 +473,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{min-height:0!important;margin:0;overflow-y:hidden;overflow-x:auto}img{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html{overflow-x:auto;overflow-y:hidden}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
