@@ -1,5 +1,11 @@
 [
   {
+    "id": "c4afe8be-6b13-416c-9ea5-54f5ae509e20",
+    "title": "Find local movies and showtimes",
+    "text": "Find movies in my area. Save theater info and showtimes for the dashboard. [template: My Movies]",
+    "createdAt": "2026-03-26T17:05:13.926Z"
+  },
+  {
     "id": "c94e632a-b81e-444e-afce-8fa3e3b37461",
     "title": "Display ETRADE Portfolio Dashboard",
     "text": "Fetch ETRADE portfolio for all accounts with saveAs (e.g. portfolio_IRA.json). Update FILES array in the template with the saved filenames. [template: Portfolio Dashboard]",

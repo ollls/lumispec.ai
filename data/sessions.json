@@ -2,9 +2,9 @@
   {
     "id": "5acb7bbe-4a9e-4fde-ae14-dce34e5ea80e",
     "color": "coral",
-    "title": "Applet HTML Dark Mode",
-    "text": "OUTPUT INSTRUCTIONS: Always show output as applet HTML, CLEAN, BIG, SIMPLE, DARK MODE.",
-    "updatedAt": "2026-03-26T13:25:54.792Z"
+    "title": "Applet HTML Output Instructions",
+    "text": "OUTPUT INSTRUCTIONS: Always show output as applet HTML, CLEAN, BIG, SIMPLE, DARK MODE.  Confirm with \"OK\"",
+    "updatedAt": "2026-03-26T16:24:46.348Z"
   },
   {
     "id": "be24f076-57cc-493e-a33b-b3e7dbbb8e1e",

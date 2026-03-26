@@ -2107,6 +2107,7 @@ function renderTemplates(templates) {
           optBtn.textContent = '\u2713';
           optBtn.classList.remove('animate-pulse');
           optBtn.className = 'text-emerald-400 text-xs px-1 shrink-0';
+          optBtn.disabled = true;
         } else {
           optBtn.textContent = '\u26A1';
           optBtn.classList.remove('animate-pulse');
