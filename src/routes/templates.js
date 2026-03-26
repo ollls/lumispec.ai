@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { listTemplates, createTemplate, updateTemplate, deleteTemplate, getTemplate, reorderTemplates } from '../services/templates.js';
+import { collectChatCompletion } from '../services/llm.js';
 
 const router = Router();
 
@@ -58,6 +59,41 @@ router.put('/reorder', (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array required' });
   res.json(reorderTemplates(ids));
+});
+
+router.post('/:id/optimize', async (req, res) => {
+  const template = getTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'not found' });
+  try {
+    const { content } = await collectChatCompletion([
+      { role: 'system', content: `You are an HTML/JS template optimizer. You receive an applet HTML template and return an IMPROVED version.
+
+Rules:
+- Return ONLY the complete HTML — no explanation, no markdown, no code fences
+- Fix JavaScript bugs: None→null, True→true, False→false, undeclared variables
+- Replace CDN URLs with local: Chart.js → /lib/chart.min.js
+- Data loading: if template has hardcoded data arrays, convert to fetch from /files/FILENAME.csv or /files/FILENAME.json and parse client-side
+- Use a const FILES = [...] array at the top of <script> for data filenames so the LLM can substitute them when using the template
+- For select/dropdown elements: populate options dynamically from loaded data, never leave empty <select> elements
+- Add error handling for fetch() calls with user-visible error messages
+- Ensure the resize postMessage is present: window.parent.postMessage({type:'resize',height:document.body.scrollHeight},'*') on load and after data renders
+- Remove hardcoded stock symbols, dollar amounts, account names, or personal data — replace with data-driven rendering
+- Keep the exact same visual design, CSS, layout, and color scheme
+- Keep it concise — do not add comments or expand minified code` },
+      { role: 'user', content: template.html },
+    ], { maxTokens: 8192 });
+    if (!content?.trim()) return res.status(500).json({ error: 'LLM returned empty response' });
+    // Strip markdown fences if LLM wrapped the output
+    let optimized = content.trim();
+    optimized = optimized.replace(/^```(?:html)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+    // Run deterministic sanitizer on top
+    optimized = sanitizeTemplate(optimized);
+    const updated = updateTemplate(req.params.id, { html: optimized });
+    res.json({ ok: true, template: updated });
+  } catch (err) {
+    console.error('[template-optimize]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.delete('/:id', (req, res) => {

@@ -2092,6 +2092,32 @@ function renderTemplates(templates) {
       });
     });
 
+    const optBtn = document.createElement('button');
+    optBtn.className = 'text-zinc-600 hover:text-amber-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    optBtn.textContent = '\u26A1';
+    optBtn.title = 'Optimize template with LLM';
+    optBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      optBtn.textContent = '\u23F3';
+      optBtn.classList.add('animate-pulse');
+      try {
+        const res = await fetch(`/api/templates/${t.id}/optimize`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          optBtn.textContent = '\u2713';
+          optBtn.classList.remove('animate-pulse');
+          optBtn.className = 'text-emerald-400 text-xs px-1 shrink-0';
+        } else {
+          optBtn.textContent = '\u26A1';
+          optBtn.classList.remove('animate-pulse');
+          console.error('Optimize failed:', data.error);
+        }
+      } catch {
+        optBtn.textContent = '\u26A1';
+        optBtn.classList.remove('animate-pulse');
+      }
+    });
+
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     delBtn.textContent = '\u2715';
@@ -2116,6 +2142,7 @@ function renderTemplates(templates) {
     item.appendChild(nameSpan);
     item.appendChild(typeSpan);
     item.appendChild(editBtn);
+    item.appendChild(optBtn);
     item.appendChild(delBtn);
     templateList.appendChild(item);
   }
