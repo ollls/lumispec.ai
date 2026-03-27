@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve, extname } from 'path';
 import { exec } from 'child_process';
-import { stat } from 'fs/promises';
+import { stat, readdir } from 'fs/promises';
 import { createReadStream } from 'fs';
 import config from './config.js';
 import conversationRoutes from './routes/conversations.js';
@@ -43,6 +43,28 @@ app.use('/api/conversations', taskProcessorRoutes);
 app.use('/files', (req, res, next) => {
   if (!config.sourceDir) return res.status(404).json({ error: 'No source directory configured' });
   express.static(resolve(config.sourceDir))(req, res, next);
+});
+
+// List data files in source directory (optionally filtered by substring in ?match=)
+app.get('/api/files', async (_req, res) => {
+  if (!config.sourceDir) return res.status(404).json({ error: 'No source directory configured' });
+  try {
+    const dir = resolve(config.sourceDir);
+    const entries = await readdir(dir);
+    // Only expose data files, not directories or sensitive files
+    const dataExts = new Set(['.csv', '.json', '.html', '.txt', '.md', '.png', '.jpg', '.svg']);
+    const hidden = new Set(['.env', '.env.example', '.claudeignore', 'package-lock.json']);
+    let files = entries.filter(f => {
+      if (f.startsWith('.') || hidden.has(f)) return false;
+      const ext = f.slice(f.lastIndexOf('.'));
+      return dataExts.has(ext);
+    });
+    const match = _req.query.match;
+    if (match) files = files.filter(f => f.includes(match));
+    res.json(files.sort());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/config', (_req, res) => {
