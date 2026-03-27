@@ -1,0 +1,8 @@
+[
+  {
+    "id": "6bf14f65-cef7-4d98-bfc6-54257172392b",
+    "title": "AMD May 2026 Option Delta Filter",
+    "text": "- get AMD current price and option expiration dates for May 2026\n- fetch AMD call option chain for the earliest May expiry, set strikePriceNear 15% above current price, save to file\n- read the saved CSV, filter to delta less than 0.30, output markdown table with strike, bid, ask, delta, theta, gamma, IV",
+    "createdAt": "2026-03-27T16:43:06.516Z"
+  }
+]

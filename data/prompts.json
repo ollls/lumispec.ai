@@ -1,5 +1,11 @@
 [
   {
+    "id": "93222154-72d0-48b5-a674-d7a58db98e4c",
+    "title": "Major US and Ukraine News App",
+    "text": "List major news, in US and in Ukraine. use applet HTML, BIG CLEAN, SIMPLE, DARK MODE",
+    "createdAt": "2026-03-21T19:45:09.825Z"
+  },
+  {
     "id": "c4afe8be-6b13-416c-9ea5-54f5ae509e20",
     "title": "Find local movies and showtimes",
     "text": "Find movies in my area. Save theater info and showtimes for the dashboard. [template: My Movies]",
@@ -28,12 +34,6 @@
     "title": "Covered Call Strategy For Tickler",
     "text": "I want to sell covered call on {$Ticker}, show me appropriate strikes and delta. low probability less than 0.30. EXPIRY DATE {$CheckIn:date}.",
     "createdAt": "2026-03-24T02:01:03.553Z"
-  },
-  {
-    "id": "93222154-72d0-48b5-a674-d7a58db98e4c",
-    "title": "Major US and Ukraine News App",
-    "text": "List major news, in US and in Ukraine. use applet HTML, BIG CLEAN, SIMPLE, DARK MODE",
-    "createdAt": "2026-03-21T19:45:09.825Z"
   },
   {
     "id": "0f0acedf-56d5-4d5a-a059-05526682281b",

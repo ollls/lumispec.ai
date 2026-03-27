@@ -43,6 +43,7 @@ src/
     prompts.js             # Prompt library CRUD + reorder + LLM-generated titles
     sessions.js            # Session prompts CRUD (upsert by color, reorder, PATCH title, LLM-generated titles)
     tools.js               # List tools, toggle enable/disable
+    templates.js           # Template CRUD, sanitizer, LLM optimize endpoint
   services/
     ...
     sessions.js            # Session prompts persistence + reorder + update
@@ -50,7 +51,7 @@ src/
   services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
-    tools.js               # Tool registry, system prompt, parser, executor, tool call logger
+    tools.js               # Tool registry, tool groups, system prompt assembly, parser, executor, tool call logger
     slots.js               # Slot monitor (polling, assignment, pin/unpin)
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
@@ -95,7 +96,9 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/sessions/:id` | PATCH/DELETE | Update title/text / delete session prompt |
 | `/api/sessions/reorder` | PUT | Reorder sessions |
 | `/api/templates/:id` | PATCH/DELETE | Update name / delete template |
+| `/api/templates/:id/optimize` | POST | LLM-powered template optimization |
 | `/api/templates/reorder` | PUT | Reorder templates |
+| `/files/*` | GET | Serve project directory files (SOURCE_DIR) |
 | `/api/config` | GET | Public config (location) |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
@@ -125,15 +128,31 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
 
+### Tool Groups
+System prompt is dynamically assembled from `toolGroups` in `src/services/tools.js`. Each group defines member tools, optional conditions, routing lines, and prompt text. When a group is disabled (all tools toggled off or condition not met), its prompt sections, routing, and runtime behaviors are excluded.
+
+| Group | Tools | Condition | Effect when disabled |
+|---|---|---|---|
+| `finance` | `etrade_account` | `etrade.isAuthenticated()` | No finance prompts (~60 lines), no chain continuation/fabrication guards |
+| `travel` | `hotel`, `travel`, `booking` | — | No travel prompts, booking flow rules |
+| `source` | `source_read/write/edit/delete/git/run/test/project` | `config.sourceDir` | No self-awareness section |
+| `web` | `web_search`, `web_fetch` | — | No web research rules |
+| `execution` | `run_command`, `run_python` | — | No code execution rules |
+| `core` | `current_datetime` | — | (no extra prompt) |
+
+Cross-group warnings (e.g. "NEVER use etrade for travel") only appear when both groups are active. `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
+
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
 - Max 4 parallel tool calls per round (excess dropped)
 - Bare/malformed JSON tool calls trigger retry prompts (skipped when response contains `<applet>` blocks)
 - Safety net catches unparsed tool calls in final content (also skipped for applet responses)
-- Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data
+- Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data (finance group only)
+- Fabrication detector: catches LLM presenting Greeks/prices without fetching data (finance group only)
 - Tool call logging to `logs/` directory
 - Queue-based command confirmation: parallel `run_command` calls confirmed FIFO (not single-slot)
 - Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
+- run_python auto-fixes: Python booleans (`fixPythonBooleans`), backslash+newline double-escaping in string literals
 
 ### Registered Tools
 | Tool | Description |
@@ -141,11 +160,8 @@ Safety mechanisms:
 | `current_datetime` | Returns UTC, local time, IANA timezone, UTC offset |
 | `web_search` | Web search via Keiro and/or Tavily (configurable) |
 | `web_fetch` | Fetch URL, extract content as markdown (Readability + Turndown) |
-| `save_file` | Save content to `data/` dir, returns download URL |
-| `list_files` | List files in data directory with size and date |
-| `file_read` | Read file contents from data dir (optional head N lines, CSV truncation) |
 | `run_command` | Shell command execution via async exec (non-blocking), 30s timeout |
-| `run_python` | Execute Python script in venv, cwd=data dir, 120s timeout |
+| `run_python` | Execute Python script in venv, cwd=SOURCE_DIR, 120s timeout. Auto-fixes Python booleans and newline escaping |
 | `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
 | `source_write` | Write/create source files. Path-escape protected, confirmation required. Scoped to SOURCE_DIR |
 | `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
@@ -159,7 +175,7 @@ Safety mechanisms:
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
 | `booking` | LiteAPI: prebook, book, list bookings, booking details, cancel |
 
-Tools are registered in `src/services/tools.js` — add new tools to the `tools` object with `description`, `parameters`, and `execute` function. Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`.
+Tools are registered in `src/services/tools.js` — add new tools to the `tools` object with `description`, `parameters`, and `execute` function. Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`. Add tool-specific prompt sections via `toolGroups`.
 
 ### Applet System
 Prompt-based interactive HTML visualizations rendered in sandboxed iframes within assistant chat bubbles. Not a tool — the LLM emits `<applet type="TYPE">` blocks in its final response content.
@@ -243,17 +259,29 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 - Stays visible with final time after response completes
 
 **Frontend rendering** (app.js):
-- `extractApplets(text)` — regex-extracts `<applet>` blocks BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify
-- `createAppletIframe(applet)` — builds sandboxed iframe (`sandbox="allow-scripts"`), auto-injects Chart.js for `type="chartjs"`, auto-injects ResizeObserver-based resize script, validates content (`type="html"` always valid; others must contain `<script>`/`<svg>`/`<canvas>`), enforces 50KB cap, falls back to collapsible code block
+- `extractApplets(text)` — regex-extracts `<applet>` blocks (single or double quotes on `type` attr) BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify
+- `createAppletIframe(applet)` — builds sandboxed iframe (`sandbox="allow-scripts allow-same-origin"`), auto-injects Chart.js for `type="chartjs"`, auto-injects resize script (ResizeObserver + image load listeners + MutationObserver), validates content (`type="html"` always valid; others must contain `<script>`/`<svg>`/`<canvas>`), enforces 50KB cap, falls back to collapsible code block
 - `renderFormattedContent()` — calls extractApplets first, runs cleaned text through marked+DOMPurify, then replaces placeholders with iframes
-- Global `message` listener for iframe resize (100-2000px height cap)
+- Global `message` listener for iframe resize (100-20000px height cap, scroll fallback when exceeded)
+- Resize measurement: temporarily sets `overflow:visible` on body to get true `scrollHeight`, then restores
 - Streaming safety: partial `<applet>` tags don't match regex (needs both open+close), render as text until final render
 
 **Context management** (conversations.js): Assistant messages in history have `<applet>...</applet>` blocks replaced with `[Applet: TYPE visualization]` before sending to LLM, preserving stored content for frontend re-rendering.
 
 **Chart.js**: Served as static file from `src/public/lib/chart.min.js` at `/lib/chart.min.js` — no CDN dependency.
 
-**Security**: `sandbox="allow-scripts"` without `allow-same-origin` = JS runs but fully isolated from parent DOM, cookies, localStorage. postMessage resize is the only parent communication channel.
+**Security**: `sandbox="allow-scripts allow-same-origin"` allows JS execution and fetch to same-origin `/files/` endpoints. postMessage resize is the parent communication channel.
+
+### Template Sanitizer & Optimizer
+**Sanitizer** (`sanitizeTemplate()` in `src/routes/templates.js`): Runs automatically on POST and PATCH. Fixes Python-in-JS (None→null, True→true inside `<script>` blocks only), CDN→local Chart.js, stray semicolons. Deterministic, no LLM.
+
+**LLM Optimizer** (`POST /api/templates/:id/optimize`): Sends template HTML to LLM with optimization prompt. Fixes: hardcoded data → fetch from `/files/`, empty selects → dynamic population, missing error handling, missing resize postMessage. Frontend ⚡ button in Templates dropdown, disables after success.
+
+### File Serving
+Project directory files served at `/files/` via dynamic Express middleware (follows `source_project` switches). Applets fetch data from `/files/FILENAME`. run_python writes to cwd (SOURCE_DIR) — files are automatically available at `/files/`. `/files/` is a read URL, not a filesystem write path.
+
+### Click-to-Copy
+Clicking any word in an assistant message bubble appends it to the input textarea. Uses `caretPositionFromPoint`/`caretRangeFromPoint` for precise word detection. Skips text selection and non-assistant bubbles.
 
 ## SSE Event Types
 The `/api/conversations/:id/messages` endpoint streams these SSE events:
@@ -275,7 +303,7 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 
 ## Key Architecture Details
 - `.env` file is **required** — config.js exits if missing
-- `data/` dir served as static files at `/files/` path
+- Project directory (`SOURCE_DIR`) served at `/files/` path (dynamic, follows `source_project` switches)
 - llama-server sends `timings` (not OpenAI `usage`) — backend normalizes to `usage` format
 - Tool results sent to LLM as `user` role messages: `Tool "name" result: {json}`
 - Large tool results: auto-saved to file, only summary sent to LLM context (markdown tables truncated to 30 rows)

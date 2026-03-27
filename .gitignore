@@ -6,5 +6,7 @@ data/*
 !data/templates.json
 !data/sessions.json
 !data/compacts.json
+!data/tasks.json
+!data/TASK_PIPELINE.md
 logs/
 .claude/settings.local.json

@@ -13,6 +13,8 @@ const state = {
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
   location: '', // from server config (LOCATION env var)
   compactColors: new Set(), // colors that have compact prompts configured
+  listMode: false, // bullet list editing mode
+  reviewEnabled: localStorage.getItem('reviewEnabled') === 'true', // pause after each task step
 };
 
 // Colorize diff text — lines starting with +/-/@@ get green/red/cyan
@@ -112,6 +114,8 @@ const imagePreviewStrip = document.getElementById('image-preview-strip');
 const appletToggle = document.getElementById('applet-toggle');
 const autorunToggle = document.getElementById('autorun-toggle');
 const thinkToggle = document.getElementById('think-toggle');
+const reviewToggle = document.getElementById('review-toggle');
+const reviewToggleLabel = document.getElementById('review-toggle-label');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const saveSessionBtn = document.getElementById('save-session-btn');
 const sessionList = document.getElementById('session-list');
@@ -122,6 +126,10 @@ const compactList = document.getElementById('compact-list');
 const compactsToggle = document.getElementById('compacts-toggle');
 const compactsDropdown = document.getElementById('compacts-dropdown');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
+const listModeBtn = document.getElementById('list-mode-btn');
+const taskList = document.getElementById('task-list');
+const tasksToggle = document.getElementById('tasks-toggle');
+const tasksDropdown = document.getElementById('tasks-dropdown');
 const promptList = document.getElementById('prompt-list');
 const promptsToggle = document.getElementById('prompts-toggle');
 const promptsDropdown = document.getElementById('prompts-dropdown');
@@ -473,7 +481,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{min-height:0!important;margin:0;overflow:hidden}img{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html{overflow-x:auto;overflow-y:hidden}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -499,7 +507,7 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   iframe.className = 'applet-iframe';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:hidden;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:auto;display:block';
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
@@ -1107,6 +1115,335 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
   }
 }
 
+// ── Task processor ────────────────────────────────────
+function parseTaskList(text) {
+  const lines = text.split('\n');
+  const tasks = [];
+  let current = null;
+  for (const line of lines) {
+    const topMatch = line.match(/^- (.+)/);
+    const subMatch = line.match(/^ {2,}- (.+)/);
+    if (subMatch && current) {
+      current.subtasks.push(subMatch[1].trim());
+    } else if (topMatch) {
+      current = { text: topMatch[1].trim(), subtasks: [] };
+      tasks.push(current);
+    }
+  }
+  // Simplify: tasks with no subtasks → just the text string
+  return tasks.map(t => t.subtasks.length > 0 ? t : t.text);
+}
+
+async function sendTasks(tasks, displayText) {
+  if (!state.currentConversationId) return;
+
+  appendMessage('user', displayText);
+  const bubble = appendMessage('assistant', '');
+  sendBtn.disabled = true;
+  startElapsedTimer();
+
+  bubble.textContent = '';
+  const taskSections = new Map(); // index → { header, toolContainer, contentSpan }
+  let currentSection = null;
+
+  state.abortController = new AbortController();
+  _lastRenderTime = 0;
+  clearTimeout(_renderTimer);
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tasks,
+        applets: state.appletsEnabled,
+        autorun: state.autorunEnabled,
+        review: state.reviewEnabled,
+      }),
+      signal: state.abortController.signal,
+    });
+
+    setTimeout(refreshSlots, 500);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const data = JSON.parse(payload);
+
+            // ── Task lifecycle events ──
+            if (data.task_start) {
+              const { index, total, text, subtasks } = data.task_start;
+              const section = document.createElement('div');
+              section.className = 'task-section mt-3 first:mt-0';
+              const header = document.createElement('div');
+              header.className = 'text-xs font-medium text-indigo-400 border-b border-zinc-700 pb-1 mb-2';
+              header.textContent = `Task ${index + 1}/${total}: ${text}`;
+              section.appendChild(header);
+
+              const toolContainer = document.createElement('div');
+              toolContainer.className = 'tool-use-container';
+              section.appendChild(toolContainer);
+
+              const contentSpan = document.createElement('span');
+              section.appendChild(contentSpan);
+
+              bubble.appendChild(section);
+              currentSection = { section, header, toolContainer, contentSpan, accumulated: '', accumulatedReasoning: '', hasReasoning: false, reasoningDetails: null, reasoningBody: null };
+              taskSections.set(index, currentSection);
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.subtask_start && currentSection) {
+              const { subtaskIndex, total, text } = data.subtask_start;
+              const subHeader = document.createElement('div');
+              subHeader.className = 'text-xs text-zinc-400 ml-3 mt-2 mb-1';
+              subHeader.textContent = `  Subtask ${subtaskIndex + 1}/${total}: ${text}`;
+              currentSection.section.insertBefore(subHeader, currentSection.contentSpan);
+              // Reset per-subtask accumulators
+              currentSection.accumulated = '';
+              currentSection.accumulatedReasoning = '';
+              // Create fresh content span for this subtask
+              const newContentSpan = document.createElement('span');
+              newContentSpan.className = 'ml-3 block';
+              currentSection.section.insertBefore(newContentSpan, currentSection.contentSpan);
+              currentSection.contentSpan = newContentSpan;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.subtask_complete) {
+              // Finalize subtask content rendering
+              if (currentSection && currentSection.accumulated) {
+                renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
+              }
+            }
+
+            if (data.task_complete) {
+              // Finalize task content rendering
+              if (currentSection && currentSection.accumulated) {
+                renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
+              }
+              if (currentSection?.hasReasoning && currentSection.reasoningDetails) {
+                currentSection.reasoningDetails.querySelector('summary').textContent = 'Thought process';
+              }
+              currentSection = null;
+            }
+
+            if (data.task_review) {
+              // Pause for user review — show Continue/Retry buttons
+              const reviewDiv = document.createElement('div');
+              reviewDiv.className = 'flex gap-2 my-2 ml-1';
+              const continueBtn = document.createElement('button');
+              continueBtn.className = 'px-3 py-1 bg-green-600/20 text-green-400 border border-green-500/30 rounded text-xs hover:bg-green-600/30';
+              continueBtn.textContent = 'Continue';
+              const retryBtn = document.createElement('button');
+              retryBtn.className = 'px-3 py-1 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded text-xs hover:bg-amber-600/30';
+              retryBtn.textContent = 'Retry';
+              reviewDiv.appendChild(continueBtn);
+              reviewDiv.appendChild(retryBtn);
+              bubble.appendChild(reviewDiv);
+              responseArea.scrollTop = responseArea.scrollHeight;
+              const respond = async (action) => {
+                reviewDiv.remove();
+                await fetch(`/api/conversations/${state.currentConversationId}/task-review`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action }),
+                });
+              };
+              continueBtn.addEventListener('click', () => respond('continue'));
+              retryBtn.addEventListener('click', () => respond('retry'));
+            }
+
+            if (data.task_error) {
+              const errDiv = document.createElement('div');
+              errDiv.className = 'text-red-400 text-sm mt-2';
+              errDiv.textContent = `Error: ${data.task_error.error}`;
+              if (currentSection) {
+                currentSection.section.appendChild(errDiv);
+              } else {
+                bubble.appendChild(errDiv);
+              }
+            }
+
+            // ── Standard streaming events (routed to current section) ──
+            if (data.reasoning && currentSection && state.thinkEnabled) {
+              if (!currentSection.hasReasoning) {
+                currentSection.hasReasoning = true;
+                const details = document.createElement('details');
+                details.className = 'mb-2 text-zinc-500 text-xs';
+                details.open = true;
+                const summary = document.createElement('summary');
+                summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+                summary.textContent = 'Thinking…';
+                const body = document.createElement('pre');
+                body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
+                details.appendChild(summary);
+                details.appendChild(body);
+                currentSection.section.insertBefore(details, currentSection.toolContainer);
+                currentSection.reasoningDetails = details;
+                currentSection.reasoningBody = body;
+              }
+              currentSection.accumulatedReasoning += data.reasoning;
+              currentSection.reasoningBody.textContent = currentSection.accumulatedReasoning;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.tool_content && currentSection && state.thinkEnabled) {
+              if (!currentSection.toolContainer._thinkingEl) {
+                const el = document.createElement('details');
+                el.className = 'mb-2 text-zinc-500 text-xs';
+                el.open = true;
+                el.innerHTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
+                const body = document.createElement('pre');
+                body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+                el.appendChild(body);
+                currentSection.toolContainer.appendChild(el);
+                currentSection.toolContainer._thinkingEl = body;
+              }
+              currentSection.toolContainer._thinkingEl.textContent += data.tool_content;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.tool_status && currentSection && state.thinkEnabled) {
+              const prev = currentSection.toolContainer.querySelector('.tool-status-msg');
+              if (prev) prev.remove();
+              const statusEl = document.createElement('div');
+              statusEl.className = 'tool-status-msg text-xs text-indigo-400 py-1 animate-pulse';
+              statusEl.textContent = data.tool_status;
+              currentSection.toolContainer.appendChild(statusEl);
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.tool_use && currentSection) {
+              // Clean up thinking element
+              if (currentSection.toolContainer._thinkingEl) {
+                const thinkDetails = currentSection.toolContainer._thinkingEl.closest('details');
+                thinkDetails.open = false;
+                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                delete currentSection.toolContainer._thinkingEl;
+              }
+              // Remove status messages
+              currentSection.toolContainer.querySelectorAll('.tool-status-msg').forEach(el => el.remove());
+
+              if (state.thinkEnabled) {
+                const detail = document.createElement('details');
+                detail.className = 'mb-1 text-zinc-500 text-xs';
+                const summary = document.createElement('summary');
+                summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+                summary.textContent = `Used ${data.tool_use.name}`;
+                detail.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+                try {
+                  const parsed = JSON.parse(data.tool_use.result);
+                  if (parsed._diff) {
+                    pre.innerHTML = colorizeDiff(parsed._diff);
+                  } else if (parsed._markdown) {
+                    pre.textContent = parsed._markdown.slice(0, 2000);
+                  } else {
+                    pre.textContent = JSON.stringify(parsed, null, 2).slice(0, 2000);
+                  }
+                } catch {
+                  pre.textContent = String(data.tool_use.result).slice(0, 2000);
+                }
+                detail.appendChild(pre);
+                currentSection.toolContainer.appendChild(detail);
+              }
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.confirm_command && currentSection) {
+              const confirmDiv = document.createElement('div');
+              confirmDiv.className = 'my-2 p-2 bg-zinc-800 border border-amber-500/30 rounded-lg text-sm';
+              confirmDiv.innerHTML = `<div class="text-amber-400 text-xs mb-1">Confirm command:</div><pre class="text-zinc-300 text-xs whitespace-pre-wrap mb-2">${data.confirm_command.command}</pre>`;
+              const btnRow = document.createElement('div');
+              btnRow.className = 'flex gap-2';
+              const approveBtn = document.createElement('button');
+              approveBtn.className = 'px-3 py-1 bg-green-600/20 text-green-400 border border-green-500/30 rounded text-xs hover:bg-green-600/30';
+              approveBtn.textContent = 'Approve';
+              const denyBtn = document.createElement('button');
+              denyBtn.className = 'px-3 py-1 bg-red-600/20 text-red-400 border border-red-500/30 rounded text-xs hover:bg-red-600/30';
+              denyBtn.textContent = 'Deny';
+              btnRow.appendChild(approveBtn);
+              btnRow.appendChild(denyBtn);
+              confirmDiv.appendChild(btnRow);
+              currentSection.section.insertBefore(confirmDiv, currentSection.contentSpan);
+              const respond = async (approved) => {
+                await fetch(`/api/conversations/${state.currentConversationId}/confirm`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ approved }),
+                });
+                confirmDiv.remove();
+              };
+              approveBtn.addEventListener('click', () => respond(true));
+              denyBtn.addEventListener('click', () => respond(false));
+            }
+
+            if (data.content && currentSection) {
+              // Clean up thinking element on first content
+              if (currentSection.toolContainer._thinkingEl) {
+                const thinkDetails = currentSection.toolContainer._thinkingEl.closest('details');
+                thinkDetails.open = false;
+                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                delete currentSection.toolContainer._thinkingEl;
+              }
+              currentSection.accumulated += data.content;
+              scheduleRender(currentSection.accumulated, currentSection.contentSpan);
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+
+            if (data.usage) {
+              const total = data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
+              updateContextBar(total);
+            }
+
+            if (data.error) {
+              const errDiv = document.createElement('div');
+              errDiv.className = 'text-red-400 text-sm mt-2';
+              errDiv.textContent = `Error: ${data.error}`;
+              bubble.appendChild(errDiv);
+            }
+
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      bubble.textContent = `[Error: ${err.message}]`;
+      bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+    }
+  } finally {
+    clearTimeout(_renderTimer);
+    stopElapsedTimer();
+    // Final render pass for any remaining section
+    for (const [, sec] of taskSections) {
+      if (sec.accumulated) renderFormattedContent(sec.accumulated, sec.contentSpan, { renderMermaid: true });
+    }
+    state.abortController = null;
+    sendBtn.disabled = false;
+    input.focus();
+    refreshSidebar();
+    refreshSlots();
+  }
+}
+
 // ── Context bar ───────────────────────────────────────
 function updateContextBar(tokens) {
   state.lastTokenCount = tokens;
@@ -1599,13 +1936,32 @@ form.addEventListener('submit', async (e) => {
   input.value = '';
   input.style.height = 'auto';
   clearPendingImages();
+  // List mode: parse bullets into structured tasks and run task processor
+  if (state.listMode) {
+    const tasks = parseTaskList(content);
+    if (tasks.length > 0) {
+      toggleListMode(false);
+      await sendTasks(tasks, content);
+      return;
+    }
+  }
   await sendMessage(content, images);
 });
 
-// Auto-resize textarea
+// Auto-resize textarea + list mode auto-detection
 input.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  if (state.listMode) {
+    // Exit list mode if textarea no longer has any bullets
+    if (!input.value.includes('- ')) toggleListMode(false);
+  } else {
+    // Auto-activate list mode if content looks like a bullet list (e.g. pasted)
+    const lines = input.value.trimStart().split('\n');
+    if (lines.length >= 2 && lines[0].startsWith('- ') && lines.filter(l => l.match(/^( {2,})?- /)).length === lines.filter(l => l.trim()).length) {
+      toggleListMode(true);
+    }
+  }
 });
 
 // Ctrl+Enter / Cmd+Enter to submit
@@ -1613,8 +1969,95 @@ input.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     form.requestSubmit();
+    return;
+  }
+
+  // ── List mode keyboard handling ──
+  if (state.listMode) {
+    const pos = input.selectionStart;
+    const val = input.value;
+    const beforeCursor = val.slice(0, pos);
+    const lastNewline = beforeCursor.lastIndexOf('\n');
+    const lineStart = lastNewline + 1;
+    const linePrefix = val.slice(lineStart, pos);
+    // Detect current indent: count leading spaces before "- "
+    const indentMatch = val.slice(lineStart).match(/^( *)-/);
+    const currentIndent = indentMatch ? indentMatch[1] : '';
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      // New bullet at same indent level
+      input.value = val.slice(0, pos) + '\n' + currentIndent + '- ' + val.slice(pos);
+      const newPos = pos + 1 + currentIndent.length + 2;
+      input.selectionStart = input.selectionEnd = newPos;
+      input.dispatchEvent(new Event('input'));
+    } else if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault();
+      // Indent: add 2 spaces at line start (only allow 1 level = 2 spaces)
+      if (currentIndent.length < 2 && lineStart > 0) {
+        input.value = val.slice(0, lineStart) + '  ' + val.slice(lineStart);
+        input.selectionStart = input.selectionEnd = pos + 2;
+        input.dispatchEvent(new Event('input'));
+      }
+    } else if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault();
+      // Outdent: remove 2 leading spaces
+      if (currentIndent.length >= 2) {
+        input.value = val.slice(0, lineStart) + val.slice(lineStart + 2);
+        input.selectionStart = input.selectionEnd = pos - 2;
+        input.dispatchEvent(new Event('input'));
+      }
+    } else if (e.key === 'Backspace') {
+      // Indented empty bullet "  - " → outdent to "- " first
+      if (linePrefix.match(/^ +- $/)) {
+        e.preventDefault();
+        if (currentIndent.length >= 2) {
+          // Outdent
+          input.value = val.slice(0, lineStart) + val.slice(lineStart + 2);
+          input.selectionStart = input.selectionEnd = pos - 2;
+        } else if (lineStart === 0) {
+          // First line top-level empty bullet — exit list mode
+          input.value = val.slice(pos);
+          input.selectionStart = input.selectionEnd = 0;
+          toggleListMode(false);
+        } else {
+          // Remove "\n- "
+          input.value = val.slice(0, lineStart - 1) + val.slice(pos);
+          input.selectionStart = input.selectionEnd = lineStart - 1;
+        }
+        input.dispatchEvent(new Event('input'));
+      }
+    }
   }
 });
+
+// ── List mode ─────────────────────────────────────────
+function toggleListMode(force) {
+  state.listMode = typeof force === 'boolean' ? force : !state.listMode;
+  listModeBtn.classList.toggle('text-indigo-400', state.listMode);
+  listModeBtn.classList.toggle('text-zinc-500', !state.listMode);
+  reviewToggleLabel.classList.toggle('hidden', !state.listMode);
+  updateListModeSaveButtons();
+  if (state.listMode) {
+    // Prefix first bullet if textarea is empty or doesn't start with "- "
+    if (!input.value.startsWith('- ')) {
+      const prev = input.value;
+      input.value = '- ' + prev;
+      input.selectionStart = input.selectionEnd = input.value.length;
+    }
+    input.focus();
+  }
+}
+
+function updateListModeSaveButtons() {
+  const disabled = state.listMode;
+  saveSessionBtn.disabled = disabled;
+  saveCompactBtn.disabled = disabled;
+  saveSessionBtn.style.opacity = disabled ? '0.3' : '';
+  saveCompactBtn.style.opacity = disabled ? '0.3' : '';
+}
+
+listModeBtn.addEventListener('click', () => toggleListMode());
 
 // ── Image handling ────────────────────────────────────
 function addPendingImage(file) {
@@ -1684,6 +2127,13 @@ thinkToggle.addEventListener('change', () => {
   localStorage.setItem('thinkEnabled', state.thinkEnabled);
 });
 
+// Review toggle (visible only in list mode)
+reviewToggle.checked = state.reviewEnabled;
+reviewToggle.addEventListener('change', () => {
+  state.reviewEnabled = reviewToggle.checked;
+  localStorage.setItem('reviewEnabled', state.reviewEnabled);
+});
+
 imageInput.addEventListener('change', () => {
   for (const file of imageInput.files) {
     addPendingImage(file);
@@ -1728,6 +2178,7 @@ promptsToggle.addEventListener('click', (e) => {
   templatesDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
+  tasksDropdown.classList.add('hidden');
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1740,6 +2191,7 @@ templatesToggle.addEventListener('click', (e) => {
   toolsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
+  tasksDropdown.classList.add('hidden');
   templatesDropdown.classList.toggle('hidden');
   if (!templatesDropdown.classList.contains('hidden')) refreshTemplates();
 });
@@ -1752,6 +2204,7 @@ sessionsToggle.addEventListener('click', (e) => {
   toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
+  tasksDropdown.classList.add('hidden');
   sessionsDropdown.classList.toggle('hidden');
   if (!sessionsDropdown.classList.contains('hidden')) refreshSessions();
 });
@@ -1764,10 +2217,24 @@ compactsToggle.addEventListener('click', (e) => {
   toolsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
+  tasksDropdown.classList.add('hidden');
   compactsDropdown.classList.toggle('hidden');
   if (!compactsDropdown.classList.contains('hidden')) refreshCompacts();
 });
 compactsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Tasks dropdown ──────────────────────────────────
+tasksToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
+  compactsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
+  tasksDropdown.classList.toggle('hidden');
+  if (!tasksDropdown.classList.contains('hidden')) refreshTasks();
+});
+tasksDropdown.addEventListener('click', (e) => e.stopPropagation());
 
 function renderCompacts(compacts) {
   compactList.innerHTML = '';
@@ -2162,6 +2629,7 @@ document.addEventListener('click', (e) => {
   if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
   if (e.target !== sessionsToggle) sessionsDropdown.classList.add('hidden');
   if (e.target !== compactsToggle) compactsDropdown.classList.add('hidden');
+  if (e.target !== tasksToggle) tasksDropdown.classList.add('hidden');
 });
 
 // ── Tools Panel ──────────────────────────────────────
@@ -2170,6 +2638,7 @@ toolsToggle.addEventListener('click', (e) => {
   promptsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
+  tasksDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   toolsDropdown.classList.toggle('hidden');
   if (!toolsDropdown.classList.contains('hidden')) refreshTools();
@@ -2596,9 +3065,112 @@ function renderPrompts(prompts) {
   }
 }
 
+// ── Tasks ─────────────────────────────────────────────
+async function refreshTasks() {
+  try {
+    const tasks = await (await fetch('/api/tasks')).json();
+    renderTasks(tasks);
+  } catch {}
+}
+
+function renderTasks(tasks) {
+  taskList.innerHTML = '';
+  let dragSrcEl = null;
+
+  for (const t of tasks) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors cursor-pointer';
+    item.dataset.id = t.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      taskList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      taskList.insertBefore(dragSrcEl, item);
+      const ids = [...taskList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/tasks/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs text-zinc-300';
+    titleSpan.textContent = t.title || t.text.slice(0, 60);
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/tasks/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
+      refreshTasks();
+    });
+
+    item.addEventListener('click', () => {
+      if (!requireSession()) return;
+      // Load task text into input and activate list mode
+      input.value = t.text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      if (t.text.startsWith('- ')) {
+        if (!state.listMode) toggleListMode(true);
+      }
+      input.focus();
+    });
+
+    item.appendChild(grip);
+    item.appendChild(titleSpan);
+    item.appendChild(editBtn);
+    item.appendChild(delBtn);
+    taskList.appendChild(item);
+  }
+}
+
 clearPromptBtn.addEventListener('click', () => {
   input.value = '';
   input.style.height = 'auto';
+  if (state.listMode) toggleListMode(false);
   input.focus();
 });
 
@@ -2609,14 +3181,20 @@ savePromptBtn.addEventListener('click', async () => {
   savePromptBtn.disabled = true;
   savePromptBtn.style.opacity = '0.5';
   try {
-    await fetch('/api/prompts', {
+    const endpoint = state.listMode ? '/api/tasks' : '/api/prompts';
+    await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
     input.value = '';
     input.style.height = 'auto';
-    refreshPrompts();
+    if (state.listMode) {
+      toggleListMode(false);
+      refreshTasks();
+    } else {
+      refreshPrompts();
+    }
   } finally {
     savePromptBtn.disabled = false;
     savePromptBtn.style.opacity = '';
@@ -2775,6 +3353,7 @@ saveCompactBtn.addEventListener('click', async () => {
   refreshPrompts();
   refreshSessions();
   refreshCompacts();
+  refreshTasks();
   pollLLM();
   setInterval(pollLLM, 5000);
   pollInternet();

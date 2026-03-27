@@ -14,6 +14,8 @@ import toolRoutes from './routes/tools.js';
 import templateRoutes from './routes/templates.js';
 import sessionRoutes from './routes/sessions.js';
 import compactRoutes from './routes/compacts.js';
+import taskRoutes from './routes/tasks.js';
+import taskProcessorRoutes from './routes/taskProcessor.js';
 import slots from './services/slots.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +36,8 @@ app.use('/api/tools', toolRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/compacts', compactRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/conversations', taskProcessorRoutes);
 
 // Serve project directory files (follows source_project switches)
 app.use('/files', (req, res, next) => {

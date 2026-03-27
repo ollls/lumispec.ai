@@ -161,6 +161,12 @@
           </div>
         </div>
         <div class="relative flex items-center">
+          <button id="tasks-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Saved task lists — click to load into input">Tasks</button>
+          <div id="tasks-dropdown" class="hidden absolute top-full left-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+            <div id="task-list" class="py-1"></div>
+          </div>
+        </div>
+        <div class="relative flex items-center">
           <button id="templates-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Saved applet templates — click to insert [template: name] tag">Templates</button>
           <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="template-list" class="py-1"></div>
@@ -237,6 +243,14 @@
           <div class="flex flex-col items-center shrink-0 py-1 gap-0.5">
             <button
               type="button"
+              id="list-mode-btn"
+              title="Task list mode — each bullet runs as a separate LLM step with isolated context"
+              class="text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 cursor-pointer"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
+            </button>
+            <button
+              type="button"
               id="attach-btn"
               title="Attach image"
               class="text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 text-lg"
@@ -266,6 +280,11 @@
               class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 text-xs cursor-pointer select-none">
               <input type="checkbox" id="think-toggle" class="accent-indigo-500 w-3.5 h-3.5" checked>
               Think
+            </label>
+            <label id="review-toggle-label" title="Pause after each task step for review before continuing"
+              class="hidden flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" id="review-toggle" class="accent-amber-500 w-3.5 h-3.5">
+              Review
             </label>
           </div>
           <textarea
