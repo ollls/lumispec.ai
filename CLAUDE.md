@@ -34,7 +34,15 @@ export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 ```
 src/
   config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir, sourceTest)
-  server.js                # Express server, entry point, starts slot polling, /api/config endpoint
+  server.js                # Express server, entry point, calls loadPlugins() before listen, starts slot polling
+  tools/
+    index.js               # Core: plugin loader, registry, executor, parser, logging, confirmation, system prompt assembly
+    plugin-core.js         # current_datetime
+    plugin-web.js          # web_search, web_fetch + Tavily/Keiro search backends
+    plugin-execution.js    # run_python
+    plugin-source.js       # source_read/write/edit/delete/git/run/test/project, template_save + file locks, diff helpers
+    plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
+    plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands
     slots.js               # Slot status, pin/unpin endpoints
@@ -45,18 +53,15 @@ src/
     tools.js               # List tools, toggle enable/disable
     templates.js           # Template CRUD, sanitizer, LLM optimize endpoint
   services/
-    ...
-    sessions.js            # Session prompts persistence + reorder + update
-    templates.js           # Template persistence + reorder + update
-  services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
-    tools.js               # Tool registry, tool groups, system prompt assembly, parser, executor, tool call logger
+    tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
     slots.js               # Slot monitor (polling, assignment, pin/unpin)
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
     liteapi.js             # LiteAPI hotel/travel client
+    templates.js           # Template persistence + reorder + update
   views/index.html         # Main chat UI (full-width top bar, sidebar, slot panel)
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
   public/css/              # Tailwind input/output
@@ -128,19 +133,68 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
 
-### Tool Groups
-System prompt is dynamically assembled from `toolGroups` in `src/services/tools.js`. Each group defines member tools, optional conditions, routing lines, and prompt text. When a group is disabled (all tools toggled off or condition not met), its prompt sections, routing, and runtime behaviors are excluded.
+### Plugin Architecture
+Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin is a self-contained ES module auto-discovered by `loadPlugins()` at startup. The core index (`src/tools/index.js`) handles registration, system prompt assembly, parsing, execution, logging, and confirmation. `src/services/tools.js` is a backward-compat barrel that re-exports everything from `../tools/index.js`.
 
-| Group | Tools | Condition | Effect when disabled |
+#### Plugin Interface
+Each `plugin-*.js` exports a default object:
+
+```javascript
+export default {
+  group: 'mygroup',                              // group name (unique, used in toolGroups registry)
+  condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
+  routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
+  prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
+  tools: {
+    my_tool: {
+      description: 'What this tool does. First line shown in tool list.',
+      parameters: { param1: 'string', param2: 'number' },
+      execute: async (args, context) => {
+        // args = parsed arguments from LLM
+        // context = { conversationId, sendSSE, autorun } (from conversations.js)
+        return { result: 'data' };  // returned object is JSON.stringify'd and sent to LLM
+      },
+    },
+  },
+};
+```
+
+#### Creating a New Plugin
+
+1. Create `src/tools/plugin-mygroup.js` with the interface above
+2. Restart the server — `loadPlugins()` auto-discovers all `plugin-*.js` files (sorted alphabetically)
+3. No changes needed to routes, index, barrel, or any other file
+
+**Key details:**
+- `group` must be unique across all plugins
+- `condition` is re-evaluated on each message (dynamic activation, e.g. auth state)
+- `routing` lines are merged into the "Tool Routing" system prompt section
+- `prompt` is injected into the system prompt when the group is active (has enabled tools + condition met)
+- `tools` object: each key is the tool name, value has `description`, `parameters`, and `execute`
+- `execute` receives `(args, context)` — `context` has `conversationId`, `sendSSE()` for streaming status, and `autorun` flag
+- Return plain objects from `execute` — they're auto-stringified. Use `_markdown` key for rich frontend display, `_diff` for diff previews, `_images` for base64 image data (all stripped from LLM context, sent to frontend via SSE)
+- Tools are automatically available in the tool list, system prompt, and toggle API
+
+**Shared helpers** (import from `../tools/index.js`):
+- `fixPythonBooleans(code)` — convert JS-style booleans/null to Python equivalents
+- `tagLineCount(stdout, limit)` — truncate output + append line count annotation
+- `logToolCall(name, action, data)` — write to daily log file in `logs/`
+- `requestConfirmation(conversationId, command)` — queue-based user approval (returns Promise<boolean>)
+
+**Cross-group warnings** (e.g. "NEVER use etrade for travel") are handled in `getSystemPrompt()` in the core index, not in individual plugins.
+
+#### Tool Groups
+
+| Group | Plugin | Tools | Condition |
 |---|---|---|---|
-| `finance` | `etrade_account` | `etrade.isAuthenticated()` | No finance prompts (~60 lines), no chain continuation/fabrication guards |
-| `travel` | `hotel`, `travel`, `booking` | — | No travel prompts, booking flow rules |
-| `source` | `source_read/write/edit/delete/git/run/test/project` | `config.sourceDir` | No self-awareness section |
-| `web` | `web_search`, `web_fetch` | — | No web research rules |
-| `execution` | `run_command`, `run_python` | — | No code execution rules |
-| `core` | `current_datetime` | — | (no extra prompt) |
+| `core` | plugin-core.js | `current_datetime` | — |
+| `web` | plugin-web.js | `web_search`, `web_fetch` | — |
+| `execution` | plugin-execution.js | `run_python` | — |
+| `source` | plugin-source.js | 8 source tools + `template_save` | `config.sourceDir` set |
+| `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — |
+| `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` |
 
-Cross-group warnings (e.g. "NEVER use etrade for travel") only appear when both groups are active. `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
+`isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
 
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
@@ -150,7 +204,7 @@ Safety mechanisms:
 - Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data (finance group only)
 - Fabrication detector: catches LLM presenting Greeks/prices without fetching data (finance group only)
 - Tool call logging to `logs/` directory
-- Queue-based command confirmation: parallel `run_command` calls confirmed FIFO (not single-slot)
+- Queue-based command confirmation: parallel calls confirmed FIFO (not single-slot)
 - Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
 - run_python auto-fixes: Python booleans (`fixPythonBooleans`), backslash+newline double-escaping in string literals
 
@@ -160,7 +214,6 @@ Safety mechanisms:
 | `current_datetime` | Returns UTC, local time, IANA timezone, UTC offset |
 | `web_search` | Web search via Keiro and/or Tavily (configurable) |
 | `web_fetch` | Fetch URL, extract content as markdown (Readability + Turndown) |
-| `run_command` | Shell command execution via async exec (non-blocking), 30s timeout |
 | `run_python` | Execute Python script in venv, cwd=SOURCE_DIR, 120s timeout. Auto-fixes Python booleans and newline escaping |
 | `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
 | `source_write` | Write/create source files. Path-escape protected, confirmation required. Scoped to SOURCE_DIR |
@@ -175,7 +228,7 @@ Safety mechanisms:
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
 | `booking` | LiteAPI: prebook, book, list bookings, booking details, cancel |
 
-Tools are registered in `src/services/tools.js` — add new tools to the `tools` object with `description`, `parameters`, and `execute` function. Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`. Add tool-specific prompt sections via `toolGroups`.
+Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`.
 
 ### Applet System
 Prompt-based interactive HTML visualizations rendered in sandboxed iframes within assistant chat bubbles. Not a tool — the LLM emits `<applet type="TYPE">` blocks in its final response content.
@@ -323,5 +376,6 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 - ES modules (`import`/`export`) throughout
 - No TypeScript, no bundler, no framework on frontend
 - Tool results use `_markdown` key for rich display, `_autoSaved` for large results
-- CSV helpers (`toCsv`, `csvEscape`) in tools.js for structured data export
-- E*TRADE data formatted with shared helpers (`formatExpiry`, `formatStrike`, `portfolioToCsv`, `transactionsToCsv`)
+- CSV helpers (`toCsv`, `csvEscape`) live in plugin-etrade.js (sole consumer)
+- E*TRADE data formatted with shared helpers (`formatExpiry`, `formatStrike`, `portfolioToCsv`, `transactionsToCsv`) — all in plugin-etrade.js
+- Shared state stays in its plugin: `fileEditLocks` in plugin-source.js, `lastRateMap`/`lastPrebookId` in plugin-travel.js
