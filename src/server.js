@@ -17,6 +17,7 @@ import compactRoutes from './routes/compacts.js';
 import taskRoutes from './routes/tasks.js';
 import taskProcessorRoutes from './routes/taskProcessor.js';
 import slots from './services/slots.js';
+import { loadPlugins } from './services/tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -127,6 +128,9 @@ app.get('/api/file', async (req, res) => {
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));
 });
+
+// Load tool plugins before starting the server
+await loadPlugins();
 
 const server = app.listen(config.port, () => {
   console.log(`LLM Workbench running at http://localhost:${config.port}`);

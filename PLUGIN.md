@@ -1,65 +1,91 @@
-# Plugin Architecture Planning
+# Plugin Architecture
 
-## Current State
+## Overview
 
-Backend (`src/services/tools.js`, 1850 lines) is monolithic — all 13 tools defined in single object, system prompt hardcoded with ~200 lines of tool-specific instructions. Frontend (`src/public/js/app.js`) is ~95% generic already; only E*TRADE has dedicated UI (~85 lines for OAuth).
+The tool system uses a per-group plugin architecture. Each plugin is a self-contained ES module that exports tool definitions, system prompt sections, routing hints, and optional activation conditions. A core index handles auto-discovery, registration, and shared infrastructure.
 
-## Where Plugins Would Help
+## File Structure
 
-### 1. Backend Tool Definitions — High Value
-The `tools` object + system prompt rules are the biggest monolith. Each tool becomes a self-contained module:
 ```
-src/tools/etrade.js      // definition + formatters + system prompt rules
-src/tools/hotel.js       // definition + formatters + system prompt rules
-src/tools/web_search.js  // etc.
+src/tools/
+  index.js              Core: loader, registry, executor, parser, logging, confirmation, system prompt assembly
+  plugin-core.js        current_datetime
+  plugin-web.js         web_search, web_fetch + Tavily/Keiro search backends
+  plugin-execution.js   run_python
+  plugin-source.js      source_read, source_write, source_edit, source_delete, source_git, source_run, source_test, source_project, template_save + file locks, diff helpers
+  plugin-travel.js      hotel, travel, booking + rate map cache, guest profile persistence
+  plugin-etrade.js      etrade_account + 20 CSV/Markdown formatters, summarize helpers
+
+src/services/tools.js   Backward-compat barrel (re-exports from ../tools/index.js)
 ```
-Execution logic, CSV/markdown formatters, and system prompt instructions are all interleaved in one file today.
 
-### 2. System Prompt Composition — High Value
-Currently hardcoded in `getSystemPrompt()`. Each plugin registers its own prompt section, assembled at runtime. Adding/removing tools becomes clean — disabled tools don't inflate the prompt.
+## Plugin Interface
 
-### 3. Service Status Indicators — Medium Value
-E*TRADE auth panel, LiteAPI status dot, search engine status all follow same pattern (poll endpoint, show dot/label) but are coded individually. A generic "service status" plugin pattern would reduce repetition.
+Each `plugin-*.js` file exports a default object:
 
-## Where It Would NOT Help
-
-### 4. Frontend Tool Result Rendering — Low Value
-Already generic. All tools use same pipeline (`_markdown` tables, image extraction, file download links). Backend does the formatting. No tool-specific rendering cards exist.
-
-### 5. Applet System — No Value
-Already cleanly separated and tool-agnostic. Prompt-based, works with any tool output. Good model for how plugins could work.
-
-## Plugin Interface (Sketch)
-
-Each tool plugin exports:
 ```javascript
 export default {
-  name: 'etrade_account',
-  description: '...',
-  parameters: { /* ... */ },
-  execute: async (args, context) => { /* ... */ },
-
-  // System prompt rules injected when tool is enabled
-  systemPromptRules: `## E*TRADE Data Integrity\n...`,
-
-  // Optional frontend panel (e.g., OAuth flow)
-  frontendPanel: { /* config or path */ },
-
-  // Optional service health check
-  healthCheck: { endpoint: '/api/etrade/status', label: 'E*TRADE' },
-}
+  group: 'web',                              // group name (used in toolGroups registry)
+  condition: () => true,                     // optional: group only active when true
+  routing: ['- Web questions → web_search'], // LLM routing hints for tool selection
+  prompt: '## Web Research\n...',            // system prompt section (injected when group active)
+  tools: {
+    web_search: {
+      description: 'Search the web...',
+      parameters: { query: 'string' },
+      execute: async ({ query }) => { /* ... */ },
+    },
+    web_fetch: { /* ... */ },
+  },
+};
 ```
 
-## Pain Points Solved
-- Adding a new tool currently requires editing 1850-line `tools.js` + hardcoding system prompt rules
-- Removing/disabling a tool still loads all its code and prompt bloat
-- Tool-specific instructions inflate system prompt even when tools are disabled
-- E*TRADE formatters (~100 lines), LiteAPI formatters, etc. clutter the shared file
+## Core Index (`src/tools/index.js`)
 
-## Implementation Order (Suggested)
-1. Create `src/tools/` directory, extract one simple tool (e.g., `current_datetime`) as proof of concept
-2. Build plugin loader that auto-discovers `src/tools/*.js` modules
-3. Migrate system prompt rules into each plugin's `systemPromptRules` export
-4. Extract remaining tools one by one (start with isolated ones, save E*TRADE for last)
-5. Wire up `disabledTools` to skip loading prompt rules for disabled tools
-6. Optional: generic service status handler for frontend panels
+### Auto-Discovery
+`loadPlugins()` reads all `plugin-*.js` files from the tools directory, registers their tools and groups. Called once at startup from `src/server.js` before `app.listen()`.
+
+### Shared Infrastructure
+- **Registry**: `tools` map (name → definition), `toolGroups` map (group → metadata)
+- **Enable/disable**: `disabledTools` Set, `listTools()`, `setToolEnabled()`
+- **Group helpers**: `isGroupEnabled()`, `isToolGroupEnabled()`
+- **System prompt**: `getSystemPrompt({ applets })` — assembles from enabled groups
+- **Parsing**: `parseToolCalls()`, `repairToolCallJson()` — extracts tool calls from LLM output
+- **Execution**: `executeTool()` — executor with fuzzy matching, logging, error handling
+- **Logging**: `logToolCall()` — daily log files in `logs/`
+- **Confirmation**: `requestConfirmation()`, `resolveConfirmation()`, `cancelConfirmation()` — queue-based user approval
+
+### Exported Helpers (for plugins)
+- `fixPythonBooleans(code)` — auto-fix JS-style booleans/null → Python
+- `tagLineCount(stdout, limit)` — truncate + line count annotation
+- `logToolCall(name, action, data)` — used by etrade plugin for internal logging
+
+## Tool Groups
+
+| Group | Plugin | Tools | Condition |
+|-------|--------|-------|-----------|
+| core | plugin-core.js | `current_datetime` | — |
+| web | plugin-web.js | `web_search`, `web_fetch` | — |
+| execution | plugin-execution.js | `run_python` | — |
+| source | plugin-source.js | 8 source tools + `template_save` | `config.sourceDir` set |
+| travel | plugin-travel.js | `hotel`, `travel`, `booking` | — |
+| finance | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` |
+
+Cross-group warnings (e.g. finance + travel both active) are handled in `getSystemPrompt()` in the core index.
+
+## Backward Compatibility
+
+`src/services/tools.js` is a thin barrel that re-exports everything from `../tools/index.js`. Consumers (`routes/conversations.js`, `routes/tools.js`, `routes/taskProcessor.js`) import from `services/tools.js` unchanged.
+
+## Adding a New Tool
+
+1. Create `src/tools/plugin-mytool.js` following the interface above
+2. The loader auto-discovers it on next server start
+3. No changes needed to routes, index, or barrel
+
+## Design Decisions
+
+- **Per-group, not per-tool**: Tools in a group share state, formatters, and imports. Splitting into individual files would create excessive cross-file coupling.
+- **Formatters with their tool**: E*TRADE's 20 formatters are only used by `etrade_account`. Generic helpers (`csvEscape`, `toCsv`, `toMd`) live with the etrade plugin as the sole consumer.
+- **Shared state stays in the plugin**: `fileEditLocks` in source, `lastRateMap`/`lastPrebookId` in travel — each plugin owns its state.
+- **Cross-group warnings in core**: They're inherently cross-cutting and belong in the assembler, not individual plugins.

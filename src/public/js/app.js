@@ -481,7 +481,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html{overflow-x:auto;overflow-y:hidden}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html{overflow-x:auto;overflow-y:auto}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -493,7 +493,7 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-function _rsz(){var b=document.body,o=b.style.overflow;b.style.overflow='visible';var h=b.scrollHeight;b.style.overflow=o;window.parent.postMessage({type:'resize',height:h},'*');}
+function _rsz(){var d=document.documentElement,b=document.body,od=d.style.overflow,ob=b.style.overflow;d.style.overflow='visible';b.style.overflow='visible';var h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight);d.style.overflow=od;b.style.overflow=ob;window.parent.postMessage({type:'resize',height:h},'*');}
 new ResizeObserver(_rsz).observe(document.body);
 window.addEventListener('load',_rsz);
 document.querySelectorAll('img').forEach(i=>{i.complete?_rsz():i.addEventListener('load',_rsz);});
