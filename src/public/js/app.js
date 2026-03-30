@@ -475,7 +475,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html{overflow-x:auto;overflow-y:auto}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html{overflow:hidden}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -487,7 +487,7 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-function _rsz(){var d=document.documentElement,b=document.body,od=d.style.overflow,ob=b.style.overflow;d.style.overflow='visible';b.style.overflow='visible';var h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight);d.style.overflow=od;b.style.overflow=ob;window.parent.postMessage({type:'resize',height:h},'*');}
+function _rsz(){var d=document.documentElement,b=document.body,od=d.style.overflow,ob=b.style.overflow;d.style.overflow='visible';b.style.overflow='visible';var h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;d.style.overflow=od;b.style.overflow=ob;window.parent.postMessage({type:'resize',height:h},'*');}
 new ResizeObserver(_rsz).observe(document.body);
 window.addEventListener('load',_rsz);
 document.querySelectorAll('img').forEach(i=>{i.complete?_rsz():i.addEventListener('load',_rsz);});
@@ -642,27 +642,67 @@ function extractImageUrls(obj, depth = 0) {
 function renderMessages(messages) {
   responseArea.innerHTML = '';
   emptyState.classList.add('hidden');
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
     const images = typeof msg.content === 'object' ? msg.content.images : undefined;
     const reasoning = typeof msg.content === 'object' ? msg.content.reasoning : undefined;
     const toolUses = typeof msg.content === 'object' ? msg.content.toolUses : undefined;
-    appendMessage(msg.role, text, images, { reasoning, toolUses });
+    appendMessage(msg.role, text, images, { reasoning, toolUses, msgIndex: i });
   }
+}
+
+async function regenerateFrom(wrapper) {
+  const msgIndex = parseInt(wrapper.dataset.msgIndex, 10);
+  if (isNaN(msgIndex)) return;
+  const convId = state.currentConversationId;
+  const conv = await api.getConversation(convId);
+  const msg = conv.messages[msgIndex];
+  if (!msg || msg.role !== 'user') return;
+  const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
+  const images = typeof msg.content === 'object' ? msg.content.images : undefined;
+  // Truncate backend messages from this point
+  await fetch(`/api/conversations/${convId}/messages`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromIndex: msgIndex }),
+  });
+  // Remove DOM elements from this wrapper onward
+  while (wrapper.nextSibling) wrapper.nextSibling.remove();
+  wrapper.remove();
+  // Re-send — sendMessage will append user+assistant bubbles
+  await sendMessage(text, images);
+  // Re-render with proper msgIndex on all bubbles
+  const updated = await api.getConversation(convId);
+  renderMessages(updated.messages);
 }
 
 function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
   wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+  if (meta.msgIndex !== undefined) wrapper.dataset.msgIndex = meta.msgIndex;
 
   const bubble = document.createElement('div');
   if (role === 'user') {
-    bubble.className = 'max-w-[80%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+    bubble.className = 'relative group max-w-[80%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
   } else if (role === 'error') {
     bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
     bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+  }
+
+  // Regenerate button on user bubbles
+  if (role === 'user' && meta.msgIndex !== undefined) {
+    const regenBtn = document.createElement('button');
+    regenBtn.className = 'absolute top-1 right-1.5 opacity-0 group-hover:opacity-50 hover:!opacity-100 text-zinc-300 hover:text-indigo-300 transition-opacity text-xs leading-none p-1';
+    regenBtn.textContent = '↻';
+    regenBtn.title = 'Regenerate from here';
+    regenBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      regenerateFrom(wrapper);
+    });
+    bubble.appendChild(regenBtn);
   }
 
   // Render images in user bubbles

@@ -144,8 +144,18 @@ function compact(id, summary) {
   return conv;
 }
 
+function truncateMessages(id, fromIndex) {
+  const conv = store.get(id);
+  if (!conv) return null;
+  conv.messages = conv.messages.slice(0, fromIndex);
+  conv.tokenCount = 0;
+  conv.updatedAt = new Date().toISOString();
+  if (conv.pinned) savePinned(id);
+  return conv;
+}
+
 export default {
   create, list, get, remove, updateTitle,
   addMessage, updateMessageContent, setSlot, setTokenCount,
-  pin, unpin, compact,
+  pin, unpin, compact, truncateMessages,
 };

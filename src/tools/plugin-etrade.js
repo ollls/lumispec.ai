@@ -112,7 +112,7 @@ function quotesToCsv(data) {
   if (!quotes.length) return '';
   const headers = ['Symbol', 'Description', 'Last Price', 'Change', 'Change %', 'Bid', 'Ask', 'Bid Size', 'Ask Size', 'Volume', 'Day High', 'Day Low', 'Open', 'Prev Close', '52w High', '52w Low', 'Market Cap', 'P/E', 'EPS', 'Div Yield', 'Next Earnings'];
   const rows = quotes.map(q => {
-    const all = q.All || q.Intraday || q.Fundamental || {};
+    const all = q.All || q.Intraday || q.Fundamental || q.Week52 || q.MutualFund || {};
     return [
       q.Product?.symbol || '', q.Product?.securityType || '',
       all.lastTrade ?? '', all.changeClose ?? all.change ?? '', all.changeClosePercentage ?? all.changePct ?? '',
@@ -279,7 +279,7 @@ function quotesToMd(data) {
   if (!quotes.length) return '';
   const headers = ['Symbol', 'Company', 'Last', 'Change', 'Change %', 'Bid', 'Ask', 'Volume', '52w High', '52w Low', 'P/E'];
   const rows = quotes.map(q => {
-    const all = q.All || q.Intraday || q.Fundamental || {};
+    const all = q.All || q.Intraday || q.Fundamental || q.Week52 || q.MutualFund || {};
     return [
       q.Product?.symbol || '', all.companyName || q.Product?.symbolDescription || '',
       all.lastTrade ?? '', all.changeClose ?? all.change ?? '',

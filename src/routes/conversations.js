@@ -101,6 +101,17 @@ router.post('/:id/confirm', (req, res) => {
   res.json({ ok: true });
 });
 
+// Truncate messages from a given index onward (for regenerate)
+router.delete('/:id/messages', (req, res) => {
+  const { fromIndex } = req.body;
+  if (typeof fromIndex !== 'number' || fromIndex < 0) {
+    return res.status(400).json({ error: 'fromIndex required' });
+  }
+  const conv = conversations.truncateMessages(req.params.id, fromIndex);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  res.json({ ok: true, messageCount: conv.messages.length });
+});
+
 // Send message + stream response
 router.post('/:id/messages', async (req, res) => {
   const conv = conversations.get(req.params.id);
