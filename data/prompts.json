@@ -1,5 +1,11 @@
 [
   {
+    "id": "9114aca4-d86e-4645-a1ed-f99991e43b21",
+    "title": "Covered Call Strategy For Tickler",
+    "text": "I want to sell covered call on {$Ticker}, show me appropriate strikes and delta. low probability less than 0.30. EXPIRY DATE {$CheckIn:date}.",
+    "createdAt": "2026-03-24T02:01:03.553Z"
+  },
+  {
     "id": "534afd8e-7306-42b3-a5fc-9efb728dbe35",
     "title": "Trump Iran International Politics Update",
     "text": "update me on the most breaking events about Trump, Iran and international politics. Use applet HTML with dark mode",
@@ -34,12 +40,6 @@
     "title": "Show Weather In My Location",
     "text": "Show weather in my location, use [template: Weather]",
     "createdAt": "2026-03-24T17:23:33.913Z"
-  },
-  {
-    "id": "9114aca4-d86e-4645-a1ed-f99991e43b21",
-    "title": "Covered Call Strategy For Tickler",
-    "text": "I want to sell covered call on {$Ticker}, show me appropriate strikes and delta. low probability less than 0.30. EXPIRY DATE {$CheckIn:date}.",
-    "createdAt": "2026-03-24T02:01:03.553Z"
   },
   {
     "id": "0f0acedf-56d5-4d5a-a059-05526682281b",
