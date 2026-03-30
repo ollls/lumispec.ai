@@ -42,6 +42,10 @@ async function searchKeiro(query) {
 
 export default {
   group: 'web',
+  status: {
+    managed: false,
+    label: 'Search',
+  },
   routing: [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
   ],

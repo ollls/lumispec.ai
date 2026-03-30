@@ -100,14 +100,8 @@ const searchDropdown = document.getElementById('search-dropdown');
 const toolUsageToggle = document.getElementById('tool-usage-toggle');
 const toolUsageCount = document.getElementById('tool-usage-count');
 const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
-const liteapiStatus = document.getElementById('liteapi-status');
-const liteapiDot = document.getElementById('liteapi-dot');
-const liteapiLabel = document.getElementById('liteapi-label');
-const etradeStatus = document.getElementById('etrade-status');
-const etradeDot = document.getElementById('etrade-dot');
-const etradeToggle = document.getElementById('etrade-toggle');
-const etradePanel = document.getElementById('etrade-panel');
-const etradePanelContent = document.getElementById('etrade-panel-content');
+const searchStatus = document.getElementById('search-status');
+const pluginStatusContainer = document.getElementById('plugin-status-container');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
@@ -507,7 +501,7 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   iframe.className = 'applet-iframe';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:auto;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:hidden;display:block';
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
@@ -1603,8 +1597,9 @@ searchToggle.addEventListener('click', (e) => {
 document.addEventListener('click', () => {
   searchDropdown.classList.add('hidden');
   toolUsageDropdown.classList.add('hidden');
-  etradePanel.classList.add('hidden');
   llmDropdown.classList.add('hidden');
+  // Close all dynamic plugin panels
+  Object.values(pluginElements).forEach(el => { if (el.panel) el.panel.classList.add('hidden'); });
 });
 
 searchDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1639,104 +1634,88 @@ toolUsageToggle.addEventListener('click', (e) => {
 
 toolUsageDropdown.addEventListener('click', (e) => e.stopPropagation());
 
-// ── LiteAPI health check ─────────────────────────────
-async function pollLiteapi() {
-  try {
-    const res = await fetch('/api/health/liteapi');
-    const { ok, configured } = await res.json();
-    if (!configured) return; // no key, hide entirely
-    liteapiStatus.classList.remove('hidden');
-    liteapiDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    liteapiLabel.textContent = 'LiteAPI';
-    liteapiLabel.className = ok ? 'text-green-500' : 'text-red-400';
-  } catch {}
+// ── Plugin status system (dynamic dots + generic auth) ──
+const pluginElements = {};  // group → { wrapper, dot, toggle, panel, panelContent }
+const pluginIntervals = []; // interval IDs for cleanup
+
+function updatePluginDot(group, state) {
+  const el = pluginElements[group];
+  if (!el) return;
+  const colors = {
+    ok:     { dot: 'bg-green-500 pulse-dot', text: 'text-green-500' },
+    unauth: { dot: 'bg-amber-500',           text: 'text-amber-500 hover:text-amber-400 transition-colors' },
+    error:  { dot: 'bg-red-500',             text: 'text-red-400' },
+  };
+  const c = colors[state] || colors.error;
+  el.dot.className = `inline-block w-2 h-2 rounded-full ${c.dot}`;
+  el.toggle.className = c.text;
+  el.toggle.textContent = el.label;
 }
 
-// ── E*TRADE auth flow ────────────────────────────────
-async function pollEtrade() {
-  try {
-    const res = await fetch('/api/etrade/status');
-    const { authenticated, configured } = await res.json();
-    if (!configured) return; // no keys, hide entirely
-    etradeStatus.classList.remove('hidden');
-    if (authenticated) {
-      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-green-500 pulse-dot';
-      etradeToggle.className = 'text-green-500';
-      etradeToggle.textContent = 'E*TRADE';
-    } else {
-      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-amber-500';
-      etradeToggle.className = 'text-amber-500 hover:text-amber-400 transition-colors';
-      etradeToggle.textContent = 'E*TRADE (connect)';
-    }
-  } catch {}
-}
-
-function renderEtradePanel(authenticated) {
-  if (authenticated) {
-    etradePanelContent.innerHTML = `
+function renderPluginAuthPanel(group, panelContent, state) {
+  if (state === 'ok') {
+    panelContent.innerHTML = `
       <div class="text-xs text-green-400 mb-1">Connected</div>
-      <div class="text-xs text-zinc-500 mb-2">Ask the assistant about your accounts, balances, portfolio, or transactions.</div>
-      <button id="etrade-disconnect-btn" class="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs font-medium px-3 py-1.5 rounded transition-colors">
+      <button class="plugin-disconnect-btn w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs font-medium px-3 py-1.5 rounded transition-colors">
         Disconnect &amp; Reconnect
       </button>`;
-    document.getElementById('etrade-disconnect-btn').addEventListener('click', async () => {
-      await fetch('/api/etrade/disconnect', { method: 'POST' });
-      pollEtrade();
-      renderEtradePanel(false);
+    panelContent.querySelector('.plugin-disconnect-btn').addEventListener('click', async () => {
+      await fetch(`/api/plugins/${group}/auth/disconnect`, { method: 'POST' });
+      await pollPluginStatuses();
     });
     return;
   }
-  etradePanelContent.innerHTML = `
-    <div id="etrade-step-1">
-      <div class="text-xs text-zinc-400 mb-2">Connect your E*TRADE account (read-only)</div>
-      <button id="etrade-auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
-        Open E*TRADE Authorization
+  panelContent.innerHTML = `
+    <div class="plugin-auth-step1">
+      <div class="text-xs text-zinc-400 mb-2">Connect your account (read-only)</div>
+      <button class="plugin-auth-btn w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        Open Authorization
       </button>
     </div>
-    <div id="etrade-step-2" class="hidden mt-2">
-      <div class="text-xs text-zinc-400 mb-2">Paste the verifier code from E*TRADE:</div>
+    <div class="plugin-auth-step2 hidden mt-2">
+      <div class="text-xs text-zinc-400 mb-2">Paste the verifier code:</div>
       <div class="flex gap-2">
-        <input id="etrade-verifier" type="text" placeholder="Verifier code"
-          class="flex-1 bg-zinc-900 text-zinc-100 text-xs px-2 py-1.5 rounded border border-zinc-600 outline-none focus:border-zinc-400">
-        <button id="etrade-submit-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        <input class="plugin-auth-input flex-1 bg-zinc-900 text-zinc-100 text-xs px-2 py-1.5 rounded border border-zinc-600 outline-none focus:border-zinc-400" type="text" placeholder="Verifier code">
+        <button class="plugin-auth-submit bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
           Connect
         </button>
       </div>
-      <div id="etrade-error" class="text-red-400 text-xs mt-1 hidden"></div>
+      <div class="plugin-auth-error text-red-400 text-xs mt-1 hidden"></div>
     </div>`;
 
-  document.getElementById('etrade-auth-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('etrade-auth-btn');
+  panelContent.querySelector('.plugin-auth-btn').addEventListener('click', async () => {
+    const btn = panelContent.querySelector('.plugin-auth-btn');
     btn.textContent = 'Opening…';
     btn.disabled = true;
     try {
-      const res = await fetch('/api/etrade/auth');
-      const { url, error } = await res.json();
-      if (error) throw new Error(error);
-      window.open(url, '_blank');
-      document.getElementById('etrade-step-2').classList.remove('hidden');
-      btn.textContent = 'Opened — paste code below';
+      const res = await fetch(`/api/plugins/${group}/auth/start`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.url) window.open(data.url, '_blank');
+      panelContent.querySelector('.plugin-auth-step2').classList.remove('hidden');
+      btn.textContent = data.url ? 'Opened — paste code below' : (data.message || 'Enter code below');
     } catch (err) {
       btn.textContent = 'Failed — try again';
       btn.disabled = false;
     }
   });
 
-  document.getElementById('etrade-submit-btn').addEventListener('click', async () => {
-    const verifier = document.getElementById('etrade-verifier').value.trim();
-    const errEl = document.getElementById('etrade-error');
-    if (!verifier) return;
+  panelContent.querySelector('.plugin-auth-submit').addEventListener('click', async () => {
+    const input = panelContent.querySelector('.plugin-auth-input').value.trim();
+    const errEl = panelContent.querySelector('.plugin-auth-error');
+    if (!input) return;
     errEl.classList.add('hidden');
     try {
-      const res = await fetch('/api/etrade/auth', {
+      const res = await fetch(`/api/plugins/${group}/auth/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verifier }),
+        body: JSON.stringify({ input }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      etradePanel.classList.add('hidden');
-      await pollEtrade();
+      const el = pluginElements[group];
+      if (el?.panel) el.panel.classList.add('hidden');
+      await pollPluginStatuses();
     } catch (err) {
       errEl.textContent = err.message;
       errEl.classList.remove('hidden');
@@ -1744,18 +1723,102 @@ function renderEtradePanel(authenticated) {
   });
 }
 
-etradeToggle.addEventListener('click', async (e) => {
-  e.stopPropagation();
-  const isOpen = !etradePanel.classList.contains('hidden');
-  etradePanel.classList.toggle('hidden');
-  if (!isOpen) {
-    const res = await fetch('/api/etrade/status');
-    const { authenticated } = await res.json();
-    renderEtradePanel(authenticated);
-  }
-});
+function createPluginStatusElement(plugin) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'relative flex items-center gap-2';
 
-etradePanel.addEventListener('click', (e) => e.stopPropagation());
+  const dot = document.createElement('span');
+  dot.className = 'inline-block w-2 h-2 rounded-full bg-zinc-600';
+
+  const toggle = document.createElement('button');
+  toggle.className = 'text-zinc-500 hover:text-zinc-300 transition-colors';
+  toggle.textContent = plugin.label;
+
+  wrapper.appendChild(dot);
+  wrapper.appendChild(toggle);
+
+  let panel = null, panelContent = null;
+  if (plugin.hasAuth) {
+    panel = document.createElement('div');
+    panel.className = 'hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]';
+    panelContent = document.createElement('div');
+    panel.appendChild(panelContent);
+    wrapper.appendChild(panel);
+    panel.addEventListener('click', (e) => e.stopPropagation());
+
+    toggle.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const isOpen = !panel.classList.contains('hidden');
+      // close all other plugin panels
+      Object.values(pluginElements).forEach(el => { if (el.panel) el.panel.classList.add('hidden'); });
+      if (!isOpen) {
+        panel.classList.remove('hidden');
+        const statuses = await (await fetch('/api/plugins/status')).json();
+        const s = statuses.find(p => p.group === plugin.group);
+        renderPluginAuthPanel(plugin.group, panelContent, s?.state);
+      }
+    });
+  }
+
+  pluginElements[plugin.group] = {
+    wrapper, dot, toggle, panel, panelContent,
+    label: plugin.label, hasAuth: plugin.hasAuth,
+  };
+
+  return wrapper;
+}
+
+async function pollPluginStatuses() {
+  try {
+    const statuses = await (await fetch('/api/plugins/status')).json();
+    // Handle managed: false plugins (show/hide hardcoded elements)
+    const webPlugin = statuses.find(p => p.group === 'web');
+    if (searchStatus) {
+      searchStatus.style.display = webPlugin ? '' : 'none';
+    }
+    // Handle managed: true plugins
+    for (const plugin of statuses) {
+      if (!plugin.managed) continue;
+      if (plugin.state === null) {
+        // hidden — remove element if it exists
+        if (pluginElements[plugin.group]) {
+          pluginElements[plugin.group].wrapper.remove();
+          delete pluginElements[plugin.group];
+        }
+        continue;
+      }
+      // create element if first time
+      if (!pluginElements[plugin.group]) {
+        const el = createPluginStatusElement(plugin);
+        pluginStatusContainer.appendChild(el);
+      }
+      updatePluginDot(plugin.group, plugin.state);
+    }
+    // Remove elements for plugins no longer in response
+    const activeGroups = new Set(statuses.filter(p => p.managed && p.state !== null).map(p => p.group));
+    for (const group of Object.keys(pluginElements)) {
+      if (!activeGroups.has(group)) {
+        pluginElements[group].wrapper.remove();
+        delete pluginElements[group];
+      }
+    }
+  } catch {}
+}
+
+async function initPluginStatuses() {
+  await pollPluginStatuses();
+  // Set up per-plugin polling based on intervals
+  try {
+    const statuses = await (await fetch('/api/plugins/status')).json();
+    const intervals = new Set();
+    for (const p of statuses) {
+      if (p.managed && p.interval > 0) intervals.add(p.interval);
+    }
+    for (const ms of intervals) {
+      pluginIntervals.push(setInterval(pollPluginStatuses, ms));
+    }
+  } catch {}
+}
 
 // ── Slot panel ────────────────────────────────────────
 let slotPanelOpen = false;
@@ -3360,9 +3423,7 @@ saveCompactBtn.addEventListener('click', async () => {
   setInterval(pollInternet, 30000);
   pollSearch();
   setInterval(pollSearch, 60000);
-  pollLiteapi();
-  setInterval(pollLiteapi, 60000);
-  pollEtrade();
+  initPluginStatuses();
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();

@@ -22,24 +22,34 @@ Requires: **Node.js >= 20** and a running **llama.cpp server** (see setup below)
 
 ## LLM Server Setup
 
-ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. Tested and running great on an **NVIDIA RTX 5090** with the Qwen3.5-35B-A3B mixture-of-experts model (only 3B active parameters — fast inference with strong reasoning).
+ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. The following configurations are tested on an **NVIDIA RTX 5090**.
+
+**Recommended — Qwen3.5-27B (stability over speed):**
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
+./llama.cpp/build/bin/llama-server \
+  --model-url https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q6_K.gguf \
+  -ngl 99 \
+  -c 131072 \
+  -fa on \
+  --host 0.0.0.0 \
+  --port 8080
+```
 
+**Fast — Qwen3.5-35B-A3B (MoE, 3B active params — faster inference):**
+
+```bash
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
   --jinja \
   -ngl 99 \
-  --ctx-size 65536 \
-  -fa auto \
-  --temp 0.7 \
-  --top-p 0.95 \
-  --min-p 0.01 \
-  --top-k 40
+  -c 131072 \
+  -fa on \
+  --host 0.0.0.0 \
+  --port 8080
 ```
 
-Any llama.cpp-compatible model works. Adjust `--ctx-size` and quantization for your GPU. Smaller models like Qwen3-8B or Llama-3.1-8B run fine on GPUs with less VRAM.
+Any llama.cpp-compatible model works. Adjust `-c` and quantization for your GPU. Smaller models like Qwen3-8B or Llama-3.1-8B run fine on GPUs with less VRAM.
 
 ## What It Does
 

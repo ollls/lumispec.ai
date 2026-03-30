@@ -89,9 +89,9 @@
         data-session="lavender" style="background:var(--btn-lavender); color:#000;">+</button>
     </div>
     <div class="w-px self-stretch bg-zinc-700"></div>
-    <!-- Status indicators: grid layout -->
-    <div class="grid gap-x-8 gap-y-0.5" style="grid-template-columns: minmax(7rem, auto) minmax(5rem, auto) auto">
-      <!-- Row 1: Core -->
+    <!-- Status indicators: flex-wrap layout -->
+    <div class="flex flex-wrap items-center gap-x-8 gap-y-0.5">
+      <!-- Hardcoded: LLM -->
       <div class="relative flex items-center gap-2">
         <span id="llm-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="llm-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
@@ -101,19 +101,13 @@
         <div id="llm-dropdown" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[140px]">
         </div>
       </div>
+      <!-- Hardcoded: Internet -->
       <div class="flex items-center gap-2">
         <span id="inet-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="inet-label" class="text-zinc-500">Internet</span>
       </div>
-      <div id="etrade-status" class="relative flex items-center gap-2 hidden">
-        <span id="etrade-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <button id="etrade-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors">E*TRADE</button>
-        <div id="etrade-panel" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]">
-          <div id="etrade-panel-content"></div>
-        </div>
-      </div>
-      <!-- Row 2: APIs -->
-      <div class="relative flex items-center gap-2">
+      <!-- Hardcoded: Search (managed: false — hidden if plugin-web not loaded) -->
+      <div id="search-status" class="relative flex items-center gap-2">
         <span id="search-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="search-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
           <span id="search-label">Search</span>
@@ -122,10 +116,9 @@
         <div id="search-dropdown" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[140px]">
         </div>
       </div>
-      <div id="liteapi-status" class="flex items-center gap-2 hidden">
-        <span id="liteapi-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <span id="liteapi-label" class="text-zinc-500">LiteAPI</span>
-      </div>
+      <!-- Dynamic plugin status dots inserted here by JS -->
+      <div id="plugin-status-container" class="contents"></div>
+      <!-- Tool usage -->
       <div class="relative flex items-center gap-2">
         <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1 hidden">
           <span>🔧</span>

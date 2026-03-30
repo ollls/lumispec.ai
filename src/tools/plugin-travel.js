@@ -28,6 +28,22 @@ async function saveGuestProfile(profile) {
 
 export default {
   group: 'travel',
+  status: {
+    label: 'LiteAPI',
+    interval: 60000,
+    poll: async () => {
+      if (!config.liteapi.apiKey) return null;
+      try {
+        const resp = await fetch('https://api.liteapi.travel/v3.0/data/countries', {
+          headers: { 'X-API-Key': config.liteapi.apiKey },
+          signal: AbortSignal.timeout(5000),
+        });
+        return (resp.status !== 401 && resp.status !== 403) ? 'ok' : 'error';
+      } catch {
+        return 'error';
+      }
+    },
+  },
   routing: [
     '- Hotels, travel, trips, vacations, accommodation, resorts → use "hotel" tool (search, details, rates, reviews)',
     '- Weather forecasts, destination info, places, airports, cities → use "travel" tool',

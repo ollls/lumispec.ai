@@ -455,6 +455,29 @@ function summarize(act, res) {
 export default {
   group: 'finance',
   condition: () => etrade.isAuthenticated(),
+  status: {
+    label: 'E*TRADE',
+    interval: 0,
+    poll: async () => {
+      const configured = !!(config.etrade.consumerKey && config.etrade.consumerSecret);
+      if (!configured) return null;
+      return etrade.isAuthenticated() ? 'ok' : 'unauth';
+    },
+    auth: {
+      start: async () => {
+        const url = await etrade.getAuthorizeUrl();
+        return { url };
+      },
+      complete: async (input) => {
+        await etrade.handleCallback(input.trim());
+        return { ok: true };
+      },
+      disconnect: async () => {
+        etrade.disconnect();
+        return { ok: true };
+      },
+    },
+  },
   routing: [
     '- Stock market, portfolio, options, E*TRADE accounts, trading → use "etrade_account" tool',
   ],

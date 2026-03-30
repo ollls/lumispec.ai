@@ -376,6 +376,10 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 - ES modules (`import`/`export`) throughout
 - No TypeScript, no bundler, no framework on frontend
 - Tool results use `_markdown` key for rich display, `_autoSaved` for large results
-- CSV helpers (`toCsv`, `csvEscape`) live in plugin-etrade.js (sole consumer)
+- Reusable tabular helpers live in plugin-etrade.js — import and reuse in any plugin that needs CSV or Markdown table output:
+  - `csvEscape(v)` — proper CSV value escaping (commas, quotes, newlines)
+  - `toCsv(headers, rows)` — builds CSV string from headers array + 2D rows array
+  - `toMd(title, headers, rows)` — builds GitHub-flavored Markdown table with title, pipe-escaping
+  - Formatter map pattern (`formatters`/`mdFormatters` dicts) — clean dispatch for dual-format output
 - E*TRADE data formatted with shared helpers (`formatExpiry`, `formatStrike`, `portfolioToCsv`, `transactionsToCsv`) — all in plugin-etrade.js
 - Shared state stays in its plugin: `fileEditLocks` in plugin-source.js, `lastRateMap`/`lastPrebookId` in plugin-travel.js

@@ -45,7 +45,7 @@ export async function logToolCall(toolName, action, { args, rawResult, formatted
 
 // ── Plugin registry ─────────────────────────────────
 const tools = {};        // name → { description, parameters, execute }
-const toolGroups = {};   // groupName → { tools, condition, routing, prompt }
+const toolGroups = {};   // groupName → { tools, condition, routing, prompt, status }
 
 export async function loadPlugins() {
   const files = await readdir(__dirname);
@@ -70,6 +70,7 @@ export async function loadPlugins() {
       condition: plugin.condition || undefined,
       routing: plugin.routing || [],
       prompt: plugin.prompt || null,
+      status: plugin.status || null,
     };
 
     console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
@@ -149,6 +150,40 @@ function isGroupEnabled(group) {
 
 export function isToolGroupEnabled(groupName) {
   return toolGroups[groupName] ? isGroupEnabled(toolGroups[groupName]) : false;
+}
+
+// ── Plugin status helpers ───────────────────────────
+export async function getPluginStatuses() {
+  const results = [];
+  for (const [group, g] of Object.entries(toolGroups)) {
+    if (!g.status) continue;
+    const managed = g.status.managed !== false;
+    try {
+      const state = managed && g.status.poll ? await g.status.poll() : null;
+      results.push({
+        group,
+        label: g.status.label,
+        state,
+        interval: g.status.interval ?? 0,
+        hasAuth: !!g.status.auth,
+        managed,
+      });
+    } catch {
+      results.push({
+        group,
+        label: g.status.label,
+        state: 'error',
+        interval: g.status.interval ?? 0,
+        hasAuth: !!g.status.auth,
+        managed,
+      });
+    }
+  }
+  return results;
+}
+
+export function getPluginAuth(groupName) {
+  return toolGroups[groupName]?.status?.auth || null;
 }
 
 // ── System prompt assembly ──────────────────────────

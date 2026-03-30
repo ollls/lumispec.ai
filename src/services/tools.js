@@ -10,4 +10,6 @@ export {
   resolveConfirmation,
   cancelConfirmation,
   isToolGroupEnabled,
+  getPluginStatuses,
+  getPluginAuth,
 } from '../tools/index.js';
