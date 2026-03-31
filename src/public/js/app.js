@@ -155,6 +155,52 @@ const pluginConfigClose = document.getElementById('plugin-config-close');
   });
 }
 
+// ── Refine prompt from reasoning ─────────────────────
+function addRefineButton(details, getPrompt, getReasoning) {
+  const btn = document.createElement('button');
+  btn.textContent = 'Refine';
+  Object.assign(btn.style, {
+    fontSize: '10px', padding: '1px 8px', borderRadius: '4px', marginLeft: '8px',
+    background: '#3f3f46', color: '#a1a1aa', border: 'none', cursor: 'pointer',
+    verticalAlign: 'middle',
+  });
+  btn.addEventListener('mouseenter', () => { btn.style.background = '#52525b'; btn.style.color = '#e4e4e7'; });
+  btn.addEventListener('mouseleave', () => { btn.style.background = '#3f3f46'; btn.style.color = '#a1a1aa'; });
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const prompt = getPrompt();
+    const reasoning = getReasoning();
+    if (!prompt || !reasoning || reasoning.length < 20) return;
+    const origText = btn.textContent;
+    btn.textContent = '…';
+    btn.style.pointerEvents = 'none';
+    try {
+      const res = await fetch(`/api/conversations/${state.currentConversationId}/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, reasoning }),
+      });
+      if (!res.ok) return;
+      const { refined, changed } = await res.json();
+      if (changed) {
+        input.value = refined;
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        input.focus();
+        btn.textContent = 'Loaded';
+      } else {
+        btn.textContent = 'Already optimal';
+      }
+      setTimeout(() => { btn.textContent = origText; }, 2000);
+    } catch {
+      btn.textContent = origText;
+    } finally {
+      btn.style.pointerEvents = 'auto';
+    }
+  });
+  details.querySelector('summary').appendChild(btn);
+}
+
 // ── Stop button ─────────────────────────────────────
 stopBtn.addEventListener('click', () => {
   if (state.abortController) {
@@ -770,6 +816,25 @@ function appendMessage(role, text, images, meta = {}) {
     details.appendChild(summary);
     details.appendChild(body);
     bubble.appendChild(details);
+    // Refine button — get preceding user message prompt from server
+    if (meta.msgIndex !== undefined && meta.msgIndex > 0) {
+      const reasoning = meta.reasoning;
+      const msgIdx = meta.msgIndex;
+      addRefineButton(details, () => {
+        // Fetch synchronously from cached conversation data isn't possible,
+        // so we grab text node content from the DOM (skip regen button text)
+        const prevWrapper = responseArea.querySelector(`[data-msg-index="${msgIdx - 1}"]`);
+        if (!prevWrapper) return '';
+        const bubble = prevWrapper.querySelector('.whitespace-pre-wrap');
+        if (!bubble) return '';
+        // Get only text node content, skip button children
+        let text = '';
+        for (const node of bubble.childNodes) {
+          if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
+        }
+        return text.trim();
+      }, () => reasoning);
+    }
   }
 
   // Render stored tool uses (collapsed)
@@ -1144,7 +1209,10 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                 thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
                 delete toolUseContainer._thinkingEl;
               }
-              if (hasReasoning) reasoningSummary.textContent = 'Thought process';
+              if (hasReasoning && reasoningSummary.textContent !== 'Thought process') {
+                reasoningSummary.textContent = 'Thought process';
+                addRefineButton(reasoningDetails, () => content, () => accumulatedReasoning);
+              }
               accumulated += data.content;
               scheduleRender(accumulated, contentSpan);
               responseArea.scrollTop = responseArea.scrollHeight;

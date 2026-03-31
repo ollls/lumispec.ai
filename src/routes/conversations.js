@@ -633,4 +633,35 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
   }
 });
 
+// Refine prompt using reasoning trace
+router.post('/:id/refine', async (req, res) => {
+  const { prompt, reasoning } = req.body;
+  if (!prompt || !reasoning) return res.status(400).json({ error: 'prompt and reasoning required' });
+  try {
+    const { content: raw } = await collectChatCompletion([
+      { role: 'system', content: `You are a prompt refinement assistant. You will receive a user's original prompt and the LLM reasoning trace it produced. Analyze the reasoning to identify where the LLM struggled, hedged, made assumptions, or lacked clarity due to the prompt.
+
+Rules:
+- If the prompt is already clear and effective, return it UNCHANGED
+- If it can be improved, return ONLY the improved prompt text — no explanations, no preamble, no quotes
+- The improved prompt must not exceed 3x the length of the original
+- Preserve the user's intent and tone
+- Focus on: specificity, removing ambiguity, adding missing context the reasoning had to guess at
+- Do NOT add instructions about formatting or response structure unless the original had them
+- Do NOT wrap your response in quotes or backticks` },
+      { role: 'user', content: `Original prompt:\n${prompt}\n\nReasoning trace:\n${reasoning.slice(0, 4000)}` },
+    ], { signal: AbortSignal.timeout(30000), maxTokens: 1000 });
+    let refined = raw?.trim() || '';
+    // Strip think blocks
+    refined = refined.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!refined) return res.json({ refined: prompt, changed: false });
+    // Strip wrapping quotes if LLM added them
+    refined = refined.replace(/^["'`]+|["'`]+$/g, '').trim();
+    const changed = refined.toLowerCase() !== prompt.toLowerCase();
+    res.json({ refined, changed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
