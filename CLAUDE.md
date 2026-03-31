@@ -36,7 +36,7 @@ src/
   config.js                # Centralized config from .env (port, llama URL, search, etrade, liteapi, python, location, sourceDir, sourceTest)
   server.js                # Express server, entry point, calls loadPlugins() before listen, starts slot polling
   tools/
-    index.js               # Core: plugin loader, registry, executor, parser, logging, confirmation, system prompt assembly
+    index.js               # Core: plugin loader, registry, executor, parser, logging, confirmation, system prompt assembly, precision rules, plugin config
     plugin-core.js         # current_datetime
     plugin-web.js          # web_search, web_fetch + Tavily/Keiro search backends
     plugin-execution.js    # run_python
@@ -44,13 +44,13 @@ src/
     plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
   routes/
-    conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands
+    conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     slots.js               # Slot status, pin/unpin endpoints
     health.js              # Health checks: llama, internet, search engines (keiro/tavily), liteapi
     etrade.js              # E*TRADE OAuth flow (status, auth start, auth complete, disconnect)
     prompts.js             # Prompt library CRUD + reorder + LLM-generated titles
     sessions.js            # Session prompts CRUD (upsert by color, reorder, PATCH title, LLM-generated titles)
-    tools.js               # List tools, toggle enable/disable
+    tools.js               # List tools, toggle enable/disable (individual tool level)
     templates.js           # Template CRUD, sanitizer, LLM optimize endpoint
   services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
@@ -67,6 +67,7 @@ src/
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json (served at /files/)
+  plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ```
@@ -84,6 +85,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id/unpin` | POST | Unpin conversation (remove from disk) |
 | `/api/conversations/:id/compact` | POST | LLM summarizes conversation, replaces messages with summary |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
+| `/api/conversations/:id/refine` | POST | LLM-powered prompt refinement from reasoning trace |
 | `/api/slots` | GET | Slot status enriched with conversation mapping |
 | `/api/slots/pin` | POST | Pin conversation to slot |
 | `/api/slots/unpin` | POST | Unpin conversation from slot |
@@ -105,6 +107,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/templates/reorder` | PUT | Reorder templates |
 | `/files/*` | GET | Serve project directory files (SOURCE_DIR) |
 | `/api/config` | GET | Public config (location) |
+| `/api/plugins` | GET | List configurable plugin groups |
+| `/api/plugins/:group/toggle` | POST | Hot-load/unload a plugin group |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
 
@@ -136,12 +140,16 @@ Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend
 ### Plugin Architecture
 Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin is a self-contained ES module auto-discovered by `loadPlugins()` at startup. The core index (`src/tools/index.js`) handles registration, system prompt assembly, parsing, execution, logging, and confirmation. `src/services/tools.js` is a backward-compat barrel that re-exports everything from `../tools/index.js`.
 
+**Plugin Configuration**: Configurable plugins (source, travel, finance) can be hot-loaded/unloaded at runtime via the Plugins panel in the UI. Config persisted to `data/plugins.json` (gitignored, auto-created). Always-on plugins (`core`, `web`, `execution`) are not shown in the config UI. Each plugin exports optional `label` and `description` fields for the UI. `GET /api/plugins` lists configurable groups with tool names/descriptions. `POST /api/plugins/:group/toggle` hot-loads/unloads a plugin and persists the change.
+
 #### Plugin Interface
 Each `plugin-*.js` exports a default object:
 
 ```javascript
 export default {
   group: 'mygroup',                              // group name (unique, used in toolGroups registry)
+  label: 'My Plugin',                            // human-readable name for Plugins config UI (optional)
+  description: 'What this plugin does.',         // short description for Plugins config UI (optional)
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
   routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
   prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
@@ -228,7 +236,7 @@ Safety mechanisms:
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
 | `booking` | LiteAPI: prebook, book, list bookings, booking details, cancel |
 
-Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`.
+Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`. Plugin groups can be hot-loaded/unloaded via the Plugins config panel (`/api/plugins/:group/toggle`).
 
 ### Applet System
 Prompt-based interactive HTML visualizations rendered in sandboxed iframes within assistant chat bubbles. Not a tool — the LLM emits `<applet type="TYPE">` blocks in its final response content.
@@ -242,6 +250,21 @@ Checkbox labeled "Autorun" next to the Applets checkbox. When enabled, `run_pyth
 
 **Toggle**: State in `state.autorunEnabled`, persisted to localStorage (default: off). Sent as `autorun: true|false` in message POST body. Backend passes `autorun` flag in the tool execution context.
 
+### Precision Mode
+Checkbox labeled "Precision" next to Review. Enforces strict computation discipline: no mental math, all calculations via `run_python`, no rounding/fabrication of numerical data, vectorized pandas rules.
+
+**Toggle**: State in `state.precisionEnabled`, persisted to localStorage (default: off). Sent as `precision: true|false` in message POST body. Backend injects `PRECISION_RULES` section into system prompt via `getSystemPrompt({ precision })`.
+
+**Auto-activation**: When the finance group (E*TRADE) is active (`isToolGroupEnabled('finance')`), precision rules are always injected regardless of the toggle. This ensures financial data is never handled with mental math.
+
+**Rule split**: Generic computation rules (data integrity, no mental math, pandas code quality, error handling) live in `PRECISION_RULES` constant in `src/tools/index.js`. E*TRADE-specific domain rules (options reasoning, position definitions, table formats, chain fetching workflows) stay in `plugin-etrade.js`.
+
+### Stop Button
+Red square icon button in the input area button column (below Send). Hidden by default, appears during streaming. Clicking aborts the `AbortController`, cancels the fetch, stops the elapsed timer, and re-renders messages from server data so regenerate buttons appear on user messages.
+
+### Refine Button
+Small "Refine" button on thinking/reasoning `<details>` blocks. Sends the original user prompt + reasoning trace to the LLM via `POST /api/conversations/:id/refine`. The LLM analyzes where it struggled or made assumptions and returns an improved prompt (max 3x original length). Result loaded into the input textarea for user review. Shows "Already optimal" if the prompt doesn't need improvement.
+
 ### Think Toggle
 Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/thinking blocks, tool content ("Working..."), tool status messages, and tool use details ("Used web_search", etc.) during streaming.
 
@@ -252,9 +275,9 @@ Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/think
 ### Session System
 Colored session types that define conversation categories. Each conversation is associated with a session color. Session prompts are saved per color and auto-submitted when creating a new chat.
 
-**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`, `--btn-navy`, `--btn-lavender`). Easy to change in one place.
+**Session colors**: Defined as CSS variables in `:root` (`--btn-blue`, `--btn-cyan`, `--btn-amber`, `--btn-coral`, `--btn-sgreen`, `--btn-navy`, `--btn-lavender`, `--btn-purple`, `--btn-hotpink`, `--btn-sky`). Easy to change in one place.
 
-**Session buttons**: 7 compact colored `+` buttons in the top bar. Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
+**Session buttons**: 7 primary colored `+` buttons always visible in the top bar, plus 3 extra (purple, hot pink, sky) behind a `›`/`‹` expand/collapse chevron (state persisted to localStorage). Clicking creates a new conversation, assigns the color, and auto-loads/submits the matching session prompt (if saved).
 
 **Session persistence**:
 - `state.sessionColors` (localStorage `sessionColors`): `Map<convId, sessionType>` — per-conversation color assignment
@@ -270,9 +293,9 @@ Colored session types that define conversation categories. Each conversation is 
 
 **Input locking**: Input textarea and Send button disabled when no session is active (`!currentConversationId || !sessionType`). Placeholder shows "Select or create a session to start…". Menu items (Sessions, Prompts, Templates) also blocked without active session — clicking shows red "Create a session first" flash message inline with empty state text.
 
-**Save Session button**: Saves input text as the session prompt for the current color. Upserts — same color overwrites existing. LLM generates title (defensive prompt with triple-backtick wrapping to prevent instruction following).
+**Save Session button**: Saves input text as the session prompt for the current color. Upserts — same color overwrites existing (with overwrite confirmation dialog if a prompt already exists for the color). LLM generates title (defensive prompt with triple-backtick wrapping to prevent instruction following). Same overwrite confirmation applies to Save Compact button.
 
-**Sessions menu**: Dropdown in top bar menu (Tools, Prompts, Sessions, Templates). Lists saved session prompts with titles colored by session color. Click to load text into input (with variable substitution). Drag grip handle (⠿) to reorder. Pencil (✎) button for inline title editing. Delete with hover ✕ button.
+**Sessions menu**: Dropdown in top bar menu (Prompts, Sessions, Templates). Lists saved session prompts with titles colored by session color. Click to load text into input (with variable substitution). Drag grip handle (⠿) to reorder. Pencil (✎) button for inline title editing. Delete with hover ✕ button.
 
 **Session button tooltips**: Colored `+` buttons show instant CSS tooltips on hover with the saved session prompt title (via `data-tip` attribute, no native title delay).
 
@@ -349,7 +372,7 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 - `[DONE]` — stream complete
 
 ## UI Layout
-Full-width top bar spanning entire window width with: colored session `+` buttons (left), status indicator grid (2 rows: core + APIs), menus (Tools/Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Input area has textarea with vertical button stack (Send/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think).
+Full-width top bar spanning entire window width with: colored session `+` buttons (left, 7 primary + 3 collapsible extra), Plugins button, status indicator grid (2 rows: core + APIs), menus (Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Plugins config opens as a full-width panel overlaying the chat area. Input area has textarea with vertical button stack (Send/Stop/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think/Precision).
 
 ### Conversation Pinning
 Pin button (📌) in sidebar persists conversations to disk across server restarts. Compact button (≡) on pinned conversations sends the full conversation to the LLM for summarization — messages are irreversibly replaced with a structured summary preserving outcomes, decisions, and lessons learned. Two-click confirmation (click → "Compact?" → click again). Especially useful for long coding sessions with many tool rounds. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.

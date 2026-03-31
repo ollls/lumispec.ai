@@ -268,8 +268,24 @@ export function getPluginAuth(groupName) {
   return toolGroups[groupName]?.status?.auth || null;
 }
 
+// ── Precision Mode rules (standalone, not tied to any plugin) ──
+const PRECISION_RULES = `## Precision Mode — Computation Discipline
+- NEVER do mental math, manual arithmetic, or approximate calculations. For ANY computation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting, or any question where getting the wrong number would be harmful — use run_python.
+- NEVER round, abbreviate, reformat, or manually transcribe numerical data. Present values EXACTLY as they appear in tool results. Dropping digits, misplacing decimals, or rounding amounts is a serious error (e.g. $92,891.35 must stay $92,891.35 — never $924.83, $92,891, or $92.9K).
+- NEVER fabricate, interpolate, or invent figures. Only present values that appear verbatim in tool results or Python output. If a field or row doesn't exist in the data, don't create it.
+- NEVER substitute training-data knowledge for missing data. If a tool call didn't return the data you need, RETRY with correct parameters or tell the user what's missing. NEVER say "the tool didn't return X, but here's what typically happens."
+- WHEN TO USE run_python vs direct answer: USE run_python for: calculations with more than 3 numbers, aggregations, data with 10+ rows, date math, filtering/sorting, or anything where precision matters. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python.
+- run_python code quality — MANDATORY rules:
+  1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum().
+  2. Keep scripts under 40 lines. One task per script.
+  3. Pick ONE output: print() a short summary OR save a file. Not both.
+  4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
+- run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
+- Large result sets (30+ rows) are auto-saved to CSV in the project directory. When you see "_autoSaved", use that filename directly in run_python.
+- run_python runs in the source project directory — same location as saved files. Use filenames directly (e.g. pd.read_csv('data.csv')).`;
+
 // ── System prompt assembly ──────────────────────────
-export function getSystemPrompt({ applets = false } = {}) {
+export function getSystemPrompt({ applets = false, precision = false } = {}) {
   const toolList = Object.entries(tools)
     .filter(([name]) => !disabledTools.has(name))
     .map(([name, t]) => `- ${name}: ${t.description}`)
@@ -282,6 +298,10 @@ export function getSystemPrompt({ applets = false } = {}) {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     offset: now.getTimezoneOffset(),
   };
+
+  // Inject precision rules if toggle is on OR finance group is active
+  const precisionActive = precision || isToolGroupEnabled('finance');
+  const precisionSection = precisionActive ? PRECISION_RULES : '';
 
   const groupSections = Object.values(toolGroups)
     .filter(isGroupEnabled)
@@ -364,6 +384,8 @@ Tool rules:
 - Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
 - REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.
 ${routingSection}
+
+${precisionSection}
 
 ${groupSections}
 

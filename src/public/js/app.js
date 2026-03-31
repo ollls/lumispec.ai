@@ -15,6 +15,7 @@ const state = {
   compactColors: new Set(), // colors that have compact prompts configured
   listMode: false, // bullet list editing mode
   reviewEnabled: localStorage.getItem('reviewEnabled') === 'true', // pause after each task step
+  precisionEnabled: localStorage.getItem('precisionEnabled') === 'true', // strict computation mode
 };
 
 // Colorize diff text — lines starting with +/-/@@ get green/red/cyan
@@ -111,6 +112,7 @@ const autorunToggle = document.getElementById('autorun-toggle');
 const thinkToggle = document.getElementById('think-toggle');
 const reviewToggle = document.getElementById('review-toggle');
 const reviewToggleLabel = document.getElementById('review-toggle-label');
+const precisionToggle = document.getElementById('precision-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const saveSessionBtn = document.getElementById('save-session-btn');
 const sessionList = document.getElementById('session-list');
@@ -961,6 +963,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
+        precision: state.precisionEnabled,
         sessionInit: sessionInit || false,
       }),
       signal: state.abortController.signal,
@@ -1297,6 +1300,7 @@ async function sendTasks(tasks, displayText) {
         tasks,
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
+        precision: state.precisionEnabled,
         review: state.reviewEnabled,
       }),
       signal: state.abortController.signal,
@@ -1383,29 +1387,48 @@ async function sendTasks(tasks, displayText) {
             }
 
             if (data.task_review) {
-              // Pause for user review — show Continue/Retry buttons
+              // Pause for user review — show Continue/Retry buttons + comment input
               const reviewDiv = document.createElement('div');
-              reviewDiv.className = 'flex gap-2 my-2 ml-1';
+              reviewDiv.className = 'my-2 ml-1';
+              const commentInput = document.createElement('input');
+              commentInput.type = 'text';
+              commentInput.placeholder = 'Add guidance for next step...';
+              Object.assign(commentInput.style, {
+                width: '100%', marginBottom: '6px', padding: '5px 10px',
+                fontSize: '12px', background: '#27272a', color: '#e4e4e7',
+                border: '1px solid #3f3f46', borderRadius: '6px', outline: 'none',
+              });
+              commentInput.addEventListener('focus', () => { commentInput.style.borderColor = '#6366f1'; });
+              commentInput.addEventListener('blur', () => { commentInput.style.borderColor = '#3f3f46'; });
+              const btnRow = document.createElement('div');
+              btnRow.className = 'flex gap-2';
               const continueBtn = document.createElement('button');
               continueBtn.className = 'px-3 py-1 bg-green-600/20 text-green-400 border border-green-500/30 rounded text-xs hover:bg-green-600/30';
               continueBtn.textContent = 'Continue';
               const retryBtn = document.createElement('button');
               retryBtn.className = 'px-3 py-1 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded text-xs hover:bg-amber-600/30';
               retryBtn.textContent = 'Retry';
-              reviewDiv.appendChild(continueBtn);
-              reviewDiv.appendChild(retryBtn);
+              btnRow.appendChild(continueBtn);
+              btnRow.appendChild(retryBtn);
+              reviewDiv.appendChild(commentInput);
+              reviewDiv.appendChild(btnRow);
               bubble.appendChild(reviewDiv);
               responseArea.scrollTop = responseArea.scrollHeight;
+              commentInput.focus();
               const respond = async (action) => {
+                const comment = commentInput.value.trim();
                 reviewDiv.remove();
                 await fetch(`/api/conversations/${state.currentConversationId}/task-review`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ action }),
+                  body: JSON.stringify({ action, comment: action === 'continue' ? comment : '' }),
                 });
               };
               continueBtn.addEventListener('click', () => respond('continue'));
               retryBtn.addEventListener('click', () => respond('retry'));
+              commentInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); respond('continue'); }
+              });
             }
 
             if (data.task_error) {
@@ -2345,6 +2368,13 @@ reviewToggle.checked = state.reviewEnabled;
 reviewToggle.addEventListener('change', () => {
   state.reviewEnabled = reviewToggle.checked;
   localStorage.setItem('reviewEnabled', state.reviewEnabled);
+});
+
+// Precision toggle
+precisionToggle.checked = state.precisionEnabled;
+precisionToggle.addEventListener('change', () => {
+  state.precisionEnabled = precisionToggle.checked;
+  localStorage.setItem('precisionEnabled', state.precisionEnabled);
 });
 
 imageInput.addEventListener('change', () => {

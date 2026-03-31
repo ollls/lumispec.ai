@@ -121,6 +121,7 @@ router.post('/:id/messages', async (req, res) => {
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
+  const precision = !!req.body.precision;
   const sessionInit = !!req.body.sessionInit;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
@@ -177,7 +178,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
 
   try {
     // Build messages with system prompt for tool support
-    const systemPrompt = getSystemPrompt({ applets });
+    const systemPrompt = getSystemPrompt({ applets, precision });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;

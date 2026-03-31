@@ -20,11 +20,11 @@ function requestReview(convId) {
   });
 }
 
-function resolveReview(convId, action) {
+function resolveReview(convId, action, comment) {
   const pending = pendingReviews.get(convId);
   if (!pending) return false;
   pendingReviews.delete(convId);
-  pending.resolve(action); // 'continue' or 'retry'
+  pending.resolve({ action, comment: comment || '' });
   return true;
 }
 
@@ -32,17 +32,17 @@ function cancelReview(convId) {
   const pending = pendingReviews.get(convId);
   if (pending) {
     pendingReviews.delete(convId);
-    pending.resolve('continue'); // unblock on abort
+    pending.resolve({ action: 'continue', comment: '' }); // unblock on abort
   }
 }
 
 // Review response endpoint
 router.post('/:id/task-review', (req, res) => {
-  const { action } = req.body;
+  const { action, comment } = req.body;
   if (!action || !['continue', 'retry'].includes(action)) {
     return res.status(400).json({ error: 'action must be continue or retry' });
   }
-  const resolved = resolveReview(req.params.id, action);
+  const resolved = resolveReview(req.params.id, action, comment);
   if (!resolved) return res.status(404).json({ error: 'No pending review' });
   res.json({ ok: true });
 });
@@ -51,7 +51,7 @@ router.post('/:id/tasks', async (req, res) => {
   const conv = conversations.get(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
-  const { tasks, applets, autorun, review } = req.body;
+  const { tasks, applets, autorun, review, precision } = req.body;
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -95,7 +95,7 @@ router.post('/:id/tasks', async (req, res) => {
     cancelReview(conv.id);
   });
 
-  const systemPrompt = getSystemPrompt({ applets: !!applets });
+  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision });
   const taskRunResults = [];
   let prevResult = null;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -155,14 +155,17 @@ router.post('/:id/tasks', async (req, res) => {
         // Review pause (if enabled and not last task)
         if (review && ti < normalizedTasks.length - 1) {
           res.write(`data: ${JSON.stringify({ task_review: { index: ti } })}\n\n`);
-          const action = await requestReview(conv.id);
-          if (action === 'retry') {
+          const reviewResult = await requestReview(conv.id);
+          if (reviewResult.action === 'retry') {
             // Re-run all subtasks for this group
             taskRunResults.pop();
             subtaskResults.length = 0;
             prevResult = prevResultBeforeTask;
             ti--;
             continue;
+          }
+          if (reviewResult.comment) {
+            prevResult += `\n\n---\n\nUser guidance: ${reviewResult.comment}`;
           }
         }
 
@@ -193,13 +196,16 @@ router.post('/:id/tasks', async (req, res) => {
         // Review pause (if enabled and not last task)
         if (review && ti < normalizedTasks.length - 1) {
           res.write(`data: ${JSON.stringify({ task_review: { index: ti } })}\n\n`);
-          const action = await requestReview(conv.id);
-          if (action === 'retry') {
+          const reviewResult = await requestReview(conv.id);
+          if (reviewResult.action === 'retry') {
             // Re-run this task
             taskRunResults.pop();
             prevResult = prevResultBeforeTask;
             ti--;
             continue;
+          }
+          if (reviewResult.comment) {
+            prevResult += `\n\n---\n\nUser guidance: ${reviewResult.comment}`;
           }
         }
       }
