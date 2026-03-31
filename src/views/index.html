@@ -22,6 +22,9 @@
       --btn-sgreen: #607D6B; /* slate green */
       --btn-navy: #1B2A4A;   /* charcoal navy */
       --btn-lavender: #E8E0F0; /* lavender mist */
+      --btn-purple: #A855F7;  /* purple */
+      --btn-hotpink: #EC4899; /* hot pink */
+      --btn-sky: #06B6D4;     /* sky cyan */
     }
     .session-btn:hover { filter: brightness(1.2); }
     .session-btn { position: relative; }
@@ -88,6 +91,18 @@
       <button id="new-chat-lavender"
         class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
         data-session="lavender" style="background:var(--btn-lavender); color:#000;">+</button>
+      <button id="session-expand" class="text-zinc-600 hover:text-zinc-400 transition-colors text-xs px-1 cursor-pointer" title="More sessions">›</button>
+      <span id="session-extra" class="hidden flex items-center gap-1.5">
+        <button id="new-chat-purple"
+          class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
+          data-session="purple" style="background:var(--btn-purple);">+</button>
+        <button id="new-chat-hotpink"
+          class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
+          data-session="hotpink" style="background:var(--btn-hotpink);">+</button>
+        <button id="new-chat-sky"
+          class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
+          data-session="sky" style="background:var(--btn-sky);">+</button>
+      </span>
     </div>
     <div class="w-px self-stretch bg-zinc-700"></div>
     <!-- Status indicators: flex-wrap layout -->
