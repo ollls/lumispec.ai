@@ -136,6 +136,25 @@ const pluginConfigPanel = document.getElementById('plugin-config-panel');
 const pluginConfigList = document.getElementById('plugin-config-list');
 const pluginConfigClose = document.getElementById('plugin-config-close');
 
+// ── Extra session buttons expand/collapse ────────────
+{
+  const expandBtn = document.getElementById('session-expand');
+  const extraBtns = document.getElementById('session-extra');
+  const expanded = localStorage.getItem('sessionExpanded') === 'true';
+  if (expanded) {
+    extraBtns.classList.remove('hidden');
+    extraBtns.classList.add('flex');
+    expandBtn.textContent = '‹';
+  }
+  expandBtn.addEventListener('click', () => {
+    const show = extraBtns.classList.contains('hidden');
+    extraBtns.classList.toggle('hidden', !show);
+    extraBtns.classList.toggle('flex', show);
+    expandBtn.textContent = show ? '‹' : '›';
+    localStorage.setItem('sessionExpanded', show);
+  });
+}
+
 // ── Stop button ─────────────────────────────────────
 stopBtn.addEventListener('click', () => {
   if (state.abortController) {
