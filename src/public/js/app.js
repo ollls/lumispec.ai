@@ -80,6 +80,7 @@ const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
+const stopBtn = document.getElementById('stop-btn');
 const llmDot = document.getElementById('llm-dot');
 const llmLabel = document.getElementById('llm-label');
 const llmToggle = document.getElementById('llm-toggle');
@@ -134,6 +135,14 @@ const pluginsToggle = document.getElementById('plugins-toggle');
 const pluginConfigPanel = document.getElementById('plugin-config-panel');
 const pluginConfigList = document.getElementById('plugin-config-list');
 const pluginConfigClose = document.getElementById('plugin-config-close');
+
+// ── Stop button ─────────────────────────────────────
+stopBtn.addEventListener('click', () => {
+  if (state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+  }
+});
 
 // ── Click-to-copy word from assistant messages ───────
 responseArea.addEventListener('click', (e) => {
@@ -828,6 +837,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
   appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
+  stopBtn.classList.remove('hidden');
   startElapsedTimer();
 
   // Create a collapsed reasoning block inside the bubble
@@ -1143,7 +1153,13 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
     if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
     state.abortController = null;
     sendBtn.disabled = false;
+    stopBtn.classList.add('hidden');
     input.focus();
+    // Re-render from server data so regen buttons appear on user messages
+    try {
+      const conv = await api.getConversation(state.currentConversationId);
+      if (conv?.messages) renderMessages(conv.messages);
+    } catch {}
     // Refresh sidebar to pick up auto-title, slots to clear active state
     refreshSidebar();
     refreshSlots();
@@ -1175,6 +1191,7 @@ async function sendTasks(tasks, displayText) {
   appendMessage('user', displayText);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
+  stopBtn.classList.remove('hidden');
   startElapsedTimer();
 
   bubble.textContent = '';
@@ -1473,7 +1490,12 @@ async function sendTasks(tasks, displayText) {
     }
     state.abortController = null;
     sendBtn.disabled = false;
+    stopBtn.classList.add('hidden');
     input.focus();
+    try {
+      const conv = await api.getConversation(state.currentConversationId);
+      if (conv?.messages) renderMessages(conv.messages);
+    } catch {}
     refreshSidebar();
     refreshSlots();
   }
@@ -2454,9 +2476,11 @@ function startTitleEdit(titleSpan, onSave) {
   getSelection().removeAllRanges();
   getSelection().addRange(range);
 
+  const stopClick = (e) => e.stopPropagation();
   const finish = (save) => {
     titleSpan.contentEditable = 'false';
     titleSpan.classList.remove('bg-zinc-800', 'rounded', 'px-1', 'outline-none', 'ring-1', 'ring-zinc-600');
+    titleSpan.removeEventListener('click', stopClick);
     const newTitle = titleSpan.textContent.trim();
     if (save && newTitle && newTitle !== orig) {
       onSave(newTitle);
@@ -2470,7 +2494,7 @@ function startTitleEdit(titleSpan, onSave) {
     if (e.key === 'Escape') { e.preventDefault(); finish(false); }
   });
   titleSpan.addEventListener('blur', () => finish(true), { once: true });
-  titleSpan.addEventListener('click', (e) => e.stopPropagation());
+  titleSpan.addEventListener('click', stopClick);
 }
 
 function renderSessions(sessions) {
@@ -3329,9 +3353,62 @@ savePromptBtn.addEventListener('click', async () => {
   }
 });
 
+function showOverwriteConfirm(label) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', zIndex: '200',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.6)',
+    });
+    const card = document.createElement('div');
+    Object.assign(card.style, {
+      background: '#27272a', border: '1px solid #3f3f46', borderRadius: '12px',
+      padding: '20px 24px', maxWidth: '360px', width: '100%',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    });
+    const msg = document.createElement('div');
+    Object.assign(msg.style, { color: '#e4e4e7', fontSize: '14px', marginBottom: '16px', lineHeight: '1.5' });
+    msg.textContent = `A ${label} prompt already exists for this session. Overwrite it?`;
+    const btnRow = document.createElement('div');
+    Object.assign(btnRow.style, { display: 'flex', justifyContent: 'flex-end', gap: '8px' });
+    const cancelBtn = document.createElement('button');
+    Object.assign(cancelBtn.style, {
+      padding: '6px 16px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
+      border: '1px solid #3f3f46', background: 'transparent', color: '#a1a1aa',
+    });
+    cancelBtn.textContent = 'Cancel';
+    const confirmBtn = document.createElement('button');
+    Object.assign(confirmBtn.style, {
+      padding: '6px 16px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
+      border: 'none', background: '#dc2626', color: '#fff',
+    });
+    confirmBtn.textContent = 'Overwrite';
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(confirmBtn);
+    card.appendChild(msg);
+    card.appendChild(btnRow);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    const close = (result) => { overlay.remove(); resolve(result); };
+    cancelBtn.addEventListener('click', () => close(false));
+    confirmBtn.addEventListener('click', () => close(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+  });
+}
+
 saveSessionBtn.addEventListener('click', async () => {
   const text = input.value.trim();
   if (!text || !state.sessionType) return;
+  // Check if session prompt already exists for this color
+  try {
+    const sessions = await (await fetch('/api/sessions')).json();
+    const existing = sessions.find(s => s.color === state.sessionType);
+    if (existing) {
+      const ok = await showOverwriteConfirm('session');
+      if (!ok) return;
+    }
+  } catch {}
   const origHTML = saveSessionBtn.innerHTML;
   saveSessionBtn.disabled = true;
   saveSessionBtn.style.opacity = '0.5';
@@ -3354,6 +3431,15 @@ saveSessionBtn.addEventListener('click', async () => {
 saveCompactBtn.addEventListener('click', async () => {
   const text = input.value.trim();
   if (!text || !state.sessionType) return;
+  // Check if compact prompt already exists for this color
+  try {
+    const compacts = await (await fetch('/api/compacts')).json();
+    const existing = compacts.find(c => c.color === state.sessionType);
+    if (existing) {
+      const ok = await showOverwriteConfirm('compact');
+      if (!ok) return;
+    }
+  } catch {}
   const origHTML = saveCompactBtn.innerHTML;
   saveCompactBtn.disabled = true;
   saveCompactBtn.style.opacity = '0.5';
