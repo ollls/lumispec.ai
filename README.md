@@ -3,7 +3,7 @@
 ![ScrapChat](Screenshot1.png)
 ![ScrapChat](Screenshot2.png)
 
-A production-grade personal assistant that runs entirely on your own hardware — not a toy. The E\*TRADE integration and code development toolset fill real gaps left by commercial AI tools: full portfolio analysis with real financial data, AI-driven coding with git integration and diff previews, and complete privacy with no cloud dependencies. Built for and tested with **Qwen3.5-35B-A3B** on an **NVIDIA RTX 5090**. Useful today for automating portfolio analysis, developing software, or running local LLM experiments.
+A personal assistant that runs entirely on your own hardware. The E\*TRADE integration and code development toolset fill real gaps left by commercial AI tools: full portfolio analysis with real financial data, AI-driven coding with git integration and diff previews, and complete privacy with no cloud dependencies. Built for and tested with **Qwen3.5-35B-A3B** on an **NVIDIA RTX 5090**. Useful today for automating portfolio analysis, developing software, or running local LLM experiments.
 
 Connect any local LLM via [llama.cpp](https://github.com/ggerganov/llama.cpp) and get a full-featured chat interface with web search, code execution, interactive visualizations, AI-powered code development, travel planning, and deep E\*TRADE brokerage integration.
 
