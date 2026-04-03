@@ -784,11 +784,11 @@ function appendMessage(role, text, images, meta = {}) {
 
   const bubble = document.createElement('div');
   if (role === 'user') {
-    bubble.className = 'relative group max-w-full bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+    bubble.className = 'relative group max-w-[85%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
   } else if (role === 'error') {
-    bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+    bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-full bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'max-w-[85%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Regenerate button on user bubbles
@@ -1249,7 +1249,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
             }
             if (data.error) {
               bubble.textContent = `[Error: ${data.error}]`;
-              bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+              bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
             }
           } catch { /* skip malformed */ }
         }
@@ -1258,7 +1258,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
   } catch (err) {
     if (err.name !== 'AbortError') {
       bubble.textContent = `[Error: ${err.message}]`;
-      bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+      bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
     clearTimeout(_renderTimer);
@@ -1612,7 +1612,7 @@ async function sendTasks(tasks, displayText) {
   } catch (err) {
     if (err.name !== 'AbortError') {
       bubble.textContent = `[Error: ${err.message}]`;
-      bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+      bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
     clearTimeout(_renderTimer);
