@@ -290,17 +290,43 @@ Indentation = independence, flat = chaining. No configuration needed.
 
 **Nested tasks (isolated + merged):** Parent is a label (not executed). Subtasks execute sequentially with full isolation from siblings — all receive the same incoming context. After all complete, results are merged with section headers and passed downstream.
 
-**Context flow:** Each step gets a pipeline-aware system prompt addition (step number, "complete ONLY the current task" rules). Previous output framed as user message with "Previous Step Output" header (max 32K chars). The LLM never sees the full task list.
+**Step context — three components:** Each step receives up to three pieces of context assembled into its user message, separated from the task prompt by `---`:
+
+| Component | Flat task | Subtask | Scope |
+|---|---|---|---|
+| Task prompt (`taskText`) | The task's own text | The subtask's own text | Current step |
+| Parent prompt (`parentText`) | — | Group label text (e.g. constraints, instructions) | Subtask group |
+| Previous output (`prev.result`) | Immediately preceding task's output | Previous top-level task's output (same for all siblings) | Sequential, one step back |
+| Previous files (`prev.files`) | Files saved by preceding task | Files from previous top-level task (same for all siblings) | Sequential, one step back |
+
+Example pipeline: Task 1 → Task 2 → Task 3 (subtasks A, B) → Task 4
+
+| Step | Task prompt | Parent prompt | prev.result | prev.files |
+|---|---|---|---|---|
+| Task 1 | "fetch AMD data" | — | *(none)* | *(none)* |
+| Task 2 | "analyze the data" | — | Task 1 output | Task 1 files |
+| Task 3 (group) | "visualize results" | — | *(not executed)* | — |
+|   Subtask A | "chart prices" | "visualize results" | Task 2 output | Task 2 files |
+|   Subtask B | "chart volume" | "visualize results" | Task 2 output | Task 2 files |
+| Task 4 | "write summary" | — | merged A+B output | A+B files |
+
+Key isolation rules:
+- Subtasks never see sibling output or sibling files
+- Files follow the same sequential scope as prev.result (not global/cumulative)
+- Parent text is only injected for subtasks — flat tasks have their own text as the prompt
+- The LLM never sees the full task list
+
+Each step also gets a pipeline-aware system prompt addition (step number, "complete ONLY the current task" rules). Previous output framed as user message with "Previous Step Output" header (max 32K chars).
 
 **Execution engine:** Each task/subtask runs through the same tool loop as regular chat (up to 20 tool rounds, repeat detection, parallel tool cap, confirmation flow, full SSE streaming).
 
-**File exchange between steps:** Large tool results (option chains, etc.) auto-save to CSV files. The task processor tracks all auto-saved files across the pipeline. Each subsequent step receives these filenames in its system prompt ("Files saved by previous steps") so data survives context isolation. Files act as a side channel bypassing context limits.
+**File exchange between steps:** Large tool results (option chains, etc.) auto-save to CSV files. Filenames passed to the next step via "Available Data Files" section in the user message (scoping described in table above).
 
 **Review mode:** Review checkbox appears in input area when list mode is active. When enabled, pipeline pauses after each completed task (except last) with Continue/Retry buttons. Continue accepts output and proceeds. Retry discards output, restores context to pre-task state, and re-runs (fresh LLM call, may produce different output due to temperature). Backend emits `{task_review}` SSE event and pauses on a promise; frontend POSTs to `/api/conversations/:id/task-review` with `{action: "continue"|"retry"}` to unblock.
 
 **Input — bullet list editing:** Activated by clicking bullet-list button or pasting a multi-line bullet list (auto-detected). Keyboard: Enter (new bullet), Tab (indent to subtask, max 1 level), Shift+Tab (outdent), Backspace on empty (outdent then remove), Ctrl+Enter (submit). In list mode: Save Prompt saves to Tasks menu (not Prompts); Save Session and Save Compact disabled.
 
-**Storage:** Task runs stored as a single assistant message with `text` (backward-compatible markdown) and `taskRun` array (structured metadata with per-step results and tool uses).
+**Storage:** Task runs stored as a single assistant message with `text` (backward-compatible markdown) and `taskRun` array (structured metadata with per-step results, tool uses, and reasoning). On re-render, `taskRun` drives structured display with per-step reasoning blocks, tool use details, and formatted content.
 
 **SSE events:** `{task_start}` → `{subtask_start}` → (streaming events) → `{subtask_complete}` → `{task_complete}` → `{task_review}` (if enabled) → `{task_error}` (on failure, pipeline stops) → `[DONE]`
 

@@ -742,7 +742,8 @@ function renderMessages(messages) {
     const images = typeof msg.content === 'object' ? msg.content.images : undefined;
     const reasoning = typeof msg.content === 'object' ? msg.content.reasoning : undefined;
     const toolUses = typeof msg.content === 'object' ? msg.content.toolUses : undefined;
-    appendMessage(msg.role, text, images, { reasoning, toolUses, msgIndex: i });
+    const taskRun = typeof msg.content === 'object' ? msg.content.taskRun : undefined;
+    appendMessage(msg.role, text, images, { reasoning, toolUses, taskRun, msgIndex: i });
   }
 }
 
@@ -924,7 +925,83 @@ function appendMessage(role, text, images, meta = {}) {
     bubble.appendChild(container);
   }
 
-  if (role === 'assistant' && text) {
+  // Render stored task run with per-step reasoning + tool uses
+  if (role === 'assistant' && meta.taskRun && meta.taskRun.length > 0) {
+    for (let ti = 0; ti < meta.taskRun.length; ti++) {
+      const tr = meta.taskRun[ti];
+      const taskHeader = document.createElement('div');
+      taskHeader.className = 'text-xs font-medium text-indigo-400 border-b border-zinc-700 pb-1 mb-2' + (ti > 0 ? ' mt-3' : '');
+      taskHeader.textContent = `Task ${ti + 1}/${meta.taskRun.length}: ${tr.text}`;
+      bubble.appendChild(taskHeader);
+
+      const renderStepBlocks = (step) => {
+        // Reasoning (collapsed)
+        if (step.reasoning) {
+          const details = document.createElement('details');
+          details.className = 'mb-2 text-zinc-500 text-xs';
+          const summary = document.createElement('summary');
+          summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+          summary.textContent = THOUGHT_LABEL;
+          const body = document.createElement('pre');
+          body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
+          body.textContent = step.reasoning;
+          details.appendChild(summary);
+          details.appendChild(body);
+          bubble.appendChild(details);
+        }
+        // Tool uses (collapsed)
+        if (step.toolUses && step.toolUses.length > 0) {
+          const container = document.createElement('div');
+          container.className = 'tool-use-container';
+          for (const tu of step.toolUses) {
+            const detail = document.createElement('details');
+            detail.className = 'mb-2 text-zinc-500 text-xs';
+            const summary = document.createElement('summary');
+            summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+            summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${tu.name}</strong>`;
+            const body = document.createElement('pre');
+            body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+            body.textContent = tu.result;
+            detail.appendChild(summary);
+            detail.appendChild(body);
+            container.appendChild(detail);
+          }
+          bubble.appendChild(container);
+        }
+        // Content
+        if (step.result) {
+          const contentSpan = document.createElement('span');
+          bubble.appendChild(contentSpan);
+          renderFormattedContent(step.result, contentSpan, { renderMermaid: true });
+        }
+      };
+
+      if (tr.subtasks) {
+        for (let si = 0; si < tr.subtasks.length; si++) {
+          const st = tr.subtasks[si];
+          const subHeader = document.createElement('div');
+          subHeader.className = 'text-xs font-medium text-indigo-400/70 border-b border-zinc-700/50 pb-1 mb-2 mt-2 ml-3';
+          subHeader.textContent = `Subtask ${si + 1}/${tr.subtasks.length}: ${st.text}`;
+          bubble.appendChild(subHeader);
+          renderStepBlocks(st);
+        }
+        if (tr.error) {
+          const errDiv = document.createElement('div');
+          errDiv.className = 'text-red-400 text-xs mt-1';
+          errDiv.textContent = `Error: ${tr.error}`;
+          bubble.appendChild(errDiv);
+        }
+      } else {
+        renderStepBlocks(tr);
+        if (tr.error) {
+          const errDiv = document.createElement('div');
+          errDiv.className = 'text-red-400 text-xs mt-1';
+          errDiv.textContent = `Error: ${tr.error}`;
+          bubble.appendChild(errDiv);
+        }
+      }
+    }
+  } else if (role === 'assistant' && text) {
     const contentSpan = document.createElement('span');
     bubble.appendChild(contentSpan);
     renderFormattedContent(text, contentSpan, { renderMermaid: true });
