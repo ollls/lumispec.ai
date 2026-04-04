@@ -1,5 +1,11 @@
 [
   {
+    "id": "e1149999-3b86-4997-976b-779e17f80800",
+    "title": "Compare AMD and MU Stock Prices",
+    "text": "- DO NOT USE etrade_account tool\n  - find AMD price\n  - find MU price\n- create a table featuring AMD and MU prices",
+    "createdAt": "2026-04-04T10:59:05.067Z"
+  },
+  {
     "id": "3803fbad-00e8-440a-aa1c-4a1c6474d2ac",
     "title": "Solar System SVG Visualization With Orbits",
     "text": "- Generate a horizontal SVG visualization of the solar system with the Sun centered and 8 concentric circular orbits\n- Calculate the approximate orbital phase angles for all 8 planets based on the current date\n- Render the Sun as a bright yellow/orange circle and the 8 planets on their respective orbits using distinct colors and simplified relative sizing (Mercury smallest, Jupiter largest, subtle differences)",

@@ -98,9 +98,8 @@ router.post('/:id/tasks', async (req, res) => {
 
   const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision });
   const taskRunResults = [];
-  let prevResult = null;
+  let prev = { result: null, files: [] }; // output from immediately preceding step
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-  const savedFiles = []; // track files saved across the pipeline
 
   // Count total steps (tasks + subtasks) for progress
   let totalSteps = 0;
@@ -114,23 +113,24 @@ router.post('/:id/tasks', async (req, res) => {
 
       const task = normalizedTasks[ti];
       const hasSubtasks = task.subtasks.length > 0;
-      const prevResultBeforeTask = prevResult; // save for retry
+      const prevBeforeTask = { result: prev.result, files: [...prev.files] }; // deep copy for retry
 
       if (hasSubtasks) {
         // Parent task with subtasks — parent is a label, execute subtasks sequentially
         res.write(`data: ${JSON.stringify({ task_start: { index: ti, total: normalizedTasks.length, text: task.text, subtasks: task.subtasks } })}\n\n`);
 
         const subtaskResults = [];
+        const subtaskFiles = [];
 
         for (let si = 0; si < task.subtasks.length; si++) {
           if (abortController.signal.aborted) break;
 
           res.write(`data: ${JSON.stringify({ subtask_start: { taskIndex: ti, subtaskIndex: si, total: task.subtasks.length, text: task.subtasks[si] } })}\n\n`);
 
-          const result = await processOneStep(task.subtasks[si], prevResult, {
+          const result = await processOneStep(task.subtasks[si], prev, {
             systemPrompt, slotId, abortController, autorun: !!autorun, conv, res,
             stepLabel: `Subtask ${si + 1}/${task.subtasks.length} of Task ${ti + 1}`,
-            allTasks: normalizedTasks, savedFiles,
+            allTasks: normalizedTasks, parentText: task.text,
           });
 
           if (result.error) {
@@ -141,16 +141,19 @@ router.post('/:id/tasks', async (req, res) => {
             return;
           }
 
-          subtaskResults.push({ text: task.subtasks[si], result: result.content, toolUses: result.toolUses });
+          subtaskResults.push({ text: task.subtasks[si], result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
           addUsage(totalUsage, result.usage);
-          if (result.savedFiles) savedFiles.push(...result.savedFiles);
+          if (result.savedFiles) subtaskFiles.push(...result.savedFiles);
 
           res.write(`data: ${JSON.stringify({ subtask_complete: { taskIndex: ti, subtaskIndex: si } })}\n\n`);
         }
 
         taskRunResults.push({ text: task.text, subtasks: subtaskResults });
-        // Merge subtask results as prevResult for next task
-        prevResult = subtaskResults.map(s => `## ${s.text}\n\n${s.result}`).join('\n\n---\n\n');
+        // Merge subtask results for next task
+        prev = {
+          result: subtaskResults.map(s => `## ${s.text}\n\n${s.result}`).join('\n\n---\n\n'),
+          files: subtaskFiles,
+        };
         res.write(`data: ${JSON.stringify({ task_complete: { index: ti } })}\n\n`);
 
         // Review pause (if enabled and not last task)
@@ -161,12 +164,12 @@ router.post('/:id/tasks', async (req, res) => {
             // Re-run all subtasks for this group
             taskRunResults.pop();
             subtaskResults.length = 0;
-            prevResult = prevResultBeforeTask;
+            prev = prevBeforeTask;
             ti--;
             continue;
           }
           if (reviewResult.comment) {
-            prevResult += `\n\n---\n\nUser guidance: ${reviewResult.comment}`;
+            prev = { result: (prev.result || '') + `\n\n---\n\nUser guidance: ${reviewResult.comment}`, files: prev.files };
           }
         }
 
@@ -174,10 +177,10 @@ router.post('/:id/tasks', async (req, res) => {
         // Simple task — no subtasks
         res.write(`data: ${JSON.stringify({ task_start: { index: ti, total: normalizedTasks.length, text: task.text } })}\n\n`);
 
-        const result = await processOneStep(task.text, prevResult, {
+        const result = await processOneStep(task.text, prev, {
           systemPrompt, slotId, abortController, autorun: !!autorun, conv, res,
           stepLabel: `Task ${ti + 1}/${normalizedTasks.length}`,
-          allTasks: normalizedTasks, savedFiles,
+          allTasks: normalizedTasks,
         });
 
         if (result.error) {
@@ -187,10 +190,9 @@ router.post('/:id/tasks', async (req, res) => {
           return;
         }
 
-        taskRunResults.push({ text: task.text, result: result.content, toolUses: result.toolUses });
+        taskRunResults.push({ text: task.text, result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
         addUsage(totalUsage, result.usage);
-        if (result.savedFiles) savedFiles.push(...result.savedFiles);
-        prevResult = result.content;
+        prev = { result: result.content, files: result.savedFiles || [] };
 
         res.write(`data: ${JSON.stringify({ task_complete: { index: ti } })}\n\n`);
 
@@ -201,12 +203,12 @@ router.post('/:id/tasks', async (req, res) => {
           if (reviewResult.action === 'retry') {
             // Re-run this task
             taskRunResults.pop();
-            prevResult = prevResultBeforeTask;
+            prev = prevBeforeTask;
             ti--;
             continue;
           }
           if (reviewResult.comment) {
-            prevResult += `\n\n---\n\nUser guidance: ${reviewResult.comment}`;
+            prev = { result: (prev.result || '') + `\n\n---\n\nUser guidance: ${reviewResult.comment}`, files: prev.files };
           }
         }
       }
@@ -261,7 +263,9 @@ router.post('/:id/tasks', async (req, res) => {
 });
 
 // Process one task/subtask step with full tool loop
-async function processOneStep(taskText, prevResult, { systemPrompt, slotId, abortController, autorun, conv, res, stepLabel, allTasks, savedFiles = [] }) {
+async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, conv, res, stepLabel, allTasks, parentText = '' }) {
+  const { result: prevResult } = prev;
+  const savedFiles = [...prev.files];
   console.log(`[task-processor] ${stepLabel}: "${taskText.slice(0, 80)}" | prevResult: ${prevResult ? prevResult.length + ' chars' : 'none'} | savedFiles: ${savedFiles.length}`);
 
   // Build pipeline-aware system prompt — hide future tasks to prevent working ahead
@@ -278,19 +282,25 @@ CRITICAL RULES:
 
   const llmMessages = [{ role: 'system', content: systemPrompt + pipelinePreamble }];
 
-  // Isolated context: previous result as user context + current task
-  const filesSection = savedFiles.length > 0
-    ? `\n\n## Available Data Files\nThese files were saved by previous steps. Use run_python with pd.read_csv() to access them:\n${savedFiles.map(f => `- **${f.filename}** (from ${f.tool})`).join('\n')}\n`
-    : '';
-
+  // Build context sections
+  const contextParts = [];
   if (prevResult) {
     const truncated = prevResult.length > MAX_PREV_RESULT_CHARS
       ? prevResult.slice(0, MAX_PREV_RESULT_CHARS) + `\n\n[...truncated from ${prevResult.length} chars]`
       : prevResult;
-    llmMessages.push({ role: 'user', content: `## Previous Step Output\n\n${truncated}${filesSection}\n\n---\n\n## Current Task\n\n${taskText}` });
-  } else {
-    llmMessages.push({ role: 'user', content: filesSection ? `${filesSection}\n\n---\n\n## Current Task\n\n${taskText}` : taskText });
+    contextParts.push(`## Previous Step Output\n\n${truncated}`);
   }
+  if (savedFiles.length > 0) {
+    contextParts.push(`## Available Data Files\nThese files were saved by previous steps. Use run_python with pd.read_csv() to access them:\n${savedFiles.map(f => `- **${f.filename}** (from ${f.tool})`).join('\n')}`);
+  }
+  if (parentText) {
+    contextParts.push(`## Parent Task\n${parentText}`);
+  }
+
+  const userContent = contextParts.length > 0
+    ? `${contextParts.join('\n\n')}\n\n---\n\n## Current Task\n\n${taskText}`
+    : taskText;
+  llmMessages.push({ role: 'user', content: userContent });
 
   let accumulatedReasoning = '';
   const toolUses = [];
@@ -473,7 +483,7 @@ CRITICAL RULES:
       } catch {}
     }
 
-    return { content: finalContent || '', usage: lastUsage, toolUses, savedFiles: stepFiles };
+    return { content: finalContent || '', usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
 
   } catch (err) {
     if (err.name === 'AbortError') throw err;
