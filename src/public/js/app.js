@@ -567,7 +567,10 @@ function createAppletIframe(applet) {
     const resizeScript = `<script>
 var _lastH=0,_rszTimer=0;function _rsz(){clearTimeout(_rszTimer);_rszTimer=setTimeout(_rszNow,50);}
 function _rszNow(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});if(Math.abs(h-_lastH)<2)return;_lastH=h;window.parent.postMessage({type:'resize',height:h},'*');}
-window.addEventListener('load',function(){setTimeout(function(){_rszNow();new ResizeObserver(_rsz).observe(document.body);document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete||i.addEventListener('load',_rsz);});new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});},200);});
+new ResizeObserver(_rsz).observe(document.body);
+window.addEventListener('load',function(){setTimeout(_rszNow,100);});
+document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete?_rsz():i.addEventListener('load',_rsz);});
+new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});
 <\/script>`;
     html = html.replace(/<\/body>/i, resizeScript + '</body>');
     if (!/<\/body>/i.test(html)) html += resizeScript;
