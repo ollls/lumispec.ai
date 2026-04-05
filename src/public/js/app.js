@@ -783,7 +783,7 @@ async function regenerateFrom(wrapper) {
 function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
-  wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+  wrapper.className = 'flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
   if (meta.msgIndex !== undefined) wrapper.dataset.msgIndex = meta.msgIndex;
 
   const bubble = document.createElement('div');
