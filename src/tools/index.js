@@ -50,15 +50,24 @@ const toolGroups = {};   // groupName → { tools, condition, routing, prompt, s
 const pluginModules = {}; // groupName → { file, plugin } (cached for hot reload)
 
 // Groups that are always loaded and not shown in the config UI
-const ALWAYS_ON_GROUPS = new Set(['core', 'web', 'execution']);
+const ALWAYS_ON_GROUPS = new Set(['core', 'execution']);
 
-async function readPluginConfig() {
+export async function readPluginConfig() {
   try {
     const raw = await readFile(PLUGIN_CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw);
+    const cfg = JSON.parse(raw);
+    // Normalize legacy boolean values → { enabled: bool }
+    for (const [key, val] of Object.entries(cfg)) {
+      if (typeof val === 'boolean') cfg[key] = { enabled: val };
+    }
+    return cfg;
   } catch {
     return {};
   }
+}
+
+function getPluginDefaults(group) {
+  return pluginModules[group]?.plugin?.defaults || { enabled: true };
 }
 
 async function writePluginConfig(cfg) {
@@ -109,7 +118,7 @@ export async function loadPlugins() {
     pluginModules[plugin.group] = { file, plugin };
 
     // Always-on plugins load unconditionally; others check config
-    if (!ALWAYS_ON_GROUPS.has(plugin.group) && cfg[plugin.group] === false) {
+    if (!ALWAYS_ON_GROUPS.has(plugin.group) && cfg[plugin.group]?.enabled === false) {
       console.log(`[tools] Plugin "${plugin.group}" disabled by config — skipped`);
       continue;
     }
@@ -123,40 +132,66 @@ export async function listPluginGroups() {
   const cfg = await readPluginConfig();
   return Object.entries(pluginModules)
     .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
-    .map(([group, { plugin }]) => ({
-      group,
-      label: plugin.label || group.charAt(0).toUpperCase() + group.slice(1),
-      description: plugin.description || '',
-      enabled: !!toolGroups[group],
-      tools: Object.entries(plugin.tools).map(([name, def]) => ({
-        name,
-        description: def.description.split('\n')[0],
-      })),
-    }));
+    .map(([group, { plugin }]) => {
+      const entry = {
+        group,
+        label: plugin.label || group.charAt(0).toUpperCase() + group.slice(1),
+        description: plugin.description || '',
+        enabled: !!toolGroups[group],
+        tools: Object.entries(plugin.tools).map(([name, def]) => ({
+          name,
+          description: def.description.split('\n')[0],
+        })),
+      };
+      // Include per-plugin config if plugin defines defaults
+      if (plugin.defaults) {
+        const defaults = plugin.defaults;
+        const saved = cfg[group] || {};
+        entry.config = { ...defaults, ...saved };
+        delete entry.config.enabled; // enabled is already top-level
+        // For web plugin, include available engines info
+        if (group === 'web') {
+          entry.config.modes = ['regular', 'stealth', 'browser'];
+          entry.config.availableEngines = [
+            { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
+            { id: 'keiro', label: 'Keiro', available: !!config.keiro.apiKey },
+            { id: 'duckduckgo', label: 'DuckDuckGo', available: true },
+          ];
+        }
+      }
+      return entry;
+    });
 }
 
-export async function setPluginEnabled(groupName, enabled) {
+export async function updatePluginConfig(groupName, updates) {
   if (ALWAYS_ON_GROUPS.has(groupName)) return { error: 'Cannot toggle always-on plugins' };
   const cached = pluginModules[groupName];
   if (!cached) return { error: `Unknown plugin: ${groupName}` };
 
   const cfg = await readPluginConfig();
+  const defaults = cached.plugin.defaults || { enabled: true };
+  const current = cfg[groupName] || { ...defaults };
 
-  if (enabled && !toolGroups[groupName]) {
-    // Hot-load: register the plugin
+  // Merge updates
+  if (updates.enabled !== undefined) current.enabled = updates.enabled;
+  if (updates.mode !== undefined) current.mode = updates.mode;
+  if (updates.engines !== undefined) current.engines = updates.engines;
+
+  // Hot-load / hot-unload based on enabled state
+  if (current.enabled && !toolGroups[groupName]) {
     registerPlugin(cached.plugin);
-    cfg[groupName] = true;
-    await writePluginConfig(cfg);
-    return { group: groupName, enabled: true };
-  } else if (!enabled && toolGroups[groupName]) {
-    // Hot-unload: unregister the plugin
+  } else if (!current.enabled && toolGroups[groupName]) {
     unregisterPlugin(groupName);
-    cfg[groupName] = false;
-    await writePluginConfig(cfg);
-    return { group: groupName, enabled: false };
   }
 
-  return { group: groupName, enabled: !!toolGroups[groupName] };
+  cfg[groupName] = current;
+  await writePluginConfig(cfg);
+  return { group: groupName, enabled: !!toolGroups[groupName], config: current };
+}
+
+// Backward compat wrapper
+export async function setPluginEnabled(groupName, enabled) {
+  return updatePluginConfig(groupName, { enabled });
 }
 
 // ── Command confirmation (queue-based for parallel tool calls) ──
@@ -719,11 +754,11 @@ export async function executeTool(name, args, context) {
     if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.code && loggableArgs.code.length > 2000) loggableArgs.code = loggableArgs.code.slice(0, 2000) + '...[truncated]';
-    logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
+    await logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);
-    logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
+    await logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
     return JSON.stringify({ error: err.message });
   }
 }

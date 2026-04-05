@@ -95,14 +95,9 @@ const contextLabel = document.getElementById('context-label');
 const elapsedTimer = document.getElementById('elapsed-timer');
 const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
-const searchDot = document.getElementById('search-dot');
-const searchLabel = document.getElementById('search-label');
-const searchToggle = document.getElementById('search-toggle');
-const searchDropdown = document.getElementById('search-dropdown');
 const toolUsageToggle = document.getElementById('tool-usage-toggle');
 const toolUsageCount = document.getElementById('tool-usage-count');
 const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
-const searchStatus = document.getElementById('search-status');
 const pluginStatusContainer = document.getElementById('plugin-status-container');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
@@ -570,9 +565,10 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-var _lastH=0;function _rsz(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});if(Math.abs(h-_lastH)<2)return;_lastH=h;window.parent.postMessage({type:'resize',height:h},'*');}
+var _lastH=0,_rszTimer=0;function _rsz(){clearTimeout(_rszTimer);_rszTimer=setTimeout(_rszNow,50);}
+function _rszNow(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});if(Math.abs(h-_lastH)<2)return;_lastH=h;window.parent.postMessage({type:'resize',height:h},'*');}
 new ResizeObserver(_rsz).observe(document.body);
-window.addEventListener('load',function(){setTimeout(_rsz,100);});
+window.addEventListener('load',function(){setTimeout(_rszNow,100);});
 document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete?_rsz():i.addEventListener('load',_rsz);});
 new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});
 <\/script>`;
@@ -625,17 +621,21 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
 }
 
 // Global resize listener for applet iframes (registered once)
+const _iframeResizeTimers = new WeakMap();
 window.addEventListener('message', (e) => {
   if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
   const MAX_IFRAME_H = 20000;
   const height = Math.max(100, Math.min(MAX_IFRAME_H, e.data.height));
   document.querySelectorAll('.applet-iframe').forEach(iframe => {
-    if (iframe.contentWindow === e.source) {
-      const current = parseInt(iframe.style.height) || 0;
-      if (Math.abs(current - height) < 2) return; // skip if unchanged — prevents resize loop
+    if (iframe.contentWindow !== e.source) return;
+    const current = parseInt(iframe.style.height) || 0;
+    if (Math.abs(current - height) < 2) return;
+    // Debounce per-iframe to batch rapid resize messages
+    clearTimeout(_iframeResizeTimers.get(iframe));
+    _iframeResizeTimers.set(iframe, setTimeout(() => {
       iframe.style.height = height + 'px';
       iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
-    }
+    }, 30));
   });
 });
 
@@ -783,7 +783,7 @@ async function regenerateFrom(wrapper) {
 function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
-  wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+  wrapper.className = 'flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
   if (meta.msgIndex !== undefined) wrapper.dataset.msgIndex = meta.msgIndex;
 
   const bubble = document.createElement('div');
@@ -792,7 +792,7 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[85%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Regenerate button on user bubbles
@@ -1180,7 +1180,6 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                   const parsed = JSON.parse(data.tool_use.result);
                   if (parsed.sources) sourcesTag = ` <span class="text-zinc-600">— ${parsed.sources}</span>`;
                 } catch {}
-                pollSearch();
               }
               // Parse result to check for _markdown and build summary info
               let parsedResult = null;
@@ -1809,74 +1808,12 @@ async function pollInternet() {
   }
 }
 
-// ── Search engine check & switcher ───────────────────
-let searchEngines = [];
-
-async function pollSearch() {
-  try {
-    const res = await fetch('/api/health/search');
-    const { ok, engine, engines } = await res.json();
-    searchDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    searchLabel.textContent = engine || 'Search';
-    searchToggle.className = `flex items-center gap-1 transition-colors ${ok ? 'text-green-500 hover:text-green-400' : 'text-red-400 hover:text-red-300'}`;
-    if (engines) searchEngines = engines;
-  } catch {
-    searchDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
-    searchLabel.textContent = 'Search';
-    searchToggle.className = 'flex items-center gap-1 transition-colors text-red-400 hover:text-red-300';
-  }
-}
-
-function renderSearchDropdown() {
-  searchDropdown.innerHTML = '';
-  for (const eng of searchEngines) {
-    if (!eng.configured) continue;
-    const item = document.createElement('button');
-    item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
-      eng.active
-        ? 'text-indigo-400 bg-indigo-500/10'
-        : 'text-zinc-300 hover:bg-zinc-700'
-    }`;
-    item.textContent = eng.label + (eng.active ? ' ✓' : '');
-    if (!eng.active) {
-      item.addEventListener('click', () => switchSearchEngine(eng.id));
-    }
-    searchDropdown.appendChild(item);
-  }
-}
-
-async function switchSearchEngine(engineId) {
-  searchDropdown.classList.add('hidden');
-  // Immediately show checking state
-  searchDot.className = 'inline-block w-2 h-2 rounded-full bg-zinc-600 animate-pulse';
-  searchLabel.textContent = 'Switching…';
-  searchToggle.className = 'flex items-center gap-1 transition-colors text-zinc-500';
-  try {
-    await fetch('/api/health/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine: engineId }),
-    });
-  } catch { /* pollSearch will pick up the state */ }
-  await pollSearch();
-}
-
-searchToggle.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const isOpen = !searchDropdown.classList.contains('hidden');
-  searchDropdown.classList.toggle('hidden');
-  if (!isOpen) renderSearchDropdown();
-});
-
 document.addEventListener('click', () => {
-  searchDropdown.classList.add('hidden');
   toolUsageDropdown.classList.add('hidden');
   llmDropdown.classList.add('hidden');
   // Close all dynamic plugin panels
   Object.values(pluginElements).forEach(el => { if (el.panel) el.panel.classList.add('hidden'); });
 });
-
-searchDropdown.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Tool usage tracking ─────────────────────────────
 const toolUsageCounts = {};
@@ -2045,11 +1982,6 @@ function createPluginStatusElement(plugin) {
 async function pollPluginStatuses() {
   try {
     const statuses = await (await fetch('/api/plugins/status')).json();
-    // Handle managed: false plugins (show/hide hardcoded elements)
-    const webPlugin = statuses.find(p => p.group === 'web');
-    if (searchStatus) {
-      searchStatus.style.display = webPlugin ? '' : 'none';
-    }
     // Handle managed: true plugins
     for (const plugin of statuses) {
       if (!plugin.managed) continue;
@@ -3038,7 +2970,11 @@ function renderPluginConfig(plugins) {
   }
   for (const p of plugins) {
     const card = document.createElement('div');
-    card.className = 'flex items-center justify-between p-4 bg-zinc-800/80 border border-zinc-700/50 rounded-xl transition-colors';
+    card.className = 'p-4 bg-zinc-800/80 border border-zinc-700/50 rounded-xl transition-colors';
+
+    // Top row: label + toggle
+    const topRow = document.createElement('div');
+    topRow.className = 'flex items-center justify-between';
 
     const info = document.createElement('div');
     info.className = 'flex flex-col gap-1 min-w-0';
@@ -3107,8 +3043,109 @@ function renderPluginConfig(plugins) {
       }
     });
 
-    card.appendChild(info);
-    card.appendChild(toggle);
+    topRow.appendChild(info);
+    topRow.appendChild(toggle);
+    card.appendChild(topRow);
+
+    // Web plugin config: mode dropdown + engine checkboxes
+    if (p.group === 'web' && p.config && p.enabled) {
+      const configSection = document.createElement('div');
+      Object.assign(configSection.style, { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #3f3f46' });
+
+      // Mode dropdown
+      const modeRow = document.createElement('div');
+      modeRow.className = 'flex items-center gap-3';
+      const modeLabel = document.createElement('span');
+      Object.assign(modeLabel.style, { fontSize: '12px', color: '#a1a1aa', minWidth: '80px' });
+      modeLabel.textContent = 'Fetch mode';
+      const modeSelect = document.createElement('select');
+      Object.assign(modeSelect.style, {
+        fontSize: '12px', padding: '3px 8px', borderRadius: '6px',
+        background: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46',
+        cursor: 'pointer', outline: 'none',
+      });
+      for (const m of p.config.modes) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === p.config.mode) opt.selected = true;
+        modeSelect.appendChild(opt);
+      }
+      modeSelect.addEventListener('change', async () => {
+        const newMode = modeSelect.value;
+        let engines = [...(p.config.engines || [])];
+        // Auto-remove DDG if switching to regular
+        if (newMode === 'regular') engines = engines.filter(e => e !== 'duckduckgo');
+        await fetch(`/api/plugins/${p.group}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: newMode, engines }),
+        });
+        refreshPluginConfig();
+      });
+      modeRow.appendChild(modeLabel);
+      modeRow.appendChild(modeSelect);
+      configSection.appendChild(modeRow);
+
+      // Engine checkboxes
+      const engRow = document.createElement('div');
+      Object.assign(engRow.style, { marginTop: '10px' });
+      const engLabel = document.createElement('span');
+      Object.assign(engLabel.style, { fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' });
+      engLabel.textContent = 'Search engines';
+      engRow.appendChild(engLabel);
+
+      const checkboxRow = document.createElement('div');
+      checkboxRow.className = 'flex items-center gap-4';
+
+      for (const eng of p.config.availableEngines) {
+        if (!eng.available && eng.id !== 'duckduckgo') continue; // Hide unavailable API engines
+        const wrapper = document.createElement('label');
+        wrapper.className = 'flex items-center gap-1.5 cursor-pointer';
+        const isDDGDisabled = eng.id === 'duckduckgo' && p.config.mode === 'regular';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = (p.config.engines || []).includes(eng.id);
+        cb.disabled = isDDGDisabled;
+        Object.assign(cb.style, { accentColor: '#6366f1', cursor: isDDGDisabled ? 'not-allowed' : 'pointer' });
+
+        const lbl = document.createElement('span');
+        Object.assign(lbl.style, {
+          fontSize: '12px',
+          color: isDDGDisabled ? '#52525b' : '#d4d4d8',
+        });
+        lbl.textContent = eng.label;
+
+        if (isDDGDisabled) {
+          wrapper.style.opacity = '0.5';
+          wrapper.style.cursor = 'not-allowed';
+        }
+
+        cb.addEventListener('change', async () => {
+          const engines = [];
+          for (const box of checkboxRow.querySelectorAll('input[type="checkbox"]')) {
+            if (box.checked) engines.push(box.dataset.engine);
+          }
+          await fetch(`/api/plugins/${p.group}/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engines }),
+          });
+          refreshPluginConfig();
+        });
+
+        cb.dataset.engine = eng.id;
+        wrapper.appendChild(cb);
+        wrapper.appendChild(lbl);
+        checkboxRow.appendChild(wrapper);
+      }
+
+      engRow.appendChild(checkboxRow);
+      configSection.appendChild(engRow);
+      card.appendChild(configSection);
+    }
+
     pluginConfigList.appendChild(card);
   }
 }
@@ -3541,12 +3578,14 @@ function renderTasks(tasks) {
     item.addEventListener('click', () => {
       if (!requireSession()) return;
       // Load task text into input and activate list mode
+      const prevHeight = input.offsetHeight;
       input.value = t.text;
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-      // Activate list mode if text contains bullet lines
       const trimmed = t.text.trimStart();
       if (trimmed.includes('- ') && !state.listMode) toggleListMode(true);
+      // Keep current height — only grow if content needs more space, never shrink
+      input.style.height = 'auto';
+      const needed = input.scrollHeight;
+      input.style.height = Math.max(prevHeight, needed) + 'px';
       input.focus();
       tasksDropdown.classList.add('hidden');
     });
@@ -3838,8 +3877,6 @@ saveCompactBtn.addEventListener('click', async () => {
   setInterval(pollLLM, 5000);
   pollInternet();
   setInterval(pollInternet, 30000);
-  pollSearch();
-  setInterval(pollSearch, 60000);
   initPluginStatuses();
   refreshSlots();
   setInterval(refreshSlots, 5000);

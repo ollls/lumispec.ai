@@ -1,5 +1,23 @@
 [
   {
+    "id": "2105a351-f4bf-4faa-9820-39d01faa40f8",
+    "title": "Gathering Top News From Major Sites",
+    "text": "- fetch sites, select top news worthy attention.\n  - Fetch https://www.cnn.com/\n  - Fetch https://www.bbc.com/news\n  - Fetch https://www.washingtonpost.com/\n  - Fetch https://www.theguardian.com/\n  - Fetch https://www.foxnews.com/\n  - Fetch https://www.npr.org/\n  - Fetch https://www.nbcnews.com/\n  - Fetch https://www.bloomberg.com/\n  - Fetch https://apnews.com/\n  - Fetch https://www.reuters.com/\n  - Fetch https://www.nytimes.com/\n  - Fetch https://www.wsj.com/\n  - Fetch https://www.politico.com\n- Build applet HTML dashboard",
+    "createdAt": "2026-04-05T15:42:58.669Z"
+  },
+  {
+    "id": "009addc5-2a50-4a34-b22f-7ef4b759bcbd",
+    "title": "Check News Website Availability",
+    "text": "- fetch sites, report which worked and which is not.\n  - Fetch https://www.cnn.com/\n  - Fetch https://www.bbc.com/news\n  - Fetch https://www.washingtonpost.com/\n  - Fetch https://www.theguardian.com/\n  - Fetch https://www.foxnews.com/\n  - Fetch https://www.npr.org/\n  - Fetch https://www.nbcnews.com/\n  - Fetch https://www.bloomberg.com/\n  - Fetch https://apnews.com/\n  - Fetch https://www.reuters.com/\n  - Fetch https://www.nytimes.com/\n  - Fetch https://www.wsj.com/\n  - Fetch https://www.politico.com\n- Provide table with statuses.",
+    "createdAt": "2026-04-05T15:31:23.570Z"
+  },
+  {
+    "id": "7feece17-6cf6-43e5-a386-3b54319e64a3",
+    "title": "Build A News Dashboard App",
+    "text": "- Search famous news sites.\n- Fetch them\n- Provide news dashboard applet HTML",
+    "createdAt": "2026-04-05T01:42:00.049Z"
+  },
+  {
     "id": "e1149999-3b86-4997-976b-779e17f80800",
     "title": "Compare AMD and MU Stock Prices",
     "text": "- DO NOT USE etrade_account tool\n  - find AMD price\n  - find MU price\n- create a table featuring AMD and MU prices",

@@ -16,9 +16,7 @@ export default {
     baseUrl: process.env.LLAMA_URL || 'http://localhost:8080',
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
   },
-  search: {
-    engine: process.env.SEARCH_ENGINE || 'keiro', // 'duckduckgo', 'keiro', 'tavily', or 'both'
-  },
+  chromePath: process.env.CHROME_PATH || '',
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',
   },
@@ -40,7 +38,6 @@ export default {
   llm: {
     backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
   },
-  stealthFetch: process.env.STEALTH_FETCH === 'true',
   location: process.env.LOCATION || '',
   sourceDir: process.env.SOURCE_DIR || '',
   sourceTest: process.env.SOURCE_TEST || '',

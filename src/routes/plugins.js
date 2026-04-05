@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPluginStatuses, getPluginAuth, listPluginGroups, setPluginEnabled } from '../services/tools.js';
+import { getPluginStatuses, getPluginAuth, listPluginGroups, setPluginEnabled, updatePluginConfig } from '../services/tools.js';
 
 const router = Router();
 
@@ -9,11 +9,30 @@ router.get('/', async (_req, res) => {
   res.json(groups);
 });
 
-// Toggle a plugin group on/off (hot load/unload)
+// Toggle a plugin group on/off and/or update its config
 router.post('/:group/toggle', async (req, res) => {
-  const { enabled } = req.body;
-  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) required' });
-  const result = await setPluginEnabled(req.params.group, enabled);
+  const { enabled, mode, engines } = req.body;
+  if (enabled === undefined && mode === undefined && engines === undefined) {
+    return res.status(400).json({ error: 'At least one of enabled, mode, or engines required' });
+  }
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be boolean' });
+  }
+  const VALID_MODES = ['regular', 'stealth', 'browser'];
+  if (mode !== undefined && !VALID_MODES.includes(mode)) {
+    return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(', ')}` });
+  }
+  const VALID_ENGINES = ['tavily', 'keiro', 'duckduckgo'];
+  if (engines !== undefined) {
+    if (!Array.isArray(engines) || !engines.every(e => VALID_ENGINES.includes(e))) {
+      return res.status(400).json({ error: `engines must be array of: ${VALID_ENGINES.join(', ')}` });
+    }
+  }
+  const updates = {};
+  if (enabled !== undefined) updates.enabled = enabled;
+  if (mode !== undefined) updates.mode = mode;
+  if (engines !== undefined) updates.engines = engines;
+  const result = await updatePluginConfig(req.params.group, updates);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
