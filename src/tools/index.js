@@ -754,11 +754,11 @@ export async function executeTool(name, args, context) {
     if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.code && loggableArgs.code.length > 2000) loggableArgs.code = loggableArgs.code.slice(0, 2000) + '...[truncated]';
-    logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
+    await logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);
-    logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
+    await logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });
     return JSON.stringify({ error: err.message });
   }
 }

@@ -3573,12 +3573,14 @@ function renderTasks(tasks) {
     item.addEventListener('click', () => {
       if (!requireSession()) return;
       // Load task text into input and activate list mode
+      const prevHeight = input.offsetHeight;
       input.value = t.text;
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-      // Activate list mode if text contains bullet lines
       const trimmed = t.text.trimStart();
       if (trimmed.includes('- ') && !state.listMode) toggleListMode(true);
+      // Keep current height — only grow if content needs more space, never shrink
+      input.style.height = 'auto';
+      const needed = input.scrollHeight;
+      input.style.height = Math.max(prevHeight, needed) + 'px';
       input.focus();
       tasksDropdown.classList.add('hidden');
     });
