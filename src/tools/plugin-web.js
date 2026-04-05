@@ -29,14 +29,15 @@ function findChrome() {
 
 async function getBrowser() {
   if (_browser?.isConnected()) return _browser;
-  const puppeteer = await import('puppeteer-core');
-  const launch = puppeteer.default?.launch || puppeteer.launch;
+  const puppeteerExtra = (await import('puppeteer-extra')).default;
+  const StealthPlugin = (await import('puppeteer-extra-plugin-stealth')).default;
+  puppeteerExtra.use(StealthPlugin());
   const executablePath = findChrome();
   if (!executablePath) throw new Error('No Chrome/Chromium found. Set CHROME_PATH env var or install google-chrome.');
-  _browser = await launch({
+  _browser = await puppeteerExtra.launch({
     executablePath,
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
   return _browser;
 }
@@ -153,11 +154,16 @@ async function fetchBrowser(url) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    });
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+    try {
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 });
+    } catch (navErr) {
+      // Timeout on networkidle2 (long-polling sites) — fall back to what loaded
+      if (navErr.name === 'TimeoutError') {
+        console.warn(`[web_fetch] networkidle2 timeout for ${url}, using partial content`);
+      } else {
+        throw navErr;
+      }
+    }
     return await page.content();
   } finally {
     await page.close();
