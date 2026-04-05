@@ -1,27 +1,9 @@
 [
   {
-    "id": "a3f4cb8b-3a8d-4dea-8571-919635d70b2f",
-    "title": "HTML News Dashboard Applet Code",
-    "text": "look at CNN and other news sites, provide applet HTML news dashboard",
-    "createdAt": "2026-04-05T01:38:07.617Z"
-  },
-  {
-    "id": "11060956-57f0-40c2-9154-57b62acac027",
-    "title": "Solar System SVG Visualization Guide",
-    "text": "Generate a horizontal SVG visualization of the solar system centered on the screen. Place the Sun in the middle and draw 8 concentric circular orbits around it. Position the 8 planets on these orbits according to their approximate real-world orbital phases for current date.\n\nFor planet sizes, do not use true scale. Instead, use a simplified relative sizing where gas giants (Jupiter, Saturn) are visibly larger than terrestrial planets, but keep the visual difference subtle to maintain a clean look. Ensure Mercury is the smallest and Jupiter is the largest among the planets.\n\nOnly display the Sun, the planets, and their orbital circles. Use distinct colors for each planet and a bright yellow/orange for the Sun. Do not include labels, star fields, or other celestial bodies.",
-    "createdAt": "2026-04-03T02:55:33.359Z"
-  },
-  {
     "id": "f59f128e-63fe-4dab-9788-18c7202fb3e2",
     "title": "SVG Solar System Diagram",
     "text": "Draw an SVG of a solar system with the sun in the center and 4 planets orbiting it. Use circles with different colors and sizes. Add labels. Use applet SVG.",
     "createdAt": "2026-04-02T17:46:01.721Z"
-  },
-  {
-    "id": "c151b8b3-681b-453e-bce1-b4476adfe1b7",
-    "title": "Decompose test: Compare European Weekend Trip Options",
-    "text": "Check weather, hotel prices, and points of interest in Barcelona, Rome, and Athens for next weekend, then recommend the best trip",
-    "createdAt": "2026-04-01T18:04:34.472Z"
   },
   {
     "id": "3da6bd44-0110-4736-a15f-dd0c85729d1e",
@@ -100,5 +82,11 @@
     "title": "ETRADE Balance View with HTML Applet",
     "text": "Show my ETRADE accounts balances, use HTML applet and best look and feel practices.",
     "createdAt": "2026-03-20T20:31:00.634Z"
+  },
+  {
+    "id": "c151b8b3-681b-453e-bce1-b4476adfe1b7",
+    "title": "Decompose test: Compare European Weekend Trip Options",
+    "text": "Check weather, hotel prices, and points of interest in Barcelona, Rome, and Athens for next weekend, then recommend the best trip",
+    "createdAt": "2026-04-01T18:04:34.472Z"
   }
 ]
