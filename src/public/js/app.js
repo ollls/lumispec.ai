@@ -565,9 +565,8 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-var _lastH=0,_rszTimer=0;function _rsz(){clearTimeout(_rszTimer);_rszTimer=setTimeout(_rszNow,50);}
-function _rszNow(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});if(Math.abs(h-_lastH)<2)return;_lastH=h;window.parent.postMessage({type:'resize',height:h},'*');}
-window.addEventListener('load',function(){setTimeout(function(){_rszNow();new ResizeObserver(_rsz).observe(document.body);document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete||i.addEventListener('load',_rsz);});new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});},200);});
+function _rsz(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});window.parent.postMessage({type:'resize',height:h},'*');}
+window.addEventListener('load',function(){setTimeout(_rsz,300);});
 <\/script>`;
     html = html.replace(/<\/body>/i, resizeScript + '</body>');
     if (!/<\/body>/i.test(html)) html += resizeScript;
@@ -618,21 +617,14 @@ window.addEventListener('load',function(){setTimeout(function(){_rszNow();new Re
 }
 
 // Global resize listener for applet iframes (registered once)
-const _iframeResizeTimers = new WeakMap();
 window.addEventListener('message', (e) => {
   if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
   const MAX_IFRAME_H = 20000;
   const height = Math.max(100, Math.min(MAX_IFRAME_H, e.data.height));
   document.querySelectorAll('.applet-iframe').forEach(iframe => {
     if (iframe.contentWindow !== e.source) return;
-    const current = parseInt(iframe.style.height) || 0;
-    if (Math.abs(current - height) < 2) return;
-    // Debounce per-iframe to batch rapid resize messages
-    clearTimeout(_iframeResizeTimers.get(iframe));
-    _iframeResizeTimers.set(iframe, setTimeout(() => {
-      iframe.style.height = height + 'px';
-      iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
-    }, 30));
+    iframe.style.height = height + 'px';
+    iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
   });
 });
 
@@ -789,7 +781,7 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[85%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Regenerate button on user bubbles
