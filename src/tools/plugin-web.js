@@ -13,13 +13,28 @@ async function getGotScraping() {
   return _gotScraping;
 }
 
+import { execSync } from 'child_process';
+
 let _browser;
+function findChrome() {
+  if (config.chromePath) return config.chromePath;
+  for (const cmd of ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium']) {
+    try {
+      const p = execSync(`which ${cmd}`, { encoding: 'utf-8' }).trim();
+      if (p) return p;
+    } catch {}
+  }
+  return undefined;
+}
+
 async function getBrowser() {
   if (_browser?.isConnected()) return _browser;
   const puppeteer = await import('puppeteer-core');
   const launch = puppeteer.default?.launch || puppeteer.launch;
+  const executablePath = findChrome();
+  if (!executablePath) throw new Error('No Chrome/Chromium found. Set CHROME_PATH env var or install google-chrome.');
   _browser = await launch({
-    executablePath: config.chromePath || undefined,
+    executablePath,
     headless: 'shell',
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
