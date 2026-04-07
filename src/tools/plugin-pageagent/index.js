@@ -58,7 +58,7 @@ function llmConfig() {
 
 export default {
   group: 'pageagent',
-  label: 'Page Agent',
+  label: 'Alibaba Page Agent',
   description: 'Browser automation via Page Agent Chrome extension.',
   hint: 'Use words like "open", "log in", "click", "type", "fill", or "navigate" to route to Page Agent. After connecting, enable "Auto-approve connections" in the Page Agent hub tab (pinned tab) — required for tasks to work.',
   defaultEnabled: false,
