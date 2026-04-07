@@ -3175,6 +3175,80 @@ function renderPluginConfig(plugins) {
       card.appendChild(configSection);
     }
 
+    // Page Agent plugin config: activation delay
+    if (p.group === 'pageagent' && p.config && p.enabled) {
+      const configSection = document.createElement('div');
+      Object.assign(configSection.style, { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #3f3f46' });
+
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-3 flex-wrap';
+
+      const cbWrapper = document.createElement('label');
+      cbWrapper.className = 'flex items-center gap-1.5 cursor-pointer';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!p.config.delayEnabled;
+      Object.assign(cb.style, { accentColor: '#6366f1', cursor: 'pointer' });
+      const cbLabel = document.createElement('span');
+      Object.assign(cbLabel.style, { fontSize: '12px', color: '#d4d4d8' });
+      cbLabel.textContent = 'Activation delay';
+      cbWrapper.appendChild(cb);
+      cbWrapper.appendChild(cbLabel);
+
+      const numInput = document.createElement('input');
+      numInput.type = 'number';
+      numInput.min = '0';
+      numInput.max = '120';
+      numInput.step = '1';
+      numInput.value = String(p.config.delaySeconds ?? 5);
+      Object.assign(numInput.style, {
+        fontSize: '12px', padding: '3px 6px', borderRadius: '6px', width: '60px',
+        background: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', outline: 'none',
+      });
+      numInput.disabled = !cb.checked;
+      if (numInput.disabled) numInput.style.opacity = '0.5';
+
+      const secLabel = document.createElement('span');
+      Object.assign(secLabel.style, { fontSize: '12px', color: '#a1a1aa' });
+      secLabel.textContent = 'seconds';
+
+      const hint = document.createElement('span');
+      Object.assign(hint.style, { fontSize: '11px', color: '#71717a', display: 'block', marginTop: '6px', fontStyle: 'italic' });
+      hint.textContent = 'Pause before the first Page Agent tool call in a turn so you can activate the target browser tab.';
+
+      cb.addEventListener('change', async () => {
+        numInput.disabled = !cb.checked;
+        numInput.style.opacity = cb.checked ? '1' : '0.5';
+        await fetch(`/api/plugins/${p.group}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delayEnabled: cb.checked }),
+        });
+        refreshPluginConfig();
+      });
+
+      const commitDelay = async () => {
+        let v = parseInt(numInput.value, 10);
+        if (!Number.isFinite(v) || v < 0) v = 0;
+        if (v > 120) v = 120;
+        numInput.value = String(v);
+        await fetch(`/api/plugins/${p.group}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delaySeconds: v }),
+        });
+      };
+      numInput.addEventListener('change', commitDelay);
+      numInput.addEventListener('blur', commitDelay);
+
+      row.appendChild(cbWrapper);
+      row.appendChild(numInput);
+      row.appendChild(secLabel);
+      configSection.appendChild(row);
+      configSection.appendChild(hint);
+      card.appendChild(configSection);
+    }
+
     pluginConfigList.appendChild(card);
   }
 }

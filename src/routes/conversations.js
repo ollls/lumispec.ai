@@ -281,6 +281,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     let lastUsage = null;
     let accumulatedReasoning = '';
     const toolUses = [];
+    const turnState = {};
     const toolCallSigCounts = {}; // track repeat counts per unique signature (name+args)
     const toolCallSigs = new Set(); // track unique tool+args signatures for dedup
     const financeEnabled = isToolGroupEnabled('finance');
@@ -334,6 +335,10 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
                 res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
                 return requestConfirmation(conv.id, command);
               },
+              sendStatus: (msg) => {
+                res.write(`data: ${JSON.stringify({ tool_status: msg })}\n\n`);
+              },
+              turnState,
             };
             const results = await Promise.all(
               allowedCalls.map(tc => executeTool(tc.name, tc.arguments, context))
@@ -374,6 +379,10 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
           },
+          sendStatus: (msg) => {
+            res.write(`data: ${JSON.stringify({ tool_status: msg })}\n\n`);
+          },
+          turnState,
         };
         // Send status indicators for slow operations (booking tools)
         for (const tc of toolCallsFound) {
@@ -524,6 +533,10 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
           },
+          sendStatus: (msg) => {
+            res.write(`data: ${JSON.stringify({ tool_status: msg })}\n\n`);
+          },
+          turnState,
         };
         const results = await Promise.all(
           lastChanceCalls.map(tc => executeTool(tc.name, tc.arguments, context))
@@ -558,6 +571,10 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
           },
+          sendStatus: (msg) => {
+            res.write(`data: ${JSON.stringify({ tool_status: msg })}\n\n`);
+          },
+          turnState,
         };
         const results = await Promise.all(
           safetyCalls.map(tc => executeTool(tc.name, tc.arguments, context))

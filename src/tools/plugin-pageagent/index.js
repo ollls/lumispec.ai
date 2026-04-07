@@ -1,8 +1,31 @@
 import config from '../../config.js';
 import { HubBridge } from './hub-bridge.js';
-import { logToolCall } from '../index.js';
+import { logToolCall, readPluginConfig } from '../index.js';
 
 let hub = null;
+
+const DEFAULTS = { delayEnabled: false, delaySeconds: 5 };
+
+async function getDelayConfig() {
+  const cfg = await readPluginConfig();
+  const entry = cfg.pageagent || {};
+  return {
+    delayEnabled: entry.delayEnabled ?? DEFAULTS.delayEnabled,
+    delaySeconds: Number(entry.delaySeconds ?? DEFAULTS.delaySeconds),
+  };
+}
+
+async function applyActivationDelay(context) {
+  // Only delay on the first Page Agent call within a single user-prompt turn
+  if (context?.turnState?.pageagentDelayApplied) return;
+  const { delayEnabled, delaySeconds } = await getDelayConfig();
+  if (context?.turnState) context.turnState.pageagentDelayApplied = true;
+  if (!delayEnabled || !delaySeconds || delaySeconds <= 0) return;
+  if (context?.sendStatus) {
+    context.sendStatus(`⏳ Delay enabled (${delaySeconds}s) — if you want Page Agent to work with an existing browser tab, switch to it now.`);
+  }
+  await new Promise(r => setTimeout(r, delaySeconds * 1000));
+}
 
 async function startBridge() {
   if (hub) return;
@@ -39,6 +62,7 @@ export default {
   description: 'Browser automation via Page Agent Chrome extension.',
   hint: 'Use words like "open", "log in", "click", "type", "fill", or "navigate" to route to Page Agent. After connecting, enable "Auto-approve connections" in the Page Agent hub tab (pinned tab) — required for tasks to work.',
   defaultEnabled: false,
+  defaults: { enabled: false, ...DEFAULTS },
   requiresBrowser: 'chrome',
   condition: () => hub?.connected ?? false,
   onEnable: startBridge,
@@ -62,11 +86,12 @@ export default {
     page_tabs: {
       description: 'List open browser tabs the agent can see. Call before page_action to identify the right tab.',
       parameters: {},
-      execute: async (_params, _context) => {
+      execute: async (_params, context) => {
         if (!hub) return { error: 'Page Agent not running. Enable it in Plugins.' };
         if (!hub.connected) return { error: 'Extension not connected. Click Page Agent in status bar.' };
         if (hub.busy) return { error: 'Already running a task.' };
         try {
+          await applyActivationDelay(context);
           const result = await hub.executeTask(
             'List all open tabs. For each tab report: tab title, URL. Do NOT click anything or navigate. Just report what tabs are open.',
             { ...llmConfig(), experimentalIncludeAllTabs: true }
@@ -82,11 +107,12 @@ export default {
     page_action: {
       description: 'Execute a browser task via Page Agent Chrome extension. Can see and switch between all open tabs.',
       parameters: { task: 'string (natural language instruction for the browser)' },
-      execute: async ({ task }, _context) => {
+      execute: async ({ task }, context) => {
         if (!hub) return { error: 'Page Agent not running. Enable it in Plugins.' };
         if (!hub.connected) return { error: 'Extension not connected. Click Page Agent in status bar.' };
         if (hub.busy) return { error: 'Already running a task.' };
         try {
+          await applyActivationDelay(context);
           const result = await hub.executeTask(task, { ...llmConfig(), experimentalIncludeAllTabs: true });
           logToolCall('page_action', 'execute', { task, success: result.success });
           return result;

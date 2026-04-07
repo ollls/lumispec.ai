@@ -11,9 +11,9 @@ router.get('/', async (_req, res) => {
 
 // Toggle a plugin group on/off and/or update its config
 router.post('/:group/toggle', async (req, res) => {
-  const { enabled, mode, engines } = req.body;
-  if (enabled === undefined && mode === undefined && engines === undefined) {
-    return res.status(400).json({ error: 'At least one of enabled, mode, or engines required' });
+  const { enabled, mode, engines, delayEnabled, delaySeconds } = req.body;
+  if (enabled === undefined && mode === undefined && engines === undefined && delayEnabled === undefined && delaySeconds === undefined) {
+    return res.status(400).json({ error: 'At least one of enabled, mode, engines, delayEnabled, or delaySeconds required' });
   }
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be boolean' });
@@ -28,10 +28,20 @@ router.post('/:group/toggle', async (req, res) => {
       return res.status(400).json({ error: `engines must be array of: ${VALID_ENGINES.join(', ')}` });
     }
   }
+  if (delayEnabled !== undefined && typeof delayEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'delayEnabled must be boolean' });
+  }
+  if (delaySeconds !== undefined) {
+    if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds < 0 || delaySeconds > 120) {
+      return res.status(400).json({ error: 'delaySeconds must be a number between 0 and 120' });
+    }
+  }
   const updates = {};
   if (enabled !== undefined) updates.enabled = enabled;
   if (mode !== undefined) updates.mode = mode;
   if (engines !== undefined) updates.engines = engines;
+  if (delayEnabled !== undefined) updates.delayEnabled = delayEnabled;
+  if (delaySeconds !== undefined) updates.delaySeconds = delaySeconds;
   const result = await updatePluginConfig(req.params.group, updates);
   if (result.error) return res.status(400).json(result);
   res.json(result);

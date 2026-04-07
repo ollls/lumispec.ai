@@ -189,6 +189,8 @@ export async function updatePluginConfig(groupName, updates) {
   if (updates.enabled !== undefined) current.enabled = updates.enabled;
   if (updates.mode !== undefined) current.mode = updates.mode;
   if (updates.engines !== undefined) current.engines = updates.engines;
+  if (updates.delayEnabled !== undefined) current.delayEnabled = updates.delayEnabled;
+  if (updates.delaySeconds !== undefined) current.delaySeconds = updates.delaySeconds;
 
   // Hot-load / hot-unload based on enabled state
   if (current.enabled && !toolGroups[groupName]) {
