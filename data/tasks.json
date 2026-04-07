@@ -1,5 +1,11 @@
 [
   {
+    "id": "ff50eb20-95a2-4539-9321-a9cb9549c045",
+    "title": "Fetch Top News Sites",
+    "text": "- fetch sites, select top news worthy attention.\n  - Fetch https://www.cnn.com/\n  - Fetch https://www.bbc.com/news\n  - Fetch https://www.washingtonpost.com/\n  - Fetch https://www.theguardian.com/\n  - Fetch https://www.foxnews.com/\n  - Fetch https://www.npr.org/\n  - Fetch https://www.nbcnews.com/\n  - Fetch https://www.bloomberg.com/\n  - Fetch https://apnews.com/\n  - Fetch https://www.reuters.com/\n  - Fetch https://www.nytimes.com/\n  - Fetch https://www.wsj.com/\n  - Fetch https://www.politico.com\n- Build big applet HTML dashboard, use tags to see new type and use marking which site it came from.",
+    "createdAt": "2026-04-07T19:18:15.149Z"
+  },
+  {
     "id": "2105a351-f4bf-4faa-9820-39d01faa40f8",
     "title": "Gathering Top News From Major Sites",
     "text": "- fetch sites, select top news worthy attention.\n  - Fetch https://www.cnn.com/\n  - Fetch https://www.bbc.com/news\n  - Fetch https://www.washingtonpost.com/\n  - Fetch https://www.theguardian.com/\n  - Fetch https://www.foxnews.com/\n  - Fetch https://www.npr.org/\n  - Fetch https://www.nbcnews.com/\n  - Fetch https://www.bloomberg.com/\n  - Fetch https://apnews.com/\n  - Fetch https://www.reuters.com/\n  - Fetch https://www.nytimes.com/\n  - Fetch https://www.wsj.com/\n  - Fetch https://www.politico.com\n- Build applet HTML dashboard",
