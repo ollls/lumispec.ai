@@ -30,7 +30,7 @@ export class HubBridge {
 	/** @type {import('ws').WebSocket | null} */
 	#hub = null
 
-	/** @type {{ resolve: (r: {success: boolean, data: string}) => void, reject: (e: Error) => void } | null} */
+	/** @type {{ resolve: (r: {success: boolean, data: string}) => void, reject: (e: Error) => void, onProgress?: (msg: object) => void } | null} */
 	#pendingTask = null
 
 	/** @param {number} port */
@@ -79,14 +79,15 @@ export class HubBridge {
 	/**
 	 * @param {string} task
 	 * @param {Record<string, unknown>} [config]
+	 * @param {(msg: object) => void} [onProgress] called for every non-terminal message from the hub
 	 * @returns {Promise<{success: boolean, data: string}>}
 	 */
-	async executeTask(task, config) {
+	async executeTask(task, config, onProgress) {
 		if (!this.connected) throw new Error('Hub is not connected. Is the extension running?')
 		if (this.#pendingTask) throw new Error('Agent is already running a task.')
 
 		return new Promise((resolve, reject) => {
-			this.#pendingTask = { resolve, reject }
+			this.#pendingTask = { resolve, reject, onProgress }
 			this.#hub.send(JSON.stringify({ type: 'execute', task, config }))
 		})
 	}
@@ -134,6 +135,11 @@ export class HubBridge {
 			} else if (msg.type === 'error') {
 				this.#pendingTask?.reject(new Error(msg.message ?? 'Unknown error from hub'))
 				this.#pendingTask = null
+			} else {
+				// Any other message type (step, progress, status, etc.) — surface to caller
+				try {
+					this.#pendingTask?.onProgress?.(msg)
+				} catch {}
 			}
 		})
 

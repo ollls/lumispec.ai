@@ -1,5 +1,11 @@
 [
   {
+    "id": "dc90476a-2346-45ee-bef5-190747f91240",
+    "title": "View Last 10 Amazon Orders",
+    "text": "Open amazon.com and list my last 10 orders",
+    "createdAt": "2026-04-07T17:47:57.516Z"
+  },
+  {
     "id": "56787974-d38d-41fe-9075-05c56fa0e3c4",
     "title": "Page Agent: Search Best Pizza in Fort Lauderdale",
     "text": "with Page Agent, search google.com with \"best pizza in Fort Lauderdale\" bring results here",

@@ -15,6 +15,29 @@ async function getDelayConfig() {
   };
 }
 
+/**
+ * Build a progress handler that logs every step the extension reports and streams
+ * a short status line to the frontend. Used to give visibility into per-step planner
+ * activity inside a single page_action call (otherwise invisible from tool logs).
+ * @param {string} toolName
+ * @param {object} context
+ */
+function makeProgressHandler(toolName, context) {
+  let stepCounter = 0;
+  return (msg) => {
+    stepCounter += 1;
+    // Full message goes to the log file for post-mortem analysis
+    logToolCall(toolName, 'step', { n: stepCounter, ...msg });
+    // Short human-readable line for the frontend tool_status stream
+    if (context?.sendStatus) {
+      const label = msg.action || msg.type || 'step';
+      const detail = msg.url || msg.title || msg.message || msg.data || '';
+      const snippet = typeof detail === 'string' ? detail.slice(0, 120) : '';
+      context.sendStatus(`[page agent ${stepCounter}] ${label}${snippet ? ' — ' + snippet : ''}`);
+    }
+  };
+}
+
 async function applyActivationDelay(context) {
   // Only delay on the first Page Agent call within a single user-prompt turn
   if (context?.turnState?.pageagentDelayApplied) return;
@@ -78,10 +101,15 @@ export default {
   ],
   prompt: `## Browser Control (Page Agent)
 - Use page_tabs first to see which browser tabs are available before acting.
-- page_action sends a natural language task to the Chrome extension. It can see and switch between all open tabs.
-- Reference the target tab by title or URL in your task, e.g. "On the Gmail tab, click Compose".
-- Describe WHAT to do, not HOW. The extension figures out DOM actions.
-- Available actions the extension supports: done, wait, click_element_by_index, input_text, select_dropdown_option, scroll, scroll_horizontally, open_new_tab, switch_to_tab, close_tab. There is NO "navigate" action — to load a URL, phrase it as "open a new tab with URL https://..." (open_new_tab), not "navigate to ...".
+- page_action takes a single parameter: \`task\` (a plain-English string). That is the ONLY parameter. Do not invent other parameter names like "action", "url", or "type" — they will be rejected.
+- Describe the goal in natural language. The extension has its own planner that figures out clicks, scrolls, tab switches, and URL loading internally — you never name those primitives.
+- Reference target tabs by title or URL inside the task string, e.g. \`task: "On the Gmail tab, click Compose"\`.
+- To load a URL, just say so: \`task: "Open amazon.com in a new tab"\`. Do not say "navigate to".
+- The extension has an internal per-call step budget. To stay under it, split work along this rule:
+  - **Bundle** small actions that happen on the same page: filling a form and submitting, clicking through a menu, scrolling and reading. One \`page_action\` call.
+  - **Split** when the task crosses pages or loads new content: do navigation in one \`page_action\` call, then extraction in a second call. The step budget resets between calls.
+- Example of the split rule: first \`task: "Open amazon.com and go to Your Orders"\`, then \`task: "On the current Your Orders page, return the first 10 orders with date, item, and total"\`. Do NOT try to do both in one call — navigation eats the step budget before extraction starts.
+- For list/table extraction, ask for everything in one shot inside the extraction call (not row by row).
 - If Page Agent is not connected, tell the user to click the amber Page Agent indicator in the status bar.`,
   tools: {
     page_tabs: {
@@ -95,7 +123,8 @@ export default {
           await applyActivationDelay(context);
           const result = await hub.executeTask(
             'List all open tabs. For each tab report: tab title, URL. Do NOT click anything or navigate. Just report what tabs are open.',
-            { ...llmConfig(), experimentalIncludeAllTabs: true }
+            { ...llmConfig(), experimentalIncludeAllTabs: true },
+            makeProgressHandler('page_tabs', context)
           );
           logToolCall('page_tabs', 'list', { success: result.success });
           return result;
@@ -114,7 +143,11 @@ export default {
         if (hub.busy) return { error: 'Already running a task.' };
         try {
           await applyActivationDelay(context);
-          const result = await hub.executeTask(task, { ...llmConfig(), experimentalIncludeAllTabs: true });
+          const result = await hub.executeTask(
+            task,
+            { ...llmConfig(), experimentalIncludeAllTabs: true },
+            makeProgressHandler('page_action', context)
+          );
           logToolCall('page_action', 'execute', { task, success: result.success });
           return result;
         } catch (err) {
