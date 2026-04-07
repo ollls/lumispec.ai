@@ -74,13 +74,14 @@ export default {
     poll: async () => !hub ? null : hub.connected ? 'ok' : 'unauth',
   },
   routing: [
-    '- Browser interaction (click, type, fill, navigate, extract) → use page_tabs first, then page_action',
+    '- Browser interaction (click, type, fill, open tab, switch tab, scroll, extract) → use page_tabs first, then page_action',
   ],
   prompt: `## Browser Control (Page Agent)
 - Use page_tabs first to see which browser tabs are available before acting.
 - page_action sends a natural language task to the Chrome extension. It can see and switch between all open tabs.
 - Reference the target tab by title or URL in your task, e.g. "On the Gmail tab, click Compose".
 - Describe WHAT to do, not HOW. The extension figures out DOM actions.
+- Available actions the extension supports: done, wait, click_element_by_index, input_text, select_dropdown_option, scroll, scroll_horizontally, open_new_tab, switch_to_tab, close_tab. There is NO "navigate" action — to load a URL, phrase it as "open a new tab with URL https://..." (open_new_tab), not "navigate to ...".
 - If Page Agent is not connected, tell the user to click the amber Page Agent indicator in the status bar.`,
   tools: {
     page_tabs: {
