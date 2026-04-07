@@ -1969,6 +1969,13 @@ function createPluginStatusElement(plugin) {
         renderPluginAuthPanel(plugin.group, panelContent, s?.state);
       }
     });
+  } else if (plugin.clickUrl) {
+    toggle.style.cursor = 'pointer';
+    toggle.addEventListener('click', () => {
+      if (pluginElements[plugin.group]?.dot?.className?.includes('bg-amber')) {
+        window.open(plugin.clickUrl, '_blank');
+      }
+    });
   }
 
   pluginElements[plugin.group] = {
@@ -2991,6 +2998,14 @@ function renderPluginConfig(plugins) {
 
     info.appendChild(label);
     if (p.description) info.appendChild(desc);
+    if (p.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'text-xs';
+      hint.style.color = '#71717a';
+      hint.style.fontStyle = 'italic';
+      hint.textContent = p.hint;
+      info.appendChild(hint);
+    }
 
     // Tool list
     const toolList = document.createElement('div');
@@ -3042,6 +3057,20 @@ function renderPluginConfig(plugins) {
         toggle.style.pointerEvents = 'auto';
       }
     });
+
+    // Browser requirement gating (generic — driven by requiresBrowser field)
+    if (p.requiresBrowser) {
+      const detected = { chrome: !!window.chrome && /Chrome\//.test(navigator.userAgent) };
+      if (!detected[p.requiresBrowser]) {
+        toggle.disabled = true;
+        toggle.style.opacity = '0.3';
+        toggle.style.cursor = 'not-allowed';
+        const note = document.createElement('span');
+        Object.assign(note.style, { fontSize: '11px', color: '#ef4444', marginTop: '4px', display: 'block' });
+        note.textContent = `${p.requiresBrowser.charAt(0).toUpperCase() + p.requiresBrowser.slice(1)} required`;
+        info.appendChild(note);
+      }
+    }
 
     topRow.appendChild(info);
     topRow.appendChild(toggle);

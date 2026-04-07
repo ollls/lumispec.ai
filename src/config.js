@@ -47,4 +47,7 @@ export default {
     consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',
     sandbox: process.env.ETRADE_SANDBOX === 'true',
   },
+  pageagent: {
+    port: parseInt(process.env.PAGEAGENT_PORT || '38402', 10),
+  },
 };

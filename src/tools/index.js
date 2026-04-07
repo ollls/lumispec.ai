@@ -88,11 +88,18 @@ function registerPlugin(plugin) {
     status: plugin.status || null,
   };
   console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
+  if (typeof plugin.onEnable === 'function') {
+    plugin.onEnable().catch(err => console.error(`[tools] onEnable error "${plugin.group}": ${err.message}`));
+  }
 }
 
 function unregisterPlugin(groupName) {
   const group = toolGroups[groupName];
   if (!group) return;
+  const cached = pluginModules[groupName];
+  if (cached?.plugin?.onDisable) {
+    cached.plugin.onDisable().catch(err => console.error(`[tools] onDisable error "${groupName}": ${err.message}`));
+  }
   for (const name of group.tools) {
     delete tools[name];
     disabledTools.delete(name);
@@ -118,9 +125,13 @@ export async function loadPlugins() {
     pluginModules[plugin.group] = { file, plugin };
 
     // Always-on plugins load unconditionally; others check config
-    if (!ALWAYS_ON_GROUPS.has(plugin.group) && cfg[plugin.group]?.enabled === false) {
-      console.log(`[tools] Plugin "${plugin.group}" disabled by config — skipped`);
-      continue;
+    if (!ALWAYS_ON_GROUPS.has(plugin.group)) {
+      const cfgEntry = cfg[plugin.group];
+      const enabled = cfgEntry?.enabled ?? (plugin.defaultEnabled !== false);
+      if (!enabled) {
+        console.log(`[tools] Plugin "${plugin.group}" disabled by config — skipped`);
+        continue;
+      }
     }
 
     registerPlugin(plugin);
@@ -143,6 +154,8 @@ export async function listPluginGroups() {
           description: def.description.split('\n')[0],
         })),
       };
+      if (plugin.requiresBrowser) entry.requiresBrowser = plugin.requiresBrowser;
+      if (plugin.hint) entry.hint = plugin.hint;
       // Include per-plugin config if plugin defines defaults
       if (plugin.defaults) {
         const defaults = plugin.defaults;
@@ -283,6 +296,7 @@ export async function getPluginStatuses() {
         state,
         interval: g.status.interval ?? 0,
         hasAuth: !!g.status.auth,
+        clickUrl: g.status.clickUrl || null,
         managed,
       });
     } catch {
@@ -292,6 +306,7 @@ export async function getPluginStatuses() {
         state: 'error',
         interval: g.status.interval ?? 0,
         hasAuth: !!g.status.auth,
+        clickUrl: g.status.clickUrl || null,
         managed,
       });
     }

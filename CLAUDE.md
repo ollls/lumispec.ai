@@ -160,6 +160,10 @@ export default {
   label: 'My Plugin',                            // human-readable name for Plugins config UI (optional)
   description: 'What this plugin does.',         // short description for Plugins config UI (optional)
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
+  defaultEnabled: false,                          // optional: if false, plugin won't load until user explicitly enables it
+  onEnable: async () => {},                       // optional: called when plugin is registered (startup or hot-toggle on)
+  onDisable: async () => {},                      // optional: called when plugin is unregistered (hot-toggle off)
+  requiresBrowser: 'chrome',                      // optional: frontend disables toggle if browser doesn't match
   routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
   prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
   tools: {
@@ -175,6 +179,12 @@ export default {
   },
 };
 ```
+
+**`defaultEnabled`**: Controls whether a plugin loads when it has no entry in `data/plugins.json` (first run). Existing plugins omit this field and default to enabled for backward compatibility. New plugins that require user setup (browser extensions, external services) should set `defaultEnabled: false` so they don't start until explicitly enabled. Once the user toggles the plugin, the saved config in `plugins.json` takes over and `defaultEnabled` is ignored.
+
+**`onEnable` / `onDisable`**: Async lifecycle hooks called by `registerPlugin()` and `unregisterPlugin()`. Use for starting/stopping servers, opening/closing connections, or initializing resources that should only exist while the plugin is active. Errors are caught and logged — a failed `onEnable` won't crash the server. Plugins that don't export these are unaffected.
+
+**`requiresBrowser`**: Declares a browser dependency (e.g. `'chrome'`). The frontend Plugins panel checks `window.chrome.runtime` (or equivalent for other browsers) and disables the toggle with a "{Browser} required" note if the browser doesn't match. Purely frontend UX gating — the backend doesn't enforce this. The `detected` map in `renderPluginConfig()` can be extended for future browsers.
 
 #### Creating a New Plugin
 
