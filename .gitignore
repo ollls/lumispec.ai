@@ -11,3 +11,8 @@ data/*
 !data/TASKMASTER.md
 logs/
 .claude/settings.local.json
+
+# Exclude derived wiki content (except releases)
+wiki/
+!wiki/releases/
+!wiki/releases/.gitkeep

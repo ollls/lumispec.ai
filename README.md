@@ -209,6 +209,31 @@ Set `PYTHON_VENV=~/finance_venv` in `.env`.
 - **Diff previews** — Color-coded diffs for all source code changes, visible even with Autorun enabled
 - **Menus** — Tools (toggle on/off), Prompts, Sessions, Templates
 
+## Wiki Documentation
+
+The project uses a two-tier wiki system for efficient knowledge retrieval:
+
+- **Source docs** (`.md` files) — Full documentation
+- **Wiki index** (`wiki/`) — Compressed overviews for fast LLM access
+
+### Build Local Wiki (Optional)
+
+After cloning, you can build the local wiki for better documentation navigation. `wiki_scan` and `wiki_index` are LLM tools (not shell commands) — invoke them from chat. The `wiki` plugin must be enabled in the Plugins panel first; it depends on `source`, which auto-enables.
+
+From the chat, ask the assistant something like:
+
+- *"scan the wiki and show me what still needs indexing"* — runs the `wiki_scan` tool and lists uncompressed entries
+- *"index the next batch"* — loops `wiki_index` over the pending files, one at a time
+
+The wiki system:
+- Compresses long docs into compact YAML-frontmatter + summary format
+- Creates a hierarchical index under `wiki/`
+- Enables fast grep-based retrieval before reading full source files
+- **Releases are pre-built and pushed** (`wiki/releases/`) — available immediately
+- **Other wiki entries** must be built locally (excluded from git)
+
+See `wiki/releases/1.0.0.md` for release notes.
+
 ## Tools
 
 The AI has 20 built-in tools it uses automatically:
