@@ -1,12 +1,30 @@
-# Tool Prompt Modularization Plan
+# Tool Prompt Modularization (Implemented)
 
-## Problem
+## Status
 
-System prompt in `getSystemPrompt()` (tools.js L2009-2245) contains ~240 lines of hardcoded prompt text. Tool-specific sections (financial rules, hotel/travel instructions, source tool workflow, etc.) are always sent to the LLM regardless of which tools are enabled. Disabling a tool via `/api/tools/:name/toggle` only removes it from the "Available tools" list — all behavioral instructions, routing rules, examples, and guardrails remain, wasting context and confusing the LLM.
+**Implemented (with one caveat).** This document originally proposed modularizing the system prompt; the design has since shipped. The system prompt is now dynamically assembled from per-plugin sections at request time. The etrade-specific runtime guards in `conversations.js` (chain continuation, fabrication detector) were *not* physically relocated into `plugin-etrade.js` as Step 5 originally proposed — instead they were gated behind `if (financeEnabled)` (where `financeEnabled = isToolGroupEnabled('finance')`), so they no longer fire when the finance group is disabled. Functionally equivalent for the original goal (no behavior leaks when finance is off), but the code still lives in the route file. The historical plan below is preserved for context.
 
-Additionally, `conversations.js` has etrade-specific runtime behaviors (fabrication detector, chain continuation) that fire even when etrade is disabled.
+Current implementation (as of this revision):
 
-## Goal
+- `getSystemPrompt({ applets, precision })` lives in `src/tools/index.js` (around line 514). It dynamically composes the prompt from:
+  - `toolList` — only tools not in `disabledTools`
+  - `groupSections` — `prompt` field from each plugin whose `isGroupEnabled()` check passes (has at least one enabled tool + any `condition` met)
+  - `routingLines` — per-plugin `routing` arrays merged into a single "Tool Routing" section
+  - `precisionSection` — `PRECISION_RULES` injected when the precision toggle is on **or** the `finance` group is active
+  - Cross-group warnings (e.g. "NEVER use etrade_account for travel") added only when both relevant groups are active
+  - `applets` flag gates the applet visualization section
+- Plugins are auto-discovered from `src/tools/plugin-*.js` by `loadPlugins()` at server startup. Each plugin exports `group`, optional `label`/`description`/`dependencies`/`condition`/`routing`/`prompt`, and a `tools` map.
+- Generic `run_python` rules (vectorized-pandas requirement, 40-line limit, diagnostic-first error handling, "when to use run_python vs direct answer") live in `plugin-execution.js` and are gated on the `execution` group. Finance-specific `run_python` guidance (`saveAs` workflow, option-pair matching example, inline-arithmetic fallback) lives in `plugin-etrade.js` and is gated on the `finance` group. Disabling either group strips its half from the prompt — no entanglement.
+- Plugin enable/disable is hot-loadable at runtime via `POST /api/plugins/:group/toggle`, persisted to `data/plugins.json`. Cross-plugin dependencies cascade in both directions (enable walks toward dependencies, disable walks toward dependents).
+- Tool-level enable/disable still exists via `POST /api/tools/:name/toggle`, and `getSystemPrompt()` filters the tool list and group activation accordingly.
+
+## Original Problem (historical)
+
+System prompt in `getSystemPrompt()` (tools.js L2009-2245) contained ~240 lines of hardcoded prompt text. Tool-specific sections (financial rules, hotel/travel instructions, source tool workflow, etc.) were always sent to the LLM regardless of which tools were enabled. Disabling a tool via `/api/tools/:name/toggle` only removed it from the "Available tools" list — all behavioral instructions, routing rules, examples, and guardrails remained, wasting context and confusing the LLM.
+
+Additionally, `conversations.js` had etrade-specific runtime behaviors (fabrication detector, chain continuation) that fired even when etrade was disabled.
+
+## Goal (achieved)
 
 When a tool (or tool group) is disabled, ALL associated prompt content and runtime behaviors are excluded — not just the tool list entry.
 
@@ -137,7 +155,25 @@ ${applets ? appletSection : ''}
 }
 ```
 
-## Implementation Steps
+## Implementation Steps (completed)
+
+> Steps 1–4 and 6 shipped. The implementation lives in `src/tools/index.js` (registry, assembly, dependency cascade, precision rules) and in the `src/tools/plugin-*.js` files (per-group prompts, routing, tools). Step 5 shipped *partially*: the chain-continuation and fabrication-detector guards in `conversations.js` (lines 287-288, 449-481) were not removed and not moved into `plugin-etrade.js` — instead they are now gated on `isToolGroupEnabled('finance')` so they're inert when the finance plugin is disabled. Relocating them into the plugin remains open work if full code-level decoupling is desired.
+
+## TODO — Step 5 follow-up: relocate finance guards into the plugin
+
+The conditionally-inert finance logic in `conversations.js` is functionally safe (verified: Think mode and all non-finance flows are completely unaffected when `financeEnabled === false`), but it leaves `conversations.js` aware of an etrade-specific concept (`optionchains`/`optionexpiry` actions, Greeks regex). Cleaner design:
+
+1. Define an optional plugin lifecycle hook, e.g. `onToolRound({ toolCallsFound, content, round, llmMessages, state })`, in the plugin interface.
+2. Move the tracking variables (`hadChainData`, `hadExpiryCall`), the chain-continuation directive (lines 447-455), the chain-continuation force block (lines 462-469), and the fabrication detector (lines 471-481) into `plugin-etrade.js`. The plugin owns its own per-conversation state.
+3. In `conversations.js`, replace the four `if (financeEnabled)` blocks with a generic loop:
+   ```js
+   for (const plugin of activePlugins) {
+     if (plugin.onToolRound) await plugin.onToolRound(ctx);
+   }
+   ```
+4. Result: `conversations.js` is plugin-agnostic, every plugin gets the same extension point, and adding a similar guard for any future plugin (e.g. travel booking sanity checks) requires no route-file edits.
+
+Until this lands, the gating is the correct interim — no behavior leaks, just cosmetic coupling.
 
 ### Step 1: Extract prompt text into toolGroups
 
@@ -266,8 +302,10 @@ Move this into the `travel` group prompt. It only makes sense when booking is av
 
 | File | Change |
 |------|--------|
-| `src/services/tools.js` | Add `toolGroups` object, `isGroupEnabled()`. Refactor `getSystemPrompt()` to assemble from groups. Replace etrade examples in Tool Call Format with generic ones. |
-| `src/routes/conversations.js` | Remove `hadChainData`/`hadExpiryCall` tracking, chain continuation, and fabrication detector. |
+| `src/tools/index.js` (formerly logic in `src/services/tools.js`) | Added `toolGroups` registry, `isGroupEnabled()`, `loadPlugins()` auto-discovery, dependency cascade (DFS three-coloring for cycle detection), and refactored `getSystemPrompt()` to assemble dynamically from per-plugin `prompt`/`routing` fields. Tool Call Format examples made tool-agnostic. |
+| `src/tools/plugin-*.js` | Per-group plugins (`plugin-core`, `plugin-web`, `plugin-execution`, `plugin-source`, `plugin-travel`, `plugin-etrade`, `plugin-wiki`) own their own `tools`, `prompt`, `routing`, `condition`, and `dependencies`. |
+| `src/services/tools.js` | Now a backward-compat barrel that re-exports from `../tools/index.js`. |
+| `src/routes/conversations.js` | `hadChainData`/`hadExpiryCall` tracking, chain continuation directive, and fabrication detector are still present (lines 287-288, 449-481) but now gated behind `if (financeEnabled)` so they're inert when the finance plugin is disabled. Not relocated into `plugin-etrade.js`. |
 
 ## Testing
 

@@ -25,19 +25,6 @@ Three categories, covering the majority of visualization needs:
 - Kanban boards, timelines, forms
 - Timers, countdowns
 
-## Applet Toggle
-
-A checkbox next to the input prompt text box: **"Applets"** (or a small icon toggle).
-
-- **Checked (default)**: applet system prompt snippets are included, LLM generates `<applet>` blocks, frontend renders iframes
-- **Unchecked**: applet prompt snippets are omitted from system prompt, LLM produces regular text/markdown output instead
-- State sent with each message request as `applets: true|false` in the POST body
-- Backend conditionally includes/excludes applet prompt sections based on this flag
-- Frontend stores toggle state in `state.appletsEnabled` (persists across conversations via localStorage)
-- When disabled mid-conversation, LLM naturally stops producing applet tags since the prompt guidance is absent
-
-This gives users a quick escape hatch when they want plain text answers — no applet rendering, no iframe overhead, just regular markdown output.
-
 ## Flow
 
 1. User requests a visualization (e.g., "chart my portfolio allocation" or "draw a flowchart of the auth flow")
