@@ -8,15 +8,18 @@ LLM Workbench provides a sophisticated web research pipeline with three search e
 
 ## Search Engines
 
+> The user-facing `web_search` tool only accepts a `query` argument (`src/tools/plugin-web.js:215`). The JSON shapes shown below for Tavily and Keiro are the **backend HTTP request bodies** the plugin sends to the upstream APIs — they are not tool invocation arguments. Engine-specific options like `max_results` or `apiKey` are wired into the backend code and cannot be overridden from a tool call.
+
 ### 1. Tavily
 
 **Best for:** AI-optimized queries, content extraction
 
-- API-based search with built-in content summarization
-- Returns structured results with extracted content
-- Requires `TAVILY_API_KEY` in `.env`
-- Max 5 results per query
-- 15-second timeout
+- API-based search; results carry both snippet and `content` fields
+- Requires `TAVILY_API_KEY` in `.env` (`src/tools/plugin-web.js:63`)
+- Hard-coded `max_results: 5` per query (`src/tools/plugin-web.js:65`)
+- 15-second timeout (`src/tools/plugin-web.js:66`)
+
+Backend request body (sent by `searchTavily`, not by the user):
 
 ```json
 {
@@ -30,9 +33,12 @@ LLM Workbench provides a sophisticated web research pipeline with three search e
 **Best for:** Structured results, proprietary backend
 
 - Custom search API with snippet extraction
-- Returns `search_results` array with title, URL, snippet
+- Returns `search_results` array with title, URL, snippet (`src/tools/plugin-web.js:90`)
 - Requires `KEIRO_API_KEY` and `KEIRO_BASE_URL`
 - 15-second timeout
+- Plugin slices to first 5 results (`src/tools/plugin-web.js:91`)
+
+Backend request body (sent by `searchKeiro`, not by the user):
 
 ```json
 {
@@ -49,9 +55,9 @@ LLM Workbench provides a sophisticated web research pipeline with three search e
 - Uses `got-scraping` for realistic headers
 - No API key required
 - Parses `.result` elements for title, URL, snippet
-- Falls back gracefully if layout changes
+- If parsing yields zero results (layout change or block), returns `{ error: 'No results parsed (DDG may have changed layout or blocked)', results: [] }` (`src/tools/plugin-web.js:119-122`). This is detection + reporting, not a fallback to an alternate parsing strategy.
 
-**Limitation:** Requires stealth or browser mode (not available in regular mode)
+**Limitation:** Skipped entirely if `mode` is `regular` — requires `stealth` or `browser` mode because the parser depends on `got-scraping` (`src/tools/plugin-web.js:219-225`).
 
 ---
 
@@ -61,9 +67,10 @@ LLM Workbench provides a sophisticated web research pipeline with three search e
 
 **Speed:** ⚡ Fastest  
 **JavaScript:** ❌ No  
-**Bot Detection:** ❌ Easily blocked
+**Bot Detection:** ❌ Easily blocked  
+**Timeout:** 10 seconds (`src/tools/plugin-web.js:137`)
 
-Uses native `fetch()` with custom User-Agent:
+Uses native `fetch()` with custom User-Agent (`src/tools/plugin-web.js:133-138`):
 
 ```javascript
 headers: {
@@ -119,6 +126,20 @@ Full Puppeteer + StealthPlugin integration:
 
 ### Plugin Config (`data/plugins.json`)
 
+The shipped default is a **single engine** — Keiro — with stealth mode (`src/tools/plugin-web.js:46, 204`):
+
+```json
+{
+  "web": {
+    "enabled": true,
+    "mode": "stealth",
+    "engines": ["keiro"]
+  }
+}
+```
+
+To use multiple engines in parallel, list them all:
+
 ```json
 {
   "web": {
@@ -131,16 +152,25 @@ Full Puppeteer + StealthPlugin integration:
 
 ### Mode Values
 
-- `"regular"` — Native fetch only
+- `"regular"` — Native `fetch()` only (DuckDuckGo is skipped in this mode)
 - `"stealth"` — got-scraping (default)
 - `"browser"` — Full Puppeteer
 
-### Engine Arrays
+### Engine Arrays — what actually happens
 
-Order matters for single-engine fallback. For multi-engine:
-- All available engines run in parallel
-- Results merged and deduplicated by URL
-- Up to 8 unique results returned
+Behavior depends on how many engines are in the array:
+
+**Single engine** (`src/tools/plugin-web.js:231-238`):
+- Runs that one engine.
+- If it fails (HTTP error, parse error, network error), the user gets `{ error, results: [] }`.
+- **There is no fallback to other engines.** Order in a single-element array is meaningless.
+
+**Multiple engines** (`src/tools/plugin-web.js:241-266`):
+- All engines run in parallel via `Promise.all`.
+- If some engines fail and others succeed, the survivors' results are still returned. This is graceful degradation, not failover — there is no primary/backup relationship and no automatic retry of a failed engine against a different one.
+- Results are concatenated in engine iteration order, then deduplicated by URL (first occurrence wins).
+- The merged list is sliced to the **first 8** unique results (`src/tools/plugin-web.js:266`).
+- **No relevance ranking, scoring, or re-ordering of any kind.** Order is purely "whichever engine's results came first in the iteration."
 
 ---
 
@@ -160,9 +190,9 @@ Order matters for single-engine fallback. For multi-engine:
 
 Results from all engines merged, deduplicated, limited to 8.
 
-### Failover
+### Graceful degradation in multi-engine mode
 
-If Tavily fails but Keiro succeeds, only Keiro results returned with `sources: "Keiro"`.
+If Tavily fails but Keiro succeeds, the response contains Keiro's results and `sources: "Keiro"` (i.e. only the engines that produced results are listed in `sources`). The failed engine is logged via `console.warn` but not surfaced in the response. This is *not* a failover — Tavily is not retried, and there is no chained substitution. It's just "whoever returned data, their data is what you get."
 
 ---
 
@@ -192,9 +222,9 @@ If Tavily fails but Keiro succeeds, only Keiro results returned with `sources: "
 
 ### Fetch Failures
 
-- Timeouts fall back to partial content (browser mode)
-- Navigation errors re-thrown
-- Cloudflare blocks reported to user
+- **Browser mode `networkidle2` timeout**: caught and falls back to whatever HTML loaded by the timeout (`src/tools/plugin-web.js:159-166`). Useful for long-polling sites that never settle.
+- **Other navigation errors** in browser mode: re-thrown (no fallback).
+- **Cloudflare and other anti-bot challenge pages**: not detected by the code. The fetch helpers return whatever HTML the request produces — if a Cloudflare challenge page comes back, the LLM sees it as content and is expected to recognize it (the plugin's system prompt at `src/tools/plugin-web.js:208-211` instructs the LLM to fall back to search snippets when fetched content looks like a block). There is no code-level Cloudflare detection or user-facing alert.
 
 ---
 
