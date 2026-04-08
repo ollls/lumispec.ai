@@ -48,9 +48,106 @@ export async function logToolCall(toolName, action, { args, rawResult, formatted
 const tools = {};        // name → { description, parameters, execute }
 const toolGroups = {};   // groupName → { tools, condition, routing, prompt, status }
 const pluginModules = {}; // groupName → { file, plugin } (cached for hot reload)
+const pluginDependencies = {}; // groupName → string[] of declared dependency group names
 
 // Groups that are always loaded and not shown in the config UI
 const ALWAYS_ON_GROUPS = new Set(['core', 'execution']);
+
+// ── Plugin dependency graph ─────────────────────────
+
+// Validate the dependency graph after all plugin modules are imported.
+// - Populates pluginDependencies from each plugin's `dependencies` field
+// - Warns on missing dependencies (declared but no such plugin module exists)
+// - Detects circular dependencies via DFS three-coloring; logs error if found
+// Returns array of cycle paths for diagnostics.
+function validateDependencyGraph() {
+  // Collect declarations
+  for (const [group, { plugin }] of Object.entries(pluginModules)) {
+    pluginDependencies[group] = Array.isArray(plugin.dependencies)
+      ? [...new Set(plugin.dependencies)]
+      : [];
+  }
+
+  // Warn on missing deps
+  for (const [group, deps] of Object.entries(pluginDependencies)) {
+    for (const dep of deps) {
+      if (ALWAYS_ON_GROUPS.has(dep)) continue; // always satisfied
+      if (!pluginModules[dep]) {
+        console.warn(`[plugins] "${group}" declares missing dependency "${dep}" — cascade will skip it`);
+      }
+    }
+  }
+
+  // Cycle detection via DFS three-coloring
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const colors = {};
+  for (const g of Object.keys(pluginDependencies)) colors[g] = WHITE;
+  const cycles = [];
+  function dfs(group, path) {
+    colors[group] = GRAY;
+    for (const dep of pluginDependencies[group] || []) {
+      if (ALWAYS_ON_GROUPS.has(dep)) continue;
+      if (!pluginModules[dep]) continue;
+      if (colors[dep] === GRAY) {
+        cycles.push([...path, group, dep]);
+        continue;
+      }
+      if (colors[dep] === WHITE) dfs(dep, [...path, group]);
+    }
+    colors[group] = BLACK;
+  }
+  for (const g of Object.keys(pluginDependencies)) {
+    if (colors[g] === WHITE) dfs(g, []);
+  }
+  if (cycles.length > 0) {
+    for (const cycle of cycles) {
+      console.error(`[plugins] CIRCULAR DEPENDENCY: ${cycle.join(' -> ')}`);
+    }
+  }
+  return cycles;
+}
+
+// Returns the transitive set of groups that must be enabled when GROUP is enabled,
+// including GROUP itself. Cycle-safe via visited set.
+function getCascadeEnableSet(group, visited = new Set()) {
+  if (visited.has(group)) return [];
+  visited.add(group);
+  const out = new Set([group]);
+  for (const dep of pluginDependencies[group] || []) {
+    if (ALWAYS_ON_GROUPS.has(dep)) continue;
+    if (!pluginModules[dep]) continue;
+    out.add(dep);
+    for (const t of getCascadeEnableSet(dep, visited)) out.add(t);
+  }
+  return [...out];
+}
+
+// Returns immediate dependents of GROUP (groups that declare GROUP in their dependencies).
+function getDirectDependents(group) {
+  const out = [];
+  for (const [g, deps] of Object.entries(pluginDependencies)) {
+    if (deps.includes(group)) out.push(g);
+  }
+  return out;
+}
+
+// Returns all transitive dependents of GROUP (groups that would break if GROUP went away).
+function getAllDependents(group, visited = new Set()) {
+  if (visited.has(group)) return [];
+  visited.add(group);
+  const out = new Set();
+  for (const direct of getDirectDependents(group)) {
+    out.add(direct);
+    for (const t of getAllDependents(direct, visited)) out.add(t);
+  }
+  return [...out];
+}
+
+// Returns the subset of GROUP's transitive dependents that are CURRENTLY enabled.
+// Used to block disable: if any dependent is currently registered, the disable is refused.
+function getEnabledDependents(group) {
+  return getAllDependents(group).filter(g => !!toolGroups[g]);
+}
 
 export async function readPluginConfig() {
   try {
@@ -106,6 +203,7 @@ export async function loadPlugins() {
   const pluginFiles = files.filter(f => f.startsWith('plugin-') && f.endsWith('.js')).sort();
   const cfg = await readPluginConfig();
 
+  // Pass 1: import all plugin modules and cache them (no registration yet)
   for (const file of pluginFiles) {
     const mod = await import(join(__dirname, file));
     const plugin = mod.default;
@@ -113,17 +211,50 @@ export async function loadPlugins() {
       console.warn(`[tools] Skipping ${file}: missing group or tools`);
       continue;
     }
-
-    // Cache module for hot reload
     pluginModules[plugin.group] = { file, plugin };
+  }
 
-    // Always-on plugins load unconditionally; others check config
-    if (!ALWAYS_ON_GROUPS.has(plugin.group) && cfg[plugin.group]?.enabled === false) {
-      console.log(`[tools] Plugin "${plugin.group}" disabled by config — skipped`);
+  // Pass 2: validate the dependency graph (warn on missing, error on cycles)
+  validateDependencyGraph();
+
+  // Pass 3: compute the closure of enabled groups by cascading dependencies,
+  // persist any cascade-induced changes, then register everything in the closure.
+  const enabledClosure = new Set();
+  for (const group of Object.keys(pluginModules)) {
+    if (ALWAYS_ON_GROUPS.has(group)) continue;
+    // Default-enabled unless cfg explicitly disables
+    if (cfg[group]?.enabled !== false) {
+      for (const g of getCascadeEnableSet(group)) {
+        if (!ALWAYS_ON_GROUPS.has(g) && pluginModules[g]) enabledClosure.add(g);
+      }
+    }
+  }
+
+  let cfgChanged = false;
+  for (const group of enabledClosure) {
+    if (cfg[group]?.enabled === false || !cfg[group]) {
+      const defaults = pluginModules[group].plugin.defaults || { enabled: true };
+      const wasDisabled = cfg[group]?.enabled === false;
+      cfg[group] = { ...(cfg[group] || defaults), enabled: true };
+      cfgChanged = true;
+      if (wasDisabled) {
+        console.log(`[plugins] startup cascade: enabling "${group}" (required by another enabled plugin)`);
+      }
+    }
+  }
+  if (cfgChanged) await writePluginConfig(cfg);
+
+  // Now register: always-on first, then everything in the enabled closure
+  for (const group of Object.keys(pluginModules)) {
+    if (ALWAYS_ON_GROUPS.has(group)) {
+      registerPlugin(pluginModules[group].plugin);
       continue;
     }
-
-    registerPlugin(plugin);
+    if (enabledClosure.has(group)) {
+      registerPlugin(pluginModules[group].plugin);
+    } else {
+      console.log(`[tools] Plugin "${group}" disabled by config — skipped`);
+    }
   }
 }
 
@@ -133,11 +264,20 @@ export async function listPluginGroups() {
   return Object.entries(pluginModules)
     .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
     .map(([group, { plugin }]) => {
+      // Filter dependency lists to user-visible groups (skip always-on and missing)
+      const visibleDeps = (pluginDependencies[group] || []).filter(
+        d => !ALWAYS_ON_GROUPS.has(d) && pluginModules[d]
+      );
+      const visibleDependents = getDirectDependents(group).filter(
+        d => !ALWAYS_ON_GROUPS.has(d) && pluginModules[d]
+      );
       const entry = {
         group,
         label: plugin.label || group.charAt(0).toUpperCase() + group.slice(1),
         description: plugin.description || '',
         enabled: !!toolGroups[group],
+        dependencies: visibleDeps,
+        dependents: visibleDependents,
         tools: Object.entries(plugin.tools).map(([name, def]) => ({
           name,
           description: def.description.split('\n')[0],
@@ -169,10 +309,50 @@ export async function updatePluginConfig(groupName, updates) {
   if (!cached) return { error: `Unknown plugin: ${groupName}` };
 
   const cfg = await readPluginConfig();
+
+  // Cascade enable: ensure all transitive dependencies are enabled before this plugin
+  const cascadedOn = [];
+  if (updates.enabled === true) {
+    for (const dep of getCascadeEnableSet(groupName)) {
+      if (dep === groupName) continue;
+      if (ALWAYS_ON_GROUPS.has(dep)) continue;
+      const depCached = pluginModules[dep];
+      if (!depCached) continue;
+      const depDefaults = depCached.plugin.defaults || { enabled: true };
+      const depCfg = cfg[dep] || { ...depDefaults };
+      const wasOff = !toolGroups[dep] || depCfg.enabled === false;
+      if (wasOff) {
+        depCfg.enabled = true;
+        cfg[dep] = depCfg;
+        if (!toolGroups[dep]) registerPlugin(depCached.plugin);
+        cascadedOn.push(dep);
+        console.log(`[plugins] cascade: enabled "${dep}" (required by "${groupName}")`);
+      }
+    }
+  }
+
+  // Cascade disable: also disable all transitive enabled dependents.
+  // This is the inverse of cascade-enable. Disclosed via cascadedOff in the response
+  // so the UI can surface what was disabled.
+  const cascadedOff = [];
+  if (updates.enabled === false) {
+    for (const dep of getEnabledDependents(groupName)) {
+      const depCached = pluginModules[dep];
+      if (!depCached) continue;
+      const depDefaults = depCached.plugin.defaults || { enabled: true };
+      const depCfg = cfg[dep] || { ...depDefaults };
+      depCfg.enabled = false;
+      cfg[dep] = depCfg;
+      if (toolGroups[dep]) unregisterPlugin(dep);
+      cascadedOff.push(dep);
+      console.log(`[plugins] cascade: disabled "${dep}" (depended on "${groupName}")`);
+    }
+  }
+
   const defaults = cached.plugin.defaults || { enabled: true };
   const current = cfg[groupName] || { ...defaults };
 
-  // Merge updates
+  // Merge updates for the target plugin
   if (updates.enabled !== undefined) current.enabled = updates.enabled;
   if (updates.mode !== undefined) current.mode = updates.mode;
   if (updates.engines !== undefined) current.engines = updates.engines;
@@ -186,7 +366,11 @@ export async function updatePluginConfig(groupName, updates) {
 
   cfg[groupName] = current;
   await writePluginConfig(cfg);
-  return { group: groupName, enabled: !!toolGroups[groupName], config: current };
+
+  const result = { group: groupName, enabled: !!toolGroups[groupName], config: current };
+  if (cascadedOn.length > 0) result.cascadedOn = cascadedOn;
+  if (cascadedOff.length > 0) result.cascadedOff = cascadedOff;
+  return result;
 }
 
 // Backward compat wrapper

@@ -149,7 +149,16 @@ Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend
 ### Plugin Architecture
 Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin is a self-contained ES module auto-discovered by `loadPlugins()` at startup. The core index (`src/tools/index.js`) handles registration, system prompt assembly, parsing, execution, logging, and confirmation. `src/services/tools.js` is a backward-compat barrel that re-exports everything from `../tools/index.js`.
 
-**Plugin Configuration**: Configurable plugins (source, travel, finance) can be hot-loaded/unloaded at runtime via the Plugins panel in the UI. Config persisted to `data/plugins.json` (gitignored, auto-created). Always-on plugins (`core`, `web`, `execution`) are not shown in the config UI. Each plugin exports optional `label` and `description` fields for the UI. `GET /api/plugins` lists configurable groups with tool names/descriptions. `POST /api/plugins/:group/toggle` hot-loads/unloads a plugin and persists the change.
+**Plugin Configuration**: Configurable plugins (source, travel, finance, wiki) can be hot-loaded/unloaded at runtime via the Plugins panel in the UI. Config persisted to `data/plugins.json` (gitignored, auto-created). Always-on plugins (`core`, `execution`) are not shown in the config UI. Each plugin exports optional `label` and `description` fields for the UI. `GET /api/plugins` lists configurable groups with tool names, descriptions, and dependency relationships. `POST /api/plugins/:group/toggle` hot-loads/unloads a plugin and persists the change.
+
+**Plugin Dependencies**: Plugins can declare cross-group dependencies via an optional `dependencies: ['groupA', 'groupB']` field. Dependencies cascade **in both directions**:
+- **At startup** (`loadPlugins()`): the dependency closure of all enabled plugins is computed and missing deps are auto-enabled in `data/plugins.json` so the system always converges to a consistent state.
+- **On enable** (`updatePluginConfig`): enabling a plugin transitively enables all declared deps. Response includes `cascadedOn: [...]` listing newly-enabled groups so the UI can surface them in a toast.
+- **On disable** (`updatePluginConfig`): disabling a plugin transitively disables all currently-enabled plugins that depend on it. Response includes `cascadedOff: [...]` listing newly-disabled groups. The toast discloses what was disabled and tells the user to re-enable the dependent (not the dependency) if they want both restored.
+
+**Cascade asymmetry on recovery**: cascade-enable walks UP the dep graph (toward dependencies), cascade-disable walks DOWN (toward dependents). They are NOT inverses. If you disable `source` (which cascade-disables `wiki`) and then re-enable `source`, `wiki` does NOT auto-restore — you'd have to enable `wiki` manually (which would in turn cascade `source` back on if it were off). The recovery path is "enable the dependent, not the dependency."
+
+Load-time validation runs DFS three-coloring to detect circular dependencies and warns on missing deps. Always-on groups can be listed as deps but are no-ops. The `wiki` plugin is currently the only consumer (`dependencies: ['source']`) — `source_read` is required for the wiki retrieval pattern.
 
 #### Plugin Interface
 Each `plugin-*.js` exports a default object:
@@ -159,6 +168,7 @@ export default {
   group: 'mygroup',                              // group name (unique, used in toolGroups registry)
   label: 'My Plugin',                            // human-readable name for Plugins config UI (optional)
   description: 'What this plugin does.',         // short description for Plugins config UI (optional)
+  dependencies: ['source'],                       // optional: group names this plugin requires; cascades on enable, blocks disable
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
   routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
   prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
@@ -184,6 +194,7 @@ export default {
 
 **Key details:**
 - `group` must be unique across all plugins
+- `dependencies` (optional array of group names) — declares cross-group requirements. Validated at load time (cycles → error, missing deps → warning). Cascade-enables on toggle; blocks disable if any enabled plugin depends on this one. Always-on groups in the list are no-ops.
 - `condition` is re-evaluated on each message (dynamic activation, e.g. auth state)
 - `routing` lines are merged into the "Tool Routing" system prompt section
 - `prompt` is injected into the system prompt when the group is active (has enabled tools + condition met)
@@ -202,14 +213,15 @@ export default {
 
 #### Tool Groups
 
-| Group | Plugin | Tools | Condition |
-|---|---|---|---|
-| `core` | plugin-core.js | `current_datetime` | — |
-| `web` | plugin-web.js | `web_search`, `web_fetch` | — |
-| `execution` | plugin-execution.js | `run_python` | — |
-| `source` | plugin-source.js | 8 source tools + `template_save` | `config.sourceDir` set |
-| `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — |
-| `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` |
+| Group | Plugin | Tools | Condition | Dependencies |
+|---|---|---|---|---|
+| `core` | plugin-core.js | `current_datetime` | — | — |
+| `web` | plugin-web.js | `web_search`, `web_fetch` | — | — |
+| `execution` | plugin-execution.js | `run_python` | — | — |
+| `source` | plugin-source.js | 8 source tools + `template_save` | `config.sourceDir` set | — |
+| `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — | — |
+| `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` | — |
+| `wiki` | plugin-wiki.js | `wiki_scan`, `wiki_index` | `config.sourceDir` set | `source` |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
 
@@ -244,6 +256,8 @@ Safety mechanisms:
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
 | `booking` | LiteAPI: prebook, book, list bookings, booking details, cancel |
+| `wiki_scan` | Walks both source markdown tree and `wiki/` tree, returns unified view: `fileEntries` (with compressed/stale flags via `last_updated:` frontmatter), `noteEntries`/`lensEntries` (reserved `_`-prefixed subdirs), `orphans`, `nextBatch` (capped at 20), and `hasMore` boolean. Recognizes `_notes/`, `_lens/<color>/`, `_conv/`, `_web/` as reserved non-file-derived areas. |
+| `wiki_index` | Indexes a single markdown file: reads source, asks LLM to produce a YAML-frontmatter + paragraph + key-topics summary, plugin enforces correct `source: file:<path>` URI and `last_updated:` ISO timestamp via `enforceFrontmatterFields()`, writes to `wiki/<same-relative-path>`. Refuses paths colliding with reserved subdirs. `force: true` rebuilds existing entries. |
 
 Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`. Plugin groups can be hot-loaded/unloaded via the Plugins config panel (`/api/plugins/:group/toggle`).
 

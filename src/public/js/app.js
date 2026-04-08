@@ -2959,6 +2959,26 @@ async function refreshPluginConfig() {
   } catch {}
 }
 
+function showPluginToast(message, isError = false) {
+  const existing = document.getElementById('plugin-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'plugin-toast';
+  toast.textContent = message;
+  Object.assign(toast.style, {
+    marginBottom: '12px',
+    padding: '10px 14px',
+    background: isError ? '#7f1d1d' : '#1e3a5f',
+    color: isError ? '#fecaca' : '#bfdbfe',
+    border: `1px solid ${isError ? '#991b1b' : '#3b5e8f'}`,
+    borderRadius: '8px',
+    fontSize: '13px',
+    lineHeight: '1.4',
+  });
+  pluginConfigList.parentElement.insertBefore(toast, pluginConfigList);
+  setTimeout(() => { if (toast.parentElement) toast.remove(); }, 6000);
+}
+
 function renderPluginConfig(plugins) {
   pluginConfigList.innerHTML = '';
   if (plugins.length === 0) {
@@ -2968,6 +2988,8 @@ function renderPluginConfig(plugins) {
     pluginConfigList.appendChild(empty);
     return;
   }
+  // Map group → label for translating dependency names to human-readable labels
+  const labelByGroup = Object.fromEntries(plugins.map(pl => [pl.group, pl.label]));
   for (const p of plugins) {
     const card = document.createElement('div');
     card.className = 'p-4 bg-zinc-800/80 border border-zinc-700/50 rounded-xl transition-colors';
@@ -2991,6 +3013,22 @@ function renderPluginConfig(plugins) {
 
     info.appendChild(label);
     if (p.description) info.appendChild(desc);
+
+    // Dependency lines
+    if (p.dependencies && p.dependencies.length > 0) {
+      const deps = document.createElement('span');
+      deps.className = 'text-xs';
+      deps.style.color = '#71717a';
+      deps.textContent = 'Requires: ' + p.dependencies.map(d => labelByGroup[d] || d).join(', ');
+      info.appendChild(deps);
+    }
+    if (p.dependents && p.dependents.length > 0) {
+      const dependents = document.createElement('span');
+      dependents.className = 'text-xs';
+      dependents.style.color = '#71717a';
+      dependents.textContent = 'Required by: ' + p.dependents.map(d => labelByGroup[d] || d).join(', ');
+      info.appendChild(dependents);
+    }
 
     // Tool list
     const toolList = document.createElement('div');
@@ -3033,9 +3071,19 @@ function renderPluginConfig(plugins) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: !p.enabled }),
         });
+        const result = await res.json().catch(() => ({}));
         if (res.ok) {
-          refreshPluginConfig();
+          if (result.cascadedOn && result.cascadedOn.length > 0) {
+            const names = result.cascadedOn.map(g => labelByGroup[g] || g).join(', ');
+            showPluginToast(`Enabled ${p.label}. Also enabled (dependency): ${names}.`);
+          } else if (result.cascadedOff && result.cascadedOff.length > 0) {
+            const names = result.cascadedOff.map(g => labelByGroup[g] || g).join(', ');
+            showPluginToast(`Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`);
+          }
+          await refreshPluginConfig();
           pollPluginStatuses();
+        } else if (result.error) {
+          showPluginToast(result.error, true);
         }
       } finally {
         toggle.style.opacity = '1';
