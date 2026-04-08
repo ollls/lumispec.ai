@@ -12,9 +12,11 @@ data/*
 logs/
 .claude/settings.local.json
 
-# Exclude derived wiki content (only releases)
-# Note: Rules must be specific; !exceptions come after exclusions
-wiki/*.md
-wiki/**/*.md
+# Exclude everything under wiki/ except wiki/releases/.
+# Generated wiki entries are local-only; only the curated release
+# notes under wiki/releases/ are versioned.
+wiki/*
+!wiki/releases
+wiki/releases/*
 !wiki/releases/*.md
 !wiki/releases/.gitkeep
