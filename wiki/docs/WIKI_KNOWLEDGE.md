@@ -1,24 +1,23 @@
 ---
 source: file:docs/WIKI_KNOWLEDGE.md
-last_updated: 2026-04-08T16:51:28.770Z
-tags: [karpathy-wiki, llm-workbench, knowledge-management, rag-system, self-improving, documentation-loop, source-of-truth, version-control]
+last_updated: 2026-04-08T16:59:48.551Z
+tags: [karpathy-wiki, llm-workbench, rag-architecture, self-improving-system, docs-management, tool-suite, version-control, knowledge-validation]
 answers:
-  - "How does the Karpathy-style persistent wiki work in LLM Workbench?"
-  - "What is the step-by-step feedback loop for updating knowledge?"
-  - "Which tools are available for scanning, indexing, and editing the wiki?"
-  - "How does the system handle knowledge gaps and external validation?"
-  - "What are the best practices for maintaining source truth versus compressed indexes?"
+  - "How does the Karpathy-style persistent wiki feedback loop work?"
+  - "What is the difference between the docs/ source and wiki/ index?"
+  - "Which tools are available for scanning, indexing, and updating the knowledge base?"
+  - "How does the system detect and fill knowledge gaps using web research?"
+  - "What is the workflow for committing and syncing wiki changes to Git?"
 ---
-# Karpathy-Style LLM Wiki Management
+# Karpathy-Style LLM Wiki Architecture
 
-This document defines the architecture and workflow for LLM Workbench's persistent, self-improving knowledge base inspired by Andrej Karpathy's vision. It details a dual-tier system where authoritative `docs/` files serve as the source of truth, while a compressed `wiki/` index enables fast, low-cost queries via grep and synthesis. The core mechanism is a six-step feedback loop: querying existing knowledge, identifying gaps, researching via web tools, updating source documentation, rebuilding the compressed index, and committing changes to version control. Key entities include the `wiki_scan`, `wiki_index`, `source_edit`, and `web_fetch` tools, which allow the system to autonomously detect stale data, validate external claims, and maintain an interlinked markdown ecosystem.
+This document defines the architecture and operational workflow for a persistent, self-improving knowledge base inspired by Andrej Karpathy's vision, implemented within the LLM Workbench. It details a dual-tier RAG system where authoritative `docs/` files serve as the source of truth, while a compressed `wiki/` directory enables fast, interlinked querying. The system employs a six-step feedback loop involving gap detection, external web research via `web_search` and `web_fetch`, source documentation updates, and iterative re-indexing using `wiki_index`. Key mechanisms include context isolation for stateless file processing, explicit progress tracking during bulk rebuilds, and strict version control integration to ensure trust and auditability of AI-generated knowledge.
 
 ## Key topics
 - Karpathy philosophy — Persistent, interlinked markdown wiki maintained by LLMs
-- Feedback loop — Six-step cycle from gap detection to git commit
-- Tool suite — Specific commands for scanning, indexing, editing, and researching
-- Dual-tier RAG — Fast compressed overviews backed by full source fallback
-- Trust & verification — Strategies to prevent hallucinations via source validation
-- Workflow patterns — Examples for simple lookups, synthesis, and gap filling
-- Best practices — Guidelines for keeping source truth and rebuilding indexes
-- Version control — Git integration for tracking knowledge evolution
+- Feedback loop — Six-step cycle from query to gap detection, research, and commit
+- Tool suite — Specific commands like `wiki_scan`, `wiki_index`, `source_edit`, and `source_git`
+- Dual-tier RAG — Compressed overviews for speed with full source fallback for detail
+- Context isolation — Stateless per-file summarization to bound memory usage
+- Trust & verification — Strategies to prevent hallucinations via source validation and Git history
+- Workflow patterns — Scenarios for simple lookups, multi-source synthesis, and gap filling
