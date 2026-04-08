@@ -89,49 +89,42 @@ System:
 
 ## 📊 Complete Workflow Example
 
-### Scenario: Add New Feature Documentation
+### Scenario: Document an existing subsystem
 
 ```
 Step 1: USER REQUEST
 ────────────────────────────────────────
-User: "Document the new TaskMaster context isolation feature"
+User: "Document how the wiki retrieval pattern works"
 
-Step 2: RESEARCH
+Step 2: GROUND THE CLAIMS IN CODE
 ────────────────────────────────────────
 System:
-- web_search("TaskMaster context isolation local LLM")
-- web_fetch("Karpathy LLM wiki methodology")
-- source_read("src/taskmaster.ts")
+- source_read tree → list relevant files
+- source_read read("src/tools/plugin-wiki.js")
+- source_read read("CLAUDE.md") for the authoritative description
+- source_read grep("wiki_scan|wiki_index", glob: "src/**/*.js")
 
-Step 3: CREATE SOURCE DOC
+Step 3: WRITE THE SOURCE DOC
 ────────────────────────────────────────
 System:
-- source_write(
-    path: "docs/TASKMASTER.md",
-    content: "# TaskMaster: Context-Aware Pipelines..."
-  )
+- source_edit("docs/WIKI.md") with cited file:line references
+  for every architectural claim (no hand-wavy diagrams)
 
 Step 4: INDEX WIKI
 ────────────────────────────────────────
 System:
-- wiki_index(path: "docs/TASKMASTER.md")
-- Creates: wiki/docs/TASKMASTER.md (2,148 chars, 29.6% ratio)
+- wiki_index(path: "docs/WIKI.md", force: true)
+- Creates/refreshes: wiki/docs/WIKI.md
 
 Step 5: COMMIT
 ────────────────────────────────────────
 System:
-- git add docs/TASKMASTER.md wiki/docs/TASKMASTER.md
-- git commit -m "docs: add TaskMaster context isolation guide"
-- git push
-
-Step 6: UPDATE RELEASE NOTES
-────────────────────────────────────────
-System:
-- source_edit("releases/1.0.0.md") → Add feature
-- wiki_index("releases/1.0.0.md") → Re-compress
-- git commit -m "docs: update v1.0 release notes"
-- git push
+- source_git add docs/WIKI.md wiki/docs/WIKI.md
+- source_git commit -m "docs: document wiki retrieval pattern"
+- source_git push (requires approval)
 ```
+
+The non-negotiable rule: every architectural claim in a source doc must point at the file and line in the codebase that backs it up. The wiki indexer summarizes whatever the source doc says — it cannot detect hallucinations. Verification has to happen *before* `source_edit` writes the doc, not after.
 
 ## 🔍 Query Patterns
 
@@ -266,7 +259,7 @@ wiki_index (recompress)
 
 - **Dual-tier RAG**: Compressed overviews + full source fallback
 - **Self-aware**: System knows which docs are stale
-- **Context isolation**: TaskManager keeps memory low during rebuilds
+- **Per-file isolation**: each `wiki_index` call summarizes its file via a stateless `collectChatCompletion` (24000-char input cap, 1200 output tokens, see `src/tools/plugin-wiki.js:184-187`). This is *not* TaskMaster and *not* the task pipeline — the loop runs in an ordinary chat conversation. The driving conversation still accumulates ~1KB per indexed file.
 - **Web research**: Auto-validates against current internet info
 - **Source tools**: Can modify its own documentation
 
@@ -279,20 +272,28 @@ wiki_index (recompress)
 ### The Solution
 
 1. **Source of Truth**: Original `docs/` files are human-reviewed
-2. **Validation**: `web_search` + `web_fetch` verify current info
-3. **Transparency**: `source:` field shows where compressed data came from
-4. **Version Control**: Git history tracks all changes
-5. **Test Commands**: `source_test` validates code/docs alignment
+2. **Code citations are mandatory**: every architectural claim in a source doc must cite the file and line in the codebase that backs it up (e.g. `src/routes/taskProcessor.js:283`). Diagrams without code provenance are not allowed. The wiki indexer cannot detect hallucinated claims — it summarizes whatever the source doc says.
+3. **Validation**: `web_search` + `web_fetch` verify external/current info
+4. **Transparency**: `source:` field in each wiki entry shows where compressed data came from
+5. **Version Control**: Git history tracks all changes
+6. **Test Commands**: `source_test` validates code/docs alignment
 
 ### Verification Workflow
 
 ```
-1. System proposes doc update
-2. User reviews diff preview
-3. User approves or rejects
-4. If approved, commit with descriptive message
-5. Periodic audits: grep for "hallucinated" patterns
+1. Read the relevant source files BEFORE editing the doc
+   (source_read read / grep — not just web_search)
+2. Draft the doc update with file:line citations for every claim
+3. System proposes doc update via source_edit (diff preview shown)
+4. User reviews diff preview and verifies citations resolve
+5. If approved, commit with descriptive message
+6. Re-run wiki_index --force on the changed source doc
+7. Periodic audits: spot-check wiki entries against the cited code
 ```
+
+### Failure mode this guards against
+
+If a source doc claims "system X provides feature Y" without a code citation, and the LLM that wrote the doc was speculating, the wiki indexer will faithfully compress the false claim into a confident-sounding summary. Future queries against the wiki will then return the hallucination as authoritative knowledge. This is exactly the failure that motivated the v1.0 cleanup of the original `docs/TASKMASTER.md`. The fix is upstream of the wiki: do not let unverified claims into the source docs in the first place.
 
 ## 🎯 Next Steps
 

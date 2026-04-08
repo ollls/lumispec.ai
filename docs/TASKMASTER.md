@@ -1,292 +1,117 @@
-# TaskMaster: Context-Aware Task Pipelines
+# TaskMaster and the Task Pipeline
 
-## Overview
+There are two distinct systems involved when a multi-step request is processed through the bullet-list interface. They are often conflated, but they live in different files and do different things.
 
-TaskMaster is an advanced task orchestration system designed for efficient multi-step workflows, especially optimized for low-memory local LLMs. It provides **context management** and **context isolation** to prevent token bloat and maintain clean conversation boundaries.
+## TaskMaster — the prompt decomposer
 
----
+TaskMaster is the **input-side decomposer**. Given a free-form user prompt, it asks the LLM to rewrite that prompt as a bullet-list of discrete tasks the pipeline can then execute. It does not execute anything itself and does not manage memory.
 
-## Core Concepts
+- **Endpoint**: `POST /api/conversations/:id/decompose` — implementation in `src/routes/conversations.js:638-663`.
+- **How it runs**: a single non-streaming `collectChatCompletion` call:
+  - System prompt: `getTaskmasterPrompt()` (loaded from `data/TASKMASTER.md` via `src/tools/index.js`)
+  - User content: the original user prompt
+  - Settings: `temperature: 0.3`, `maxTokens: 1024`, `30s` abort timeout
+- **Output**: a bullet-list string. If the LLM returns ≤1 top-level bullet, the route returns `{ tasks, single: true }` and the frontend sends the prompt as a normal chat message instead of running the pipeline.
+- **Frontend trigger**: the **Taskmaster** checkbox in the input area routes the next prompt through `/decompose` before submission. Images bypass it.
 
-### Context Management
+That is the entirety of TaskMaster. It is a pre-processor that turns prose into a bullet list. The actual execution is the responsibility of the Task Pipeline below.
 
-- **Dynamic context building** — Each task step receives only relevant information
-- **Token efficiency** — Prevents unnecessary context accumulation
-- **State persistence** — Maintains task state across multiple turns
-- **Selective memory** — Choose what gets carried forward
+## Task Pipeline — the executor
 
-### Context Isolation
+The Task Pipeline runs the bullet list (whether produced by TaskMaster or typed by the user). It lives in `src/routes/taskProcessor.js`.
 
-- **Per-task boundaries** — Each pipeline task operates in its own context window
-- **No cross-contamination** — Task A's outputs don't pollute Task B's inputs
-- **Clean handoffs** — Explicit data passing between tasks
-- **Memory-friendly** — Critical for local LLMs with limited context
+### Two task levels — structure determines context behavior
 
----
+The task pipeline distinguishes two levels by indentation:
 
-## Why It Matters for Local LLMs
+| Level | Syntax | Context behavior |
+|---|---|---|
+| Top-level | `- task` | **Chained.** Receives the previous step's `result` (string) and `files` (CSVs/JSON the previous step saved). |
+| Indented | `  - subtask` | **Isolated from siblings.** Each subtask receives the parent group's incoming context (which is the previous top-level step's output). After all subtasks finish, results are merged with section headers and passed to the next top-level step. The parent bullet's text is added to subtasks as a `## Parent Task` section, but is not executed itself. |
 
-### The Problem
+Indentation = sibling isolation. Flat = sequential chaining. There is no per-task setting; the bullet structure is the configuration.
 
-Local LLMs (llama.cpp, Ollama, etc.) often have:
-- **Limited context windows** (4K-32K tokens)
-- **Restricted RAM** (context takes significant memory)
-- **Slower inference** with larger contexts
+### What each step actually receives
 
-Traditional multi-turn conversations accumulate:
-```
-Turn 1: 500 tokens
-Turn 2: 500 + 500 = 1,000 tokens
-Turn 3: 1,000 + 500 = 1,500 tokens
-...
-Turn 20: 10,000+ tokens (slow, memory-heavy)
-```
+Each step's user message is built in `taskProcessor.js:283-303`:
 
-### The TaskMaster Solution
+```js
+const llmMessages = [{ role: 'system', content: systemPrompt + pipelinePreamble }];
 
-```
-Task 1: 500 tokens → isolate → extract result → clear context
-Task 2: 500 tokens → isolate → extract result → clear context
-Task 3: 500 tokens → isolate → extract result → clear context
-...
-Total: 500 tokens per task (constant memory footprint)
-```
-
----
-
-## Architecture
-
-### Task Pipeline Structure
-
-```
-┌─────────────────────────────────────┐
-│           Task Pipeline             │
-├─────────────────────────────────────┤
-│  ┌─────────┐    ┌─────────┐         │
-│  │  Task 1 │────│  Task 2 │────     │
-│  └─────────┘    └─────────┘         │
-│     ↓              ↓                │
-│  ┌─────────┐    ┌─────────┐         │
-│  │ Context │    │ Context │         │
-│  │  A      │    │  B      │         │
-│  └─────────┘    └─────────┘         │
-│     (isolated)   (isolated)         │
-└─────────────────────────────────────┘
-```
-
-### Data Flow
-
-1. **Input** → Task 1 with Context A
-2. **Output** → Extract structured data
-3. **Clear** → Context A released
-4. **Pass** → Structured data to Task 2
-5. **New Context** → Task 2 with Context B
-6. **Repeat** → Until pipeline complete
-
----
-
-## Use Cases
-
-### 1. Multi-Step Research
-
-```
-Task 1: Search for topics
-  ↓ (extract: list of URLs)
-Task 2: Fetch each URL
-  ↓ (extract: key findings)
-Task 3: Synthesize report
-  ↓ (final output)
-```
-
-**Context per task:** ~1,000 tokens  
-**Without isolation:** ~10,000+ tokens
-
-### 2. Code Generation & Review
-
-```
-Task 1: Generate code from spec
-  ↓ (extract: code)
-Task 2: Security review
-  ↓ (extract: issues)
-Task 3: Fix issues
-  ↓ (final code)
-```
-
-### 3. Data Analysis Pipeline
-
-```
-Task 1: Load & clean CSV
-  ↓ (extract: stats)
-Task 2: Run analysis
-  ↓ (extract: insights)
-Task 3: Generate visualization
-  ↓ (final chart)
-```
-
----
-
-## Configuration
-
-### Pipeline Definition
-
-```json
-{
-  "pipeline": {
-    "name": "research_workflow",
-    "tasks": [
-      {
-        "id": "search",
-        "context": "isolated",
-        "inputs": ["query"],
-        "outputs": ["results"]
-      },
-      {
-        "id": "fetch",
-        "context": "isolated",
-        "inputs": ["results.urls"],
-        "outputs": ["content"]
-      },
-      {
-        "id": "synthesize",
-        "context": "isolated",
-        "inputs": ["content"],
-        "outputs": ["report"]
-      }
-    ]
-  }
+const contextParts = [];
+if (prevResult) {
+  // hard-capped at MAX_PREV_RESULT_CHARS = 32000
+  const truncated = prevResult.length > MAX_PREV_RESULT_CHARS
+    ? prevResult.slice(0, MAX_PREV_RESULT_CHARS) + `\n\n[...truncated from ${prevResult.length} chars]`
+    : prevResult;
+  contextParts.push(`## Previous Step Output\n\n${truncated}`);
 }
-```
-
-### Context Settings
-
-```json
-{
-  "context": {
-    "isolation": "per_task",
-    "maxTokens": 4096,
-    "carryForward": ["task_id", "user_query"],
-    "clearAfter": true
-  }
+if (savedFiles.length > 0) {
+  contextParts.push(`## Available Data Files\n${...}`);
 }
+if (parentText) {
+  contextParts.push(`## Parent Task\n${parentText}`);
+}
+
+const userContent = `${contextParts.join('\n\n')}\n\n---\n\n## Current Task\n\n${taskText}`;
+llmMessages.push({ role: 'user', content: userContent });
 ```
 
----
+The system prompt is augmented with a `pipelinePreamble` (`taskProcessor.js:272-281`) that hides future tasks from the LLM and instructs it to complete only the current step. The LLM never sees the full task list — only "you are executing step N of M".
 
-## Benefits
+### What this means for memory
 
-| Feature | Without TaskMaster | With TaskMaster |
-|---------|-------------------|-----------------|
-| **Memory Usage** | Grows linearly | Constant |
-| **Speed** | Slows as context grows | Consistent |
-| **Token Cost** | High (all history) | Low (per-task) |
-| **Error Containment** | Pollutes all tasks | Isolated |
-| **Local LLM Support** | Limited by RAM | Optimized |
+- Each step starts with a **fresh `llmMessages` array** (`taskProcessor.js:283`). There is no growing conversation buffer that gets "cleared between steps" — there is nothing to clear, because nothing accumulates across steps in the first place.
+- `prev.result` is **bounded at 32000 characters** (`MAX_PREV_RESULT_CHARS`, `taskProcessor.js:12`). Larger results are truncated with a note.
+- Tool results during a single step's tool loop accumulate inside that step's local `llmMessages`, then are discarded when the step ends.
+- Per-step context is **bounded, not constant**. A step that receives a 32K-char prior result, has its own multi-K-char task prompt, runs through the system prompt, and executes several tool rounds will use far more than a few hundred tokens. The pipeline does not produce a "constant ~500 tokens per task" footprint.
 
----
+### What flat tasks share
 
-## Implementation Details
+Flat top-level steps **do** share state across steps via `prev.result` and `prev.files`. The task pipeline is not a series of fully isolated single-shot calls. Only sibling subtasks under the same parent bullet are isolated from each other; flat top-level steps chain.
 
-### Context Lifecycle
+### Tool execution inside a step
 
-```javascript
-// Task starts
-context = createContext(taskId, inputs)
+Each step runs through the same tool loop as a normal chat conversation: up to 20 tool rounds, parallel-call cap, repeat detection, confirmation flow, and full SSE streaming. Large tool results auto-save to CSV files and the filename is added to `prev.files`, so downstream steps reference the saved file rather than re-receiving its content in `prev.result`.
 
-// Task executes
-toolCalls = executeTask(context)
+### Review mode
 
-// Task completes
-result = extractStructuredData(toolCalls)
-clearContext(context) // Memory freed!
+When the **Review** toggle is on, the pipeline pauses after each completed task (except the last) with **Continue** / **Retry** buttons. Continue accepts the output and proceeds. Retry discards the output, restores `prev` to its pre-task state via the deep copy at `taskProcessor.js:116`, and re-runs the step (fresh LLM call — temperature sampling may produce a different result).
 
-// Pass to next task
-nextTaskInputs = { ...result, ...carryForward }
+### SSE events
+
+`{task_start}` → `{subtask_start}` → (streaming events) → `{subtask_complete}` → `{task_complete}` → `{task_review}` (if Review is on) → `{task_error}` (on failure, pipeline stops) → `[DONE]`.
+
+## Wiki rebuild — a separate isolation mechanism
+
+`wiki_index` is an ordinary plugin tool in `src/tools/plugin-wiki.js`. **It does not run through TaskMaster, and it does not run through the Task Pipeline.** When the user (or driving LLM) loops `wiki_index` over a list of files, the loop happens inside an ordinary chat conversation.
+
+Wiki's per-file context isolation comes from a different mechanism: a fresh stateless `collectChatCompletion` call inside `indexToWiki()` at `plugin-wiki.js:184-187`:
+
+```js
+const { content } = await collectChatCompletion([
+  { role: 'system', content: system },
+  { role: 'user', content: user },
+], { signal: AbortSignal.timeout(90000), maxTokens: 1200, temperature: 0.2 });
 ```
 
-### Data Extraction
+- Each call sends only `[system, user]` — no conversation history.
+- The user message is the file content, hard-capped at `MAX_INPUT = 24000` chars (`plugin-wiki.js:144`).
+- Output is capped at `maxTokens: 1200`.
 
-- **Structured outputs** — JSON, CSV, key-value pairs
-- **Type validation** — Ensure data integrity between tasks
-- **Error handling** — Failed tasks don't corrupt pipeline
+So **per-file** memory is bounded regardless of how many files you index. **However**, the driving conversation does grow: every `wiki_index` tool result lands in the driving LLM's message history (one entry per file, ~1KB each after the markdown truncation in `src/routes/conversations.js:406-418`). For a 20-file rebuild this adds roughly 15-25 KB to the driving conversation context.
 
----
+This is "context isolation" only in the sense that each summarization call is a fresh stateless completion. It is not provided by TaskMaster and not provided by the Task Pipeline.
 
-## Integration with Other Systems
+## Quick reference
 
-### E*TRADE Pipelines
-
-```
-1. Search stocks (isolated context)
-2. Fetch option chains (isolated context)
-3. Calculate Greeks (isolated context)
-4. Generate report (isolated context)
-```
-
-### Web Research Pipelines
-
-```
-1. Search topics (isolated context)
-2. Fetch pages with stealth (isolated context)
-3. Extract structured data (isolated context)
-4. Synthesize findings (isolated context)
-```
-
-### Wiki Building Pipelines
-
-```
-1. Scan markdown files (isolated context)
-2. Index file #1 (isolated context)
-3. Index file #2 (isolated context)
-... repeat for all files
-```
-
----
-
-## Best Practices
-
-### 1. Keep Tasks Atomic
-
-- One clear goal per task
-- Minimal context requirements
-- Structured outputs
-
-### 2. Define Clear Interfaces
-
-- Explicit input/output schemas
-- Type validation between tasks
-- Error handling at each boundary
-
-### 3. Minimize Carry-Forward
-
-- Only pass what's needed
-- Don't carry full conversation history
-- Extract structured data, not raw text
-
-### 4. Test Isolation
-
-- Verify tasks don't share state unexpectedly
-- Check memory usage stays constant
-- Validate error containment
-
----
-
-## Future Enhancements
-
-- **Parallel task execution** — Independent tasks run simultaneously
-- **Checkpointing** — Resume interrupted pipelines
-- **Task caching** — Skip unchanged inputs
-- **Dynamic pipelines** — Branching based on task outputs
-- **Visual pipeline builder** — GUI for task orchestration
-
----
-
-## Summary
-
-TaskMaster enables **efficient, memory-conscious multi-step workflows** by:
-
-1. **Isolating context** per task
-2. **Clearing memory** after each step
-3. **Passing structured data** between tasks
-4. **Optimizing for local LLMs** with limited resources
-
-This is critical for running sophisticated AI workflows on consumer hardware with 8GB-32GB RAM and 4K-32K context windows.
+| Question | Answer |
+|---|---|
+| Where does TaskMaster live? | `src/routes/conversations.js:638` (`/decompose` route), prompt in `data/TASKMASTER.md` |
+| Where does the pipeline live? | `src/routes/taskProcessor.js` |
+| Does TaskMaster execute tasks? | No. It only rewrites a prompt as a bullet list. |
+| Does the pipeline give every task constant memory? | No. Per-step context is bounded (32K-char prior-result cap), but it scales with prior output. |
+| Are flat top-level tasks isolated from each other? | No. They chain via `prev.result` and `prev.files`. |
+| Are subtasks isolated from each other? | Yes. Sibling subtasks under the same parent each receive only the parent group's incoming context. |
+| Does wiki rebuild use the pipeline? | No. It's a tool loop inside a normal chat conversation. |
+| Where does wiki's per-file isolation come from? | A stateless `collectChatCompletion` call inside `wiki_index`'s `indexToWiki()` helper. |
