@@ -1,7 +1,7 @@
-# ScrapChat
+# lumispec.ai
 
-![ScrapChat](Screenshot1.png)
-![ScrapChat](Screenshot2.png)
+![lumispec.ai](Screenshot1.png)
+![lumispec.ai](Screenshot2.png)
 
 A personal assistant that runs entirely on your own hardware. The E\*TRADE integration and code development toolset fill real gaps left by commercial AI tools: full portfolio analysis with real financial data, AI-driven coding with git integration and diff previews, and complete privacy with no cloud dependencies. Built for and tested with **Qwen3.5-35B-A3B** on an **NVIDIA RTX 5090**. Useful today for automating portfolio analysis, developing software, or running local LLM experiments.
 
@@ -10,8 +10,8 @@ Connect any local LLM via [llama.cpp](https://github.com/ggerganov/llama.cpp) an
 ## Install
 
 ```bash
-git clone https://github.com/ollls/ScrapChat.git
-cd ScrapChat
+git clone https://github.com/ollls/lumispec.ai.git
+cd lumispec.ai
 npm install
 cp .env.example .env   # Edit with your settings
 npm run css:build      # Build Tailwind CSS
@@ -22,7 +22,7 @@ Requires: **Node.js >= 20** and a running **llama.cpp server** (see setup below)
 
 ## LLM Server Setup
 
-ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. The following configurations are tested on an **NVIDIA RTX 5090**.
+lumispec.ai connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. The following configurations are tested on an **NVIDIA RTX 5090**.
 
 **Recommended — Qwen3.5-27B (stability over speed):**
 
@@ -52,7 +52,7 @@ Any llama.cpp-compatible model works. Adjust `-c` and quantization for your GPU.
 
 ## What It Does
 
-ScrapChat is a universal assistant. Ask it anything — it picks the right tools automatically:
+lumispec.ai is a universal assistant. Ask it anything — it picks the right tools automatically:
 
 - **Search the web** and summarize articles
 - **Check weather** and plan trips with hotel search and booking
