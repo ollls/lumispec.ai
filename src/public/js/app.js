@@ -16,7 +16,30 @@ const state = {
   listMode: false, // bullet list editing mode
   reviewEnabled: localStorage.getItem('reviewEnabled') === 'true', // pause after each task step
   precisionEnabled: localStorage.getItem('precisionEnabled') === 'true', // strict computation mode
+  citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
 };
+
+// Render Cite-mode warnings as a small amber-tinted block above the diff
+// preview. Each warning is a one-liner with line number, snippet, and reason.
+// Soft signal — never blocks the write, just decorates the tool result.
+function renderCiteWarnings(warnings) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'mt-1 mb-1 px-2 py-1 border border-amber-700/40 bg-amber-950/20 rounded text-xs';
+  const header = document.createElement('div');
+  header.className = 'text-amber-400 font-semibold mb-0.5';
+  header.textContent = `⚠ Cite warnings (${warnings.length})`;
+  wrap.appendChild(header);
+  for (const w of warnings) {
+    const item = document.createElement('div');
+    item.className = 'text-amber-200/80 leading-snug';
+    const lineLabel = w.line ? `L${w.line}: ` : '';
+    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    item.innerHTML = `<span class="text-amber-500">${esc(lineLabel)}</span><span class="text-zinc-400">${esc(w.snippet)}</span> <span class="text-amber-500/60">— ${esc(w.reason)}</span>`;
+    wrap.appendChild(item);
+  }
+  return wrap;
+}
 
 // Colorize diff text — lines starting with +/-/@@ get green/red/cyan
 function colorizeDiff(text) {
@@ -107,6 +130,7 @@ const thinkToggle = document.getElementById('think-toggle');
 const reviewToggle = document.getElementById('review-toggle');
 const reviewToggleLabel = document.getElementById('review-toggle-label');
 const precisionToggle = document.getElementById('precision-toggle');
+const citeToggle = document.getElementById('cite-toggle');
 const taskmasterBtn = document.getElementById('taskmaster-btn');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const saveSessionBtn = document.getElementById('save-session-btn');
@@ -1066,6 +1090,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
         precision: state.precisionEnabled,
+        cite: state.citeEnabled,
         sessionInit: sessionInit || false,
       }),
       signal: state.abortController.signal,
@@ -1213,6 +1238,9 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
 
               // Render _diff as color-coded diff block
               if (parsedResult?._diff) {
+                // Cite warnings render above the diff so the human approver sees them first
+                const citeBlock = renderCiteWarnings(parsedResult._citeWarnings);
+                if (citeBlock) detail.appendChild(citeBlock);
                 const diffPre = document.createElement('pre');
                 diffPre.className = 'mt-1 whitespace-pre-wrap text-xs max-h-60 overflow-y-auto slim-scrollbar';
                 diffPre.innerHTML = colorizeDiff(parsedResult._diff);
@@ -1403,6 +1431,7 @@ async function sendTasks(tasks, displayText) {
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
         precision: state.precisionEnabled,
+        cite: state.citeEnabled,
         review: state.reviewEnabled,
       }),
       signal: state.abortController.signal,
@@ -1613,10 +1642,12 @@ async function sendTasks(tasks, displayText) {
                 detail.appendChild(summary);
                 const pre = document.createElement('pre');
                 pre.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+                let citeBlock = null;
                 try {
                   const parsed = JSON.parse(data.tool_use.result);
                   if (parsed._diff) {
                     pre.innerHTML = colorizeDiff(parsed._diff);
+                    citeBlock = renderCiteWarnings(parsed._citeWarnings);
                   } else if (parsed._markdown) {
                     pre.textContent = parsed._markdown.slice(0, 2000);
                   } else {
@@ -1625,6 +1656,7 @@ async function sendTasks(tasks, displayText) {
                 } catch {
                   pre.textContent = String(data.tool_use.result).slice(0, 2000);
                 }
+                if (citeBlock) detail.appendChild(citeBlock);
                 detail.appendChild(pre);
                 currentSection.toolContainer.appendChild(detail);
               }
@@ -2401,6 +2433,13 @@ precisionToggle.checked = state.precisionEnabled;
 precisionToggle.addEventListener('change', () => {
   state.precisionEnabled = precisionToggle.checked;
   localStorage.setItem('precisionEnabled', state.precisionEnabled);
+});
+
+// Cite toggle (code-citation discipline for docs writes and wiki indexing)
+citeToggle.checked = state.citeEnabled;
+citeToggle.addEventListener('change', () => {
+  state.citeEnabled = citeToggle.checked;
+  localStorage.setItem('citeEnabled', state.citeEnabled);
 });
 
 // Taskmaster action button — decompose current prompt into task list

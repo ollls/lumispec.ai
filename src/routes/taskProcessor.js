@@ -51,8 +51,8 @@ router.post('/:id/tasks', async (req, res) => {
   const conv = conversations.get(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
-  const { tasks, applets, autorun, review, precision } = req.body;
-  console.log(`[task-processor] autorun=${autorun}`);
+  const { tasks, applets, autorun, review, precision, cite } = req.body;
+  console.log(`[task-processor] autorun=${autorun} cite=${!!cite}`);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -96,7 +96,7 @@ router.post('/:id/tasks', async (req, res) => {
     cancelReview(conv.id);
   });
 
-  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision });
+  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision, cite: !!cite });
   const taskRunResults = [];
   let prev = { result: null, files: [] }; // output from immediately preceding step
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -128,7 +128,7 @@ router.post('/:id/tasks', async (req, res) => {
           res.write(`data: ${JSON.stringify({ subtask_start: { taskIndex: ti, subtaskIndex: si, total: task.subtasks.length, text: task.subtasks[si] } })}\n\n`);
 
           const result = await processOneStep(task.subtasks[si], prev, {
-            systemPrompt, slotId, abortController, autorun: !!autorun, conv, res,
+            systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
             stepLabel: `Subtask ${si + 1}/${task.subtasks.length} of Task ${ti + 1}`,
             allTasks: normalizedTasks, parentText: task.text,
           });
@@ -178,7 +178,7 @@ router.post('/:id/tasks', async (req, res) => {
         res.write(`data: ${JSON.stringify({ task_start: { index: ti, total: normalizedTasks.length, text: task.text } })}\n\n`);
 
         const result = await processOneStep(task.text, prev, {
-          systemPrompt, slotId, abortController, autorun: !!autorun, conv, res,
+          systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
           stepLabel: `Task ${ti + 1}/${normalizedTasks.length}`,
           allTasks: normalizedTasks,
         });
@@ -263,7 +263,7 @@ router.post('/:id/tasks', async (req, res) => {
 });
 
 // Process one task/subtask step with full tool loop
-async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, conv, res, stepLabel, allTasks, parentText = '' }) {
+async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, cite, conv, res, stepLabel, allTasks, parentText = '' }) {
   const { result: prevResult } = prev;
   const savedFiles = [...prev.files];
   console.log(`[task-processor] ${stepLabel}: "${taskText.slice(0, 80)}" | prevResult: ${prevResult ? prevResult.length + ' chars' : 'none'} | savedFiles: ${savedFiles.length}`);
@@ -396,7 +396,7 @@ CRITICAL RULES:
             return (toolCallSigCounts[sig] || 0) <= MAX_SAME_TOOL_REPEATS;
           });
           if (allowedCalls.length > 0) {
-            const context = buildToolContext(autorun, conv, res);
+            const context = buildToolContext(autorun, cite, conv, res);
             const results = await Promise.all(allowedCalls.map(tc => executeTool(tc.name, tc.arguments, context)));
             for (let i = 0; i < allowedCalls.length; i++) {
               toolUses.push({ name: allowedCalls[i].name, result: results[i] });
@@ -418,7 +418,7 @@ CRITICAL RULES:
         }
 
         // Execute tools
-        const context = buildToolContext(autorun, conv, res);
+        const context = buildToolContext(autorun, cite, conv, res);
         const results = await Promise.all(toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context)));
         const resultParts = [];
         for (let i = 0; i < toolCallsFound.length; i++) {
@@ -491,9 +491,10 @@ CRITICAL RULES:
   }
 }
 
-function buildToolContext(autorun, conv, res) {
+function buildToolContext(autorun, cite, conv, res) {
   return {
     autorun,
+    cite,
     confirmFn: (command) => {
       res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
       return requestConfirmation(conv.id, command);
@@ -521,8 +522,8 @@ function buildToolResultText(toolName, result) {
       }
       return truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
     }
-    if (parsed._images || parsed._rateMap || parsed._diff) {
-      const { _images, _rateMap, _diff, ...rest } = parsed;
+    if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings) {
+      const { _images, _rateMap, _diff, _citeWarnings, ...rest } = parsed;
       if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
       if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
       return `Tool "${toolName}" result: ${JSON.stringify(rest)}`;

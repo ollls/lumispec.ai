@@ -30,6 +30,134 @@ export function tagLineCount(stdout, limit) {
   return lines.length > 3 ? out + `\n[${lines.length} lines total]` : out;
 }
 
+// ── Cite mode helpers ───────────────────────────────────
+//
+// These three helpers implement the mechanical pieces of Cite mode (see
+// docs/KNOWLEDGE_HARDENING.md). They are deterministic, no LLM calls, no
+// network — they just look at strings and the filesystem.
+//
+// extractAddedLines parses a unified diff and returns the lines that were
+// added (not context, not removed), with their resulting line numbers in
+// the new file. Used by the diff-preview claim highlighter.
+//
+// detectUncitedClaims runs a small set of narrow regex patterns over a
+// list of added lines and reports lines that look like architectural
+// claims but lack a nearby (file:line) or `file:line` citation. Soft
+// signal — produces warnings, never refuses anything.
+//
+// validateCitations parses any text for (file:line) / `file:line`
+// citation patterns and checks each one against the filesystem under
+// sourceRoot. Citations whose path doesn't exist or whose line number
+// exceeds the file length are reported as broken. Hard signal — used by
+// wiki_index in cite mode to refuse-write entries with broken citations.
+
+const CITE_CITATION_RE = /[`(]([\w./_-]+\.(?:js|mjs|cjs|ts|jsx|tsx|py|md|markdown|json|sh|yaml|yml|toml|css|html|env|example)):(\d+)(?:[-:](\d+))?[`)]/;
+const CITE_CITATION_RE_GLOBAL = new RegExp(CITE_CITATION_RE.source, 'g');
+
+// Narrow claim patterns. Intentionally conservative — better to miss a
+// subtle claim than to spam false positives that train users to ignore
+// the highlighter. If you add a pattern here, prefer one that has near-
+// zero false-positive rate on plain prose like README sentences.
+const CITE_CLAIM_PATTERNS = [
+  // Project-relative file path mentions followed within ~80 chars by a
+  // behavioral verb. Catches "src/foo.js handles requests" without a cite.
+  /\b(?:src|docs|data|releases|wiki)\/[\w./-]+(?:\.[a-z]+)?\b[\s\S]{0,80}?\b(?:provides|implements|executes|returns|throws|calls|handles|stores|reads|writes|fires|emits|listens|registers|manages|injects|hooks|wraps|owns)\b/i,
+  // Backtick-quoted identifier (function name, class name, constant) followed
+  // by an implementation verb within ~50 chars. Catches "`doFoo()` returns
+  // null when called" without a cite.
+  /`[A-Za-z_][\w]*(?:\(\))?`[\s\S]{0,50}?\b(?:is implemented|implements|provides|executes|returns|throws|calls|handles|fires|emits|wraps|owns)\b/i,
+  // Numerical claim with a unit. Catches "32K cap on previous results"
+  // without a cite. The unit set is deliberately narrow.
+  /\b\d+\s*(?:K|MB|GB|seconds?|chars?|tokens?|rounds?|lines?|files?)\b/i,
+];
+
+export function extractAddedLines(diff) {
+  if (!diff || typeof diff !== 'string') return [];
+  const out = [];
+  let lineNum = 0;
+  let inHunk = false;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('@@')) {
+      // Parse @@ -old,oldCount +new,newCount @@ — the +newStart is what
+      // we track for the resulting file.
+      const m = line.match(/\+(\d+)(?:,\d+)?/);
+      if (m) lineNum = parseInt(m[1], 10);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) {
+      out.push({ lineNum, text: line.slice(1) });
+      lineNum++;
+    } else if (line.startsWith(' ')) {
+      lineNum++;
+    }
+    // '-' lines do not advance the new-file line counter.
+  }
+  return out;
+}
+
+export function detectUncitedClaims(addedLines) {
+  if (!Array.isArray(addedLines)) return [];
+  const warnings = [];
+  for (const { lineNum, text } of addedLines) {
+    if (!text || text.trim().length < 20) continue;
+    // If the line itself contains a citation, it's already grounded.
+    if (CITE_CITATION_RE.test(text)) continue;
+    for (const pattern of CITE_CLAIM_PATTERNS) {
+      if (pattern.test(text)) {
+        warnings.push({
+          line: lineNum,
+          snippet: text.length > 100 ? text.slice(0, 100) + '…' : text,
+          reason: 'claim-shaped sentence without nearby (file:line) citation',
+        });
+        break; // one warning per line
+      }
+    }
+  }
+  return warnings;
+}
+
+export async function validateCitations(text, sourceRoot) {
+  if (!text || !sourceRoot) return [];
+  const broken = [];
+  const seen = new Set();
+  const { stat: fsStat, readFile: fsReadFile } = await import('fs/promises');
+  const { resolve: resolvePath } = await import('path');
+  const root = resolvePath(sourceRoot);
+  let m;
+  // Reset the global regex's lastIndex so repeated calls don't get stuck.
+  CITE_CITATION_RE_GLOBAL.lastIndex = 0;
+  while ((m = CITE_CITATION_RE_GLOBAL.exec(text)) !== null) {
+    const [, relPath, lineStr] = m;
+    const sig = `${relPath}:${lineStr}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    const abs = resolvePath(root, relPath);
+    if (!abs.startsWith(root)) {
+      broken.push({ citation: sig, reason: 'path escapes source root' });
+      continue;
+    }
+    try {
+      const s = await fsStat(abs);
+      if (!s.isFile()) {
+        broken.push({ citation: sig, reason: 'not a file' });
+        continue;
+      }
+      const content = await fsReadFile(abs, 'utf-8');
+      const totalLines = content.split('\n').length;
+      const line = parseInt(lineStr, 10);
+      if (line < 1 || line > totalLines) {
+        broken.push({ citation: sig, reason: `line ${line} outside file (file has ${totalLines} lines)` });
+      }
+    } catch {
+      broken.push({ citation: sig, reason: 'path does not exist' });
+    }
+  }
+  return broken;
+}
+
 // ── Tool call logger ────────────────────────────────
 export async function logToolCall(toolName, action, { args, rawResult, formattedResult }) {
   try {
@@ -510,8 +638,26 @@ const PRECISION_RULES = `## Precision Mode — Computation Discipline
 - Large result sets (30+ rows) are auto-saved to CSV in the project directory. When you see "_autoSaved", use that filename directly in run_python.
 - run_python runs in the source project directory — same location as saved files. Use filenames directly (e.g. pd.read_csv('data.csv')).`;
 
+// ── Cite Mode rules (standalone, not tied to any plugin) ──
+// See docs/KNOWLEDGE_HARDENING.md for the design rationale and the
+// failure case (TaskMaster hallucination incident) that motivated it.
+const CITE_RULES = `## Cite Mode — Code-Citation Discipline
+Cite mode is active. The following discipline applies for the rest of this conversation:
+
+1. **Markdown documentation writes** — When writing or editing any \`.md\` file via source_write or source_edit, every architectural claim — "X provides Y", "X is implemented as Z", "When X happens, Y", file paths, function names, parameter names, default values, behaviors — MUST be backed by a \`(src/path/file.js:LINE)\` citation pointing to the code that backs it up.
+
+2. **Read before drafting** — Before writing a doc claim, use source_read read or source_read grep to find the actual code. Draft the doc with citations inline as you go. If you cannot cite a claim, do NOT write it — mark the gap as \`TODO: needs verification\` instead.
+
+3. **Code claims in chat answers** — The same rule applies to architectural claims in chat answers. Quote line numbers, not memory. If asked about behavior you have not read, read it first via source_read.
+
+4. **No training-data inference** — Do NOT claim that this codebase has a feature, library, file, or behavior that you know about from general LLM training data. The only source of truth is files you have read with source_read in this conversation.
+
+5. **Refuse to fabricate** — If you are tempted to write a claim you cannot cite, write "I haven't checked this — let me read [file] first" and call source_read instead. Confident-sounding prose about a system you have not read is a critical trust violation.
+
+This discipline guards against documentation hallucination — the failure mode where LLM-authored docs contain confident, fluent claims about architecture that does not exist in the code. The wiki indexer and the diff preview will run mechanical checks on your output and flag uncited claims; broken citations in wiki entries are refused.`;
+
 // ── System prompt assembly ──────────────────────────
-export function getSystemPrompt({ applets = false, precision = false } = {}) {
+export function getSystemPrompt({ applets = false, precision = false, cite = false } = {}) {
   const toolList = Object.entries(tools)
     .filter(([name]) => !disabledTools.has(name))
     .map(([name, t]) => `- ${name}: ${t.description}`)
@@ -528,6 +674,11 @@ export function getSystemPrompt({ applets = false, precision = false } = {}) {
   // Inject precision rules if toggle is on OR finance group is active
   const precisionActive = precision || isToolGroupEnabled('finance');
   const precisionSection = precisionActive ? PRECISION_RULES : '';
+
+  // Inject cite-mode rules when the toggle is on. The frontend defaults
+  // the toggle to on when the source plugin is active, so this is the
+  // common path for any conversation that can read code.
+  const citeSection = cite ? CITE_RULES : '';
 
   const groupSections = Object.values(toolGroups)
     .filter(isGroupEnabled)
@@ -612,6 +763,8 @@ Tool rules:
 ${routingSection}
 
 ${precisionSection}
+
+${citeSection}
 
 ${groupSections}
 
