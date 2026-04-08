@@ -13,6 +13,8 @@ logs/
 .claude/settings.local.json
 
 # Exclude derived wiki content (except releases)
-wiki/
-!wiki/releases/
+# Note: Rules must be specific; !exceptions come after exclusions
+wiki/*.md
+wiki/**/*.md
+!wiki/releases/*.md
 !wiki/releases/.gitkeep
