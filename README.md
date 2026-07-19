@@ -37,19 +37,68 @@ npm run css:build              # build Tailwind once
 # 2. Configure
 cp .env.example .env           # then edit — see "Configuration" below
 
-# 3. Start your LLM server (separate terminal)
+# 3. Start your LLM server (separate terminal — see "Choosing & running your model")
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
-  -ngl 99 -c 131072 -fa on \
+  -hf unsloth/Qwen3.6-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 --ctx-size 76000 --flash-attn on --jinja \
   --host 0.0.0.0 --port 8080
 
 # 4. Run the workbench
 npm start                      # → http://localhost:3000
 ```
 
-**Requirements:** Node.js 20+, a running llama.cpp server (or set `LLM_BACKEND=claude` and supply a key), and an NVIDIA GPU if you want fast local inference. Tested on RTX 5090 with Qwen3.5-35B-A3B (MoE, 3B active params).
+**Requirements:** Node.js 20+, a running llama.cpp server (or set `LLM_BACKEND=claude` and supply a key), and an NVIDIA GPU if you want fast local inference. Tested on RTX 5090 with Qwen3.6-27B (dense).
 
 Smaller GPUs work — try `unsloth/Qwen3-8B-GGUF:Q6_K` or `unsloth/Llama-3.1-8B-Instruct-GGUF:Q5_K_M` and lower `-c` to fit your VRAM.
+
+---
+
+## 🧠 Choosing & running your model
+
+Any llama.cpp-compatible GGUF works. Two ready-to-run launch scripts are included for an RTX 5090 (24–32 GB class); copy either into a file, `chmod +x`, and run it in a separate terminal before `npm start`. The server defaults to `http://localhost:8080`, matching the default `LLAMA_URL`.
+
+### ✅ Qwen (recommended)
+
+Qwen is the recommended backend — it's the most reliable with this app's prompt-based tool-calling protocol and reasoning (`reasoning_content`) handling.
+
+```bash
+#!/bin/bash
+export CUDA_VISIBLE_DEVICES=0            # pin the RTX 5090
+
+./llama.cpp/build/bin/llama-server \
+  -hf unsloth/Qwen3.6-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 \
+  --ctx-size 76000 \
+  --flash-attn on \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --min-p 0.0 \
+  --jinja \
+  --port 8080
+```
+
+### 🔹 Gemma (alternative)
+
+You can run Gemma instead. It works, but Qwen is preferred for tool-heavy workflows.
+
+```bash
+#!/bin/bash
+export CUDA_VISIBLE_DEVICES=0            # pin the RTX 5090
+
+./llama.cpp/build/bin/llama-server \
+  -hf unsloth/gemma-4-31B-it-GGUF:Q4_K_M \
+  --jinja \
+  -ngl 999 \
+  --flash-attn on \
+  -c 65536 \
+  --cache-type-k q8_0 --cache-type-v q8_0 \
+  --temp 1.0 --top-k 64 --top-p 0.95
+```
+
+> ⚠️ **Always pass `--jinja`.** It applies the model's own embedded chat template. Do **not** substitute `--chat-template gemma` — that forces llama.cpp's legacy built-in template, which mismatches newer Gemma models and causes leaked control tokens (e.g. stray `<|channel|>`/`thought` fragments) and occasional language flips in the output. Gemma's quantized V-cache (`--cache-type-v q8_0`) also requires `--flash-attn on`, so keep it explicit rather than relying on `auto`.
+
+Both scripts use each model's recommended sampling settings (Qwen: `top-k 20`, `min-p 0.0`; Gemma: `temp 1.0`, `top-k 64`). Lower `--ctx-size`/`-c` if you run out of VRAM.
 
 ---
 

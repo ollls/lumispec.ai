@@ -122,6 +122,7 @@ router.post('/:id/messages', async (req, res) => {
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
   const precision = !!req.body.precision;
+  const cite = !!req.body.cite;
   const sessionInit = !!req.body.sessionInit;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
@@ -178,7 +179,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
 
   try {
     // Build messages with system prompt for tool support
-    const systemPrompt = getSystemPrompt({ applets, precision });
+    const systemPrompt = getSystemPrompt({ applets, precision, cite });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;
@@ -330,6 +331,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
             const context = {
               autorun,
+              cite,
               confirmFn: (command) => {
                 res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
                 return requestConfirmation(conv.id, command);
@@ -370,6 +372,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         const roundStart = Date.now();
         const context = {
           autorun,
+          cite,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
@@ -417,9 +420,11 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
               }
               llmResult = truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
             }
-            // Strip heavy data from LLM context (keep for frontend via SSE)
-            if (parsed._images || parsed._rateMap || parsed._diff) {
-              const { _images, _rateMap, _diff, ...rest } = parsed;
+            // Strip heavy or UI-only data from LLM context (kept for frontend via SSE).
+            // _citeWarnings is the diff-preview claim highlighter output — purely a UI
+            // affordance for the human approver, not something the LLM should reason about.
+            if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings) {
+              const { _images, _rateMap, _diff, _citeWarnings, ...rest } = parsed;
               if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
               if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
               llmResult = JSON.stringify(rest);
@@ -520,6 +525,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         console.warn(`[tool-loop] forced answer still contains tool call(s): ${lastChanceCalls.map(c => c.name).join(', ')}, executing last chance`);
         const context = {
           autorun,
+          cite,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);
@@ -554,6 +560,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         console.warn(`[safety-net] finalContent contains unparsed tool call(s): ${safetyCalls.map(c => c.name).join(', ')} — executing`);
         const context = {
           autorun,
+          cite,
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
             return requestConfirmation(conv.id, command);

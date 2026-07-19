@@ -3,6 +3,7 @@ import { resolve, relative, dirname } from 'path';
 import { execSync } from 'child_process';
 import config from '../config.js';
 import { collectChatCompletion } from '../services/llm.js';
+import { validateCitations } from './index.js';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -140,12 +141,29 @@ async function readFrontmatterOnly(absPath) {
 
 // ── LLM index entry generation ───────────────────────────
 
-async function indexToWiki(relPath, fullContent) {
+// The strict-mode rules are appended to the indexing system prompt when
+// cite mode is active. They explicitly counter the failure modes that
+// produced the v1.0 TaskMaster hallucination: paraphrase-as-invention,
+// numerical fabrication, and training-data inference about projects the
+// LLM has never read. See docs/KNOWLEDGE_HARDENING.md for the full
+// design discussion.
+const CITE_INDEX_RULES = `
+
+STRICT MODE (Cite mode is on for this indexing run):
+- Do NOT invent details. If the source document is vague, your summary must also be vague — do not crystallize ambiguity into specifics.
+- Numerical claims (constants, percentages, byte counts, line counts, durations, limits) must appear in the source verbatim. Do not paraphrase or round numbers.
+- Do NOT draw on general LLM/AI literature, training-data knowledge, or analogies to other projects. The only source of truth is the document I am providing. If the document does not mention X, X does not exist in this project.
+- If the document refers to a file path, function name, or symbol that you would normally explain from training data, do NOT explain it. Just preserve the reference.
+- Tags must use terminology that appears in the source document. Do not invent project-specific jargon.
+- If the document has no real architectural content, return a stub entry with minimal tags and an empty key topics list. Do NOT invent topics to fill space.
+- Key topics must be derivable from the document's own headings or explicit content. Do not synthesize topics that require external knowledge.`;
+
+async function indexToWiki(relPath, fullContent, { cite = false } = {}) {
   const MAX_INPUT = 24000;
   const truncated = fullContent.length > MAX_INPUT;
   const body = truncated ? fullContent.slice(0, MAX_INPUT) + '\n\n[... truncated ...]' : fullContent;
 
-  const system = `You produce compact wiki INDEX entries for markdown documents.
+  const baseSystem = `You produce compact wiki INDEX entries for markdown documents.
 Output EXACTLY this format and nothing else — no preamble, no code fences around the whole thing:
 
 ---
@@ -172,7 +190,9 @@ Rules:
 - 3-6 "answers" entries phrased as natural questions a user might ask
 - 3-8 key topics, each with a brief note
 - Do NOT reproduce large code blocks, tables, or the full content — this is an INDEX, not a copy
-- If the document is trivial (< 200 chars) or has no real content, still produce a valid entry but mark tags with "stub"`;
+- If the document is trivial (< 200 chars) or has no real content, return a stub entry with empty key topics. Do NOT invent topics to fill space.`;
+
+  const system = cite ? baseSystem + CITE_INDEX_RULES : baseSystem;
 
   const user = `Document path: ${relPath}
 Length: ${fullContent.length} chars${truncated ? ' (truncated for summarization)' : ''}
@@ -184,7 +204,7 @@ ${body}
   const { content } = await collectChatCompletion([
     { role: 'system', content: system },
     { role: 'user', content: user },
-  ], { signal: AbortSignal.timeout(90000), maxTokens: 1200, temperature: 0.2 });
+  ], { signal: AbortSignal.timeout(90000), maxTokens: 1200, temperature: cite ? 0.1 : 0.2 });
 
   return (content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
@@ -379,6 +399,7 @@ Build pattern (WRITE) — the human MUST always know whether work remains:
         const roots = getRoots();
         if (!roots) return { error: 'SOURCE_DIR not configured' };
         const { sourceRoot, wikiRoot } = roots;
+        const cite = !!context?.cite;
 
         // Defensive: refuse paths that would collide with reserved wiki prefixes
         const firstSeg = relPath.split(/[/\\]/)[0];
@@ -411,12 +432,12 @@ Build pattern (WRITE) — the human MUST always know whether work remains:
         }
 
         if (context?.sendSSE) {
-          context.sendSSE('tool_status', { message: `Indexing ${relPath}...` });
+          context.sendSSE('tool_status', { message: `Indexing ${relPath}${cite ? ' (cite mode)' : ''}...` });
         }
 
         let summary;
         try {
-          summary = await indexToWiki(relPath, content);
+          summary = await indexToWiki(relPath, content, { cite });
         } catch (err) {
           return { error: `LLM summarization failed: ${err.message}` };
         }
@@ -429,10 +450,32 @@ Build pattern (WRITE) — the human MUST always know whether work remains:
         // This makes LLM correctness on these fields belt-and-suspenders.
         const sourceUri = `file:${relPath}`;
         const lastUpdatedIso = new Date(sourceStat.mtimeMs).toISOString();
-        const patched = enforceFrontmatterFields(summary, {
+        let patched = enforceFrontmatterFields(summary, {
           source: sourceUri,
           last_updated: lastUpdatedIso,
         });
+
+        // Cite mode: validate any (file:line) citations in the produced
+        // entry against the filesystem before writing. Broken citations
+        // (path doesn't exist, or line number outside the file) are a
+        // hard signal of fabrication — refuse the write entirely.
+        if (cite) {
+          const broken = await validateCitations(patched, sourceRoot);
+          if (broken.length > 0) {
+            return {
+              error: `Cite mode: refused to write wiki entry — ${broken.length} broken citation(s) detected. The LLM produced citations that don't resolve on disk. Either fix the source document, run wiki_index without cite mode, or rebuild after the cited code lands.`,
+              brokenCitations: broken,
+              path: relPath,
+              wikiPath: relative(sourceRoot, absWiki),
+            };
+          }
+          // Stamp cite_mode into the frontmatter so future readers know
+          // this entry was produced under strict mode.
+          patched = patched.replace(
+            /^---\nsource: /,
+            '---\ncite_mode: true\nsource: '
+          );
+        }
 
         try {
           await mkdir(dirname(absWiki), { recursive: true });
@@ -449,8 +492,9 @@ Build pattern (WRITE) — the human MUST always know whether work remains:
           sourceSize: content.length,
           wikiSize: patched.length,
           last_updated: lastUpdatedIso,
+          cite_mode: cite || undefined,
           ratio: `${((patched.length / Math.max(content.length, 1)) * 100).toFixed(1)}%`,
-          _markdown: `**Indexed** \`${relPath}\` → \`${relative(sourceRoot, absWiki)}\` (${content.length} → ${patched.length} chars)\n\n\`\`\`markdown\n${patched}\n\`\`\``,
+          _markdown: `**Indexed** \`${relPath}\` → \`${relative(sourceRoot, absWiki)}\`${cite ? ' (cite mode)' : ''} (${content.length} → ${patched.length} chars)\n\n\`\`\`markdown\n${patched}\n\`\`\``,
         };
       },
     },

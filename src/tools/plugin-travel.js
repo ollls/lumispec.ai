@@ -64,6 +64,7 @@ export default {
 - Rate references (rate_0, rate_1, etc.) map to actual offerIds internally — just pass the reference string to the booking prebook action. prebookId is auto-cached from the last prebook.
 - Rate IDs are ephemeral — prebook promptly after getting rates, do not delay.
 - occupancies format example: [{"adults": 2}] or [{"adults": 2, "children": [5, 8]}]
+- For hotel search by name, ALWAYS include countryCode (e.g. "US", "IT", "TH") — hotelName and cityName silently return empty without it.
 - For hotel search, prefer aiSearch for natural language queries (e.g. "beachfront resort in Bali").
 - When searching rates for a SPECIFIC hotel, use hotelIds (e.g. ["lp29df3"]) — NOT countryCode+cityName, which returns all hotels in the city and is much slower.
 - Booking errors: "fraud check" (code 2013) in sandbox mode is usually rate limiting — too many book calls in quick succession. Wait a moment and retry. In production mode, fraud rejections are real and should be reported to the user. "invalid offerId" or "no prebook availability" means the rate expired — search rates again. "invalid prebookId" means the prebook expired — prebook again with a fresh rate.`,
@@ -71,7 +72,7 @@ export default {
     hotel: {
       description: 'Hotel search, details, rates, and reviews via LiteAPI. Requires "action" argument.\n\n'
         + 'Actions:\n'
-        + '- "search": find hotels. Params: countryCode, cityName, hotelName, aiSearch (natural language), latitude/longitude/radius, placeId, limit (default 5), offset, minRating, starRating, minReviewsCount\n'
+        + '- "search": find hotels. Params: countryCode (REQUIRED for hotelName/cityName searches), cityName, hotelName (needs countryCode to work), aiSearch (natural language), latitude/longitude/radius, placeId, limit (default 5), offset, minRating, starRating, minReviewsCount\n'
         + '- "details": full hotel info with photos, amenities, rooms, policies. Requires hotelId\n'
         + '- "rates": real-time pricing & availability. Requires checkin (YYYY-MM-DD), checkout (YYYY-MM-DD), occupancies (e.g. [{"adults":2}] or [{"adults":2,"children":[5,8]}]), guestNationality (2-letter code, default "US"), currency (default "USD"). Location via: hotelIds (array), or countryCode+cityName, or latitude+longitude+radius\n'
         + '- "reviews": guest reviews for a hotel. Requires hotelId\n'

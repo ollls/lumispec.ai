@@ -13,21 +13,22 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
 
 ## LLM Server Configuration
-Running Qwen3.5-35B-A3B (MoE, 3B active params) on RTX 5090:
+Running Qwen3.6-27B (dense) on RTX 5090 (recommended backend; Gemma also supported — see README "Choosing & running your model"):
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
-  --jinja \
-  -ngl 99 \
-  --ctx-size 65536 \
-  -fa auto \
-  --temp 0.7 \
+  -hf unsloth/Qwen3.6-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 \
+  --ctx-size 76000 \
+  --flash-attn on \
+  --temp 1.0 \
   --top-p 0.95 \
-  --min-p 0.01 \
-  --top-k 40
+  --top-k 20 \
+  --min-p 0.0 \
+  --jinja \
+  --port 8080
 ```
 
 ## Project Structure

@@ -2,7 +2,35 @@ import { mkdir, writeFile, readFile, stat, unlink } from 'fs/promises';
 import { join, resolve, basename } from 'path';
 import config from '../config.js';
 import { listTemplates, getTemplateByName } from '../services/templates.js';
-import { fixPythonBooleans, tagLineCount } from './index.js';
+import { fixPythonBooleans, tagLineCount, extractAddedLines, detectUncitedClaims, validateCitations } from './index.js';
+
+// Cite mode helper — runs the diff-preview claim highlighter on a markdown
+// file write/edit. Combines two checks:
+//   1. Pattern-based: scans the diff's added lines for claim-shaped sentences
+//      that have no nearby (file:line) citation
+//   2. Reference-based: scans the entire new content for cited paths and
+//      verifies each one resolves on disk
+// Returns a flat list of warning objects, or null if nothing to flag.
+// Soft-only — never refuses the write, just decorates the result.
+async function runCiteCheck(diff, newContent, filePath, sourceRoot) {
+  if (!filePath || !/\.(md|markdown)$/i.test(filePath)) return null;
+  const warnings = [];
+  if (diff) {
+    const added = extractAddedLines(diff);
+    warnings.push(...detectUncitedClaims(added));
+  }
+  if (newContent && sourceRoot) {
+    const broken = await validateCitations(newContent, sourceRoot);
+    for (const b of broken) {
+      warnings.push({
+        line: null,
+        snippet: b.citation,
+        reason: `broken citation — ${b.reason}`,
+      });
+    }
+  }
+  return warnings.length ? warnings : null;
+}
 
 // Original SOURCE_DIR from .env — used by source_project to reset
 const originalSourceDir = config.sourceDir;
@@ -304,7 +332,12 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
           await mkdirFn(dirname(full), { recursive: true });
           await fsWriteFile(full, content, 'utf-8');
           const lines = content.split('\n').length;
-          return { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8'), _diff: diff };
+          const result = { path: filePath, lines, size: Buffer.byteLength(content, 'utf-8'), _diff: diff };
+          if (context.cite) {
+            const warnings = await runCiteCheck(diff, content, filePath, sourceRoot);
+            if (warnings) result._citeWarnings = warnings;
+          }
+          return result;
         } catch (err) {
           return { error: err.message };
         }
@@ -444,6 +477,10 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
           const newLineCount = newStr.split('\n').length;
           const result = { path: filePath, linesRemoved: oldLineCount, linesAdded: newLineCount, size: Buffer.byteLength(newContent, 'utf-8'), _diff: diff };
           if (whitespaceAdjusted) result.whitespaceAdjusted = true;
+          if (context.cite) {
+            const warnings = await runCiteCheck(diff, newContent, filePath, sourceRoot);
+            if (warnings) result._citeWarnings = warnings;
+          }
           return result;
         });
       },
