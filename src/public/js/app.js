@@ -17,7 +17,12 @@ const state = {
   reviewEnabled: localStorage.getItem('reviewEnabled') === 'true', // pause after each task step
   precisionEnabled: localStorage.getItem('precisionEnabled') === 'true', // strict computation mode
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
+  sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
+  sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
 };
+
+// Session colors in top-bar button order — drives the sidebar filter strip
+const SESSION_ORDER = ['blue', 'cyan', 'amber', 'coral', 'sgreen', 'navy', 'lavender', 'purple', 'hotpink', 'sky'];
 
 // Render Cite-mode warnings as a small amber-tinted block above the diff
 // preview. Each warning is a one-liner with line number, snippet, and reason.
@@ -98,6 +103,7 @@ function requireSession() {
 
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
+const convFilter = document.getElementById('conv-filter');
 const newChatButtons = document.querySelectorAll('.session-btn');
 const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
@@ -345,9 +351,111 @@ async function refreshSidebar() {
   renderSidebar();
 }
 
+function sessionColorValue(type) {
+  return getComputedStyle(document.documentElement).getPropertyValue(`--btn-${type}`).trim();
+}
+
+function setSidebarFilter(value) {
+  state.sidebarFilter = value;
+  localStorage.setItem('sidebarFilter', value);
+  renderSidebar();
+}
+
+// Tab-like chip strip above the conversation list. Only colors that actually
+// have conversations get a chip, so the strip stays one row wide even though
+// ten session colors exist. Hidden entirely when there's nothing to filter.
+function renderConvFilter(counts) {
+  const colors = SESSION_ORDER.filter(c => counts[c]);
+  if (colors.length < 2) {
+    convFilter.style.display = 'none';
+    convFilter.innerHTML = '';
+    return;
+  }
+  convFilter.style.display = 'flex';
+  convFilter.innerHTML = '';
+
+  const total = state.conversations.length;
+  const chips = [];
+
+  const makeChip = (value, active) => {
+    const chip = document.createElement('button');
+    chip.className = 'filter-chip' + (active ? ' filter-chip-active' : '');
+    chip.setAttribute('role', 'tab');
+    chip.setAttribute('aria-selected', active ? 'true' : 'false');
+    chip.tabIndex = active ? 0 : -1;
+    chip.dataset.filter = value;
+    // Clicking the active chip clears back to All — tab feel, one-click escape
+    chip.addEventListener('click', () => {
+      setSidebarFilter(active && value !== 'all' ? 'all' : value);
+    });
+    chips.push(chip);
+    convFilter.appendChild(chip);
+    return chip;
+  };
+
+  const allChip = makeChip('all', state.sidebarFilter === 'all');
+  allChip.innerHTML = `<span>All</span><span class="text-zinc-500">${total}</span>`;
+  allChip.dataset.tip = 'All conversations';
+
+  for (const color of colors) {
+    const active = state.sidebarFilter === color;
+    const chip = makeChip(color, active);
+    const c = sessionColorValue(color);
+    const swatch = document.createElement('span');
+    swatch.className = 'filter-swatch';
+    swatch.style.backgroundColor = c;
+    const count = document.createElement('span');
+    count.textContent = counts[color];
+    count.style.color = active ? textSafeColor(c) : '';
+    chip.appendChild(swatch);
+    chip.appendChild(count);
+    if (active) chip.style.borderBottomColor = c;
+    chip.dataset.tip = state.sessionTitles[color] || `${color} sessions`;
+  }
+
+  // Arrow-key navigation across the tablist
+  convFilter.onkeydown = (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const idx = chips.findIndex(c => c === document.activeElement);
+    const next = chips[(idx + (e.key === 'ArrowRight' ? 1 : -1) + chips.length) % chips.length];
+    if (next) setSidebarFilter(next.dataset.filter);
+  };
+}
+
 function renderSidebar() {
-  sidebar.innerHTML = '';
+  // Count per color first — the filter strip needs totals, and a filter whose
+  // last conversation was just deleted has to fall back to All.
+  const counts = {};
   for (const conv of state.conversations) {
+    const c = state.sessionColors[conv.id];
+    if (c) counts[c] = (counts[c] || 0) + 1;
+  }
+  if (state.sidebarFilter !== 'all' && !counts[state.sidebarFilter]) {
+    state.sidebarFilter = 'all';
+    localStorage.setItem('sidebarFilter', 'all');
+  }
+  renderConvFilter(counts);
+
+  const visible = state.sidebarFilter === 'all'
+    ? state.conversations
+    : state.conversations.filter(c => state.sessionColors[c.id] === state.sidebarFilter);
+
+  sidebar.innerHTML = '';
+  if (!visible.length && state.sidebarFilter !== 'all') {
+    const empty = document.createElement('div');
+    empty.className = 'px-3 py-4 text-xs text-zinc-500';
+    empty.textContent = `No ${state.sidebarFilter} conversations. `;
+    const clear = document.createElement('button');
+    clear.className = 'text-indigo-400 hover:underline cursor-pointer';
+    clear.textContent = 'Show all';
+    clear.addEventListener('click', () => setSidebarFilter('all'));
+    empty.appendChild(clear);
+    sidebar.appendChild(empty);
+    return;
+  }
+
+  for (const conv of visible) {
     const item = document.createElement('div');
     const isActive = conv.id === state.currentConversationId;
     item.className = `group flex items-center gap-2 py-3 cursor-pointer border-b border-zinc-800/50 transition-colors ${
@@ -2165,6 +2273,11 @@ function applySessionColor(type) {
   if (state.currentConversationId && type) {
     state.sessionColors[state.currentConversationId] = type;
     localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
+    // Don't let a new chat vanish behind an unrelated color filter
+    if (state.sidebarFilter !== 'all' && state.sidebarFilter !== type) {
+      state.sidebarFilter = type;
+      localStorage.setItem('sidebarFilter', type);
+    }
   }
   const color = type ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${type}`).trim() : '';
   input.style.borderColor = color || '';
@@ -2811,15 +2924,20 @@ async function refreshSessions() {
     const sessions = await (await fetch('/api/sessions')).json();
     renderSessions(sessions);
     // Update session button tooltips
+    state.sessionTitles = {};
+    for (const s of sessions) {
+      if (s.color) state.sessionTitles[s.color] = s.title || s.text.slice(0, 60);
+    }
     for (const btn of newChatButtons) {
       const color = btn.dataset.session;
-      const match = sessions.find(s => s.color === color);
-      if (match) {
-        btn.dataset.tip = match.title || match.text.slice(0, 60);
+      const tip = state.sessionTitles[color];
+      if (tip) {
+        btn.dataset.tip = tip;
       } else {
         delete btn.dataset.tip;
       }
     }
+    renderSidebar(); // refresh filter chip tooltips
   } catch {}
 }
 

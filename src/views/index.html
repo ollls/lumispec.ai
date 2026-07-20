@@ -28,7 +28,8 @@
     }
     .session-btn:hover { filter: brightness(1.2); }
     .session-btn { position: relative; }
-    .session-btn[data-tip]:hover::after {
+    .session-btn[data-tip]:hover::after,
+    .filter-chip[data-tip]:hover::after {
       content: attr(data-tip);
       position: absolute;
       top: calc(100% + 6px);
@@ -44,6 +45,27 @@
       z-index: 100;
       border: 1px solid #3f3f46;
     }
+
+    /* Sidebar color filter — tab-like chips, one active at a time */
+    .filter-chip {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px 3px;
+      border-radius: 4px 4px 0 0;
+      border-bottom: 2px solid transparent;
+      font-size: 10px;
+      line-height: 1;
+      color: #71717a;
+      opacity: 0.45;
+      cursor: pointer;
+      transition: opacity 0.12s, background 0.12s;
+    }
+    .filter-chip:hover { opacity: 1; background: #18181b; }
+    .filter-chip:focus-visible { outline: 1px solid #6366f1; outline-offset: -1px; }
+    .filter-chip-active { opacity: 1; background: #18181b; color: #d4d4d8; }
+    .filter-swatch { width: 10px; height: 10px; border-radius: 2px; display: block; }
 
     /* Flatpickr zinc/indigo overrides */
     .flatpickr-calendar { background: #1c1c22 !important; border-color: #3f3f46 !important; font-size: 13px; }
@@ -189,6 +211,9 @@
   <div class="flex flex-1 overflow-hidden">
     <!-- Sidebar -->
     <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
+      <div id="conv-filter" role="tablist" aria-label="Filter conversations by session color"
+        style="display:none"
+        class="items-center gap-0.5 px-2 pt-1.5 border-b border-zinc-800 shrink-0 flex-wrap"></div>
       <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
       </div>
     </aside>
