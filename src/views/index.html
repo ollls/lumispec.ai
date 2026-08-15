@@ -26,7 +26,9 @@
       --btn-hotpink: #EC4899; /* hot pink */
       --btn-sky: #06B6D4;     /* sky cyan */
     }
-    .session-btn:hover { filter: brightness(1.2); }
+    /* filter: on hover creates a stacking context, trapping the tooltip's z-index
+       inside the button — z-index here lifts that context above the sidebar below. */
+    .session-btn:hover { filter: brightness(1.2); z-index: 60; }
     .session-btn { position: relative; }
     .session-btn[data-tip]:hover::after,
     .filter-chip[data-tip]:hover::after {
@@ -44,6 +46,13 @@
       pointer-events: none;
       z-index: 100;
       border: 1px solid #3f3f46;
+    }
+    /* Filter chips sit at the sidebar's left edge — a centred tooltip overhangs
+       past x=0 and gets clipped by the overflow-hidden content wrapper. Anchor
+       left instead so it always opens into the sidebar. */
+    .filter-chip[data-tip]:hover::after {
+      left: 0;
+      transform: none;
     }
 
     /* Sidebar color filter — tab-like chips, one active at a time */

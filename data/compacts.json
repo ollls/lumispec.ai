@@ -5,5 +5,12 @@
     "title": "coding/work session",
     "text": "You are summarizing a coding/work session. Create a compact summary that preserves:\n  - What was accomplished (files created, modified, deleted)\n  - Key decisions and why they were made\n  - What worked and what failed (so mistakes aren't repeated)\n  - Current state of the project\n  - Any unfinished tasks or next steps\n\n  Format as a brief structured summary with sections. Be concise — this replaces the full conversation. Drop all\n  back-and-forth, debugging noise, and intermediate tool outputs. Focus on outcomes and lessons.",
     "updatedAt": "2026-03-25T16:54:01.326Z"
+  },
+  {
+    "id": "d5e2c880-313c-4230-adc9-dff916be700a",
+    "color": "lavender",
+    "title": "Text Condensation Instructions",
+    "text": "Condense to 1–2 sentences. Keep only the core point and critical details (numbers, names, deadlines). Drop everything else.",
+    "updatedAt": "2026-07-28T21:12:13.608Z"
   }
 ]

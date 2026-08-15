@@ -882,14 +882,15 @@ function renderMessages(messages) {
   }
 }
 
-async function regenerateFrom(wrapper) {
+async function regenerateFrom(wrapper, overrideText) {
   const msgIndex = parseInt(wrapper.dataset.msgIndex, 10);
   if (isNaN(msgIndex)) return;
   const convId = state.currentConversationId;
   const conv = await api.getConversation(convId);
   const msg = conv.messages[msgIndex];
   if (!msg || msg.role !== 'user') return;
-  const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
+  const stored = typeof msg.content === 'object' ? msg.content.text : msg.content;
+  const text = overrideText !== undefined ? overrideText : stored;
   const images = typeof msg.content === 'object' ? msg.content.images : undefined;
   // Truncate backend messages from this point
   await fetch(`/api/conversations/${convId}/messages`, {
@@ -912,6 +913,59 @@ async function regenerateFrom(wrapper) {
   renderMessages(updated.messages);
 }
 
+// Turn a user bubble into an inline editor; Enter regenerates with the edited text
+function startBubbleEdit(wrapper, bubble, btnRow) {
+  if (bubble.dataset.editing) return;
+  const textNode = [...bubble.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+  if (!textNode) return;
+  bubble.dataset.editing = '1';
+  btnRow.classList.add('hidden');
+  const prevWidth = bubble.style.width;
+  bubble.style.width = '100%'; // max-w-[85%] still caps it — just gives room to type
+
+  const ta = document.createElement('textarea');
+  ta.className = 'w-full bg-zinc-900/60 border border-indigo-500/40 rounded-lg px-2 py-1 text-sm text-zinc-100 leading-relaxed outline-none resize-none slim-scrollbar';
+  ta.value = textNode.textContent;
+
+  const hint = document.createElement('div');
+  hint.className = 'mt-1 text-[10px] text-zinc-500 select-none';
+  hint.textContent = 'Enter to regenerate · Shift+Enter newline · Esc cancel';
+
+  const autosize = () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 400) + 'px';
+  };
+
+  const cancel = () => {
+    ta.replaceWith(textNode);
+    hint.remove();
+    bubble.style.width = prevWidth;
+    delete bubble.dataset.editing;
+    btnRow.classList.remove('hidden');
+  };
+
+  ta.addEventListener('input', autosize);
+  ta.addEventListener('click', (e) => e.stopPropagation());
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const value = ta.value.trim();
+      if (!value) return;
+      hint.remove();
+      regenerateFrom(wrapper, value);
+    }
+  });
+
+  textNode.replaceWith(ta);
+  ta.insertAdjacentElement('afterend', hint);
+  autosize();
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
 function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
@@ -927,17 +981,33 @@ function appendMessage(role, text, images, meta = {}) {
     bubble.className = 'max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
-  // Regenerate button on user bubbles
+  // Edit + regenerate buttons on user bubbles
   if (role === 'user' && meta.msgIndex !== undefined) {
+    const btnRow = document.createElement('div');
+    btnRow.className = 'absolute top-1 right-1.5 flex gap-0.5';
+    const btnClass = 'opacity-0 group-hover:opacity-50 hover:!opacity-100 text-zinc-300 hover:text-indigo-300 transition-opacity text-xs leading-none p-1';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = btnClass;
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit & regenerate — Enter to send, Esc to cancel';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startBubbleEdit(wrapper, bubble, btnRow);
+    });
+
     const regenBtn = document.createElement('button');
-    regenBtn.className = 'absolute top-1 right-1.5 opacity-0 group-hover:opacity-50 hover:!opacity-100 text-zinc-300 hover:text-indigo-300 transition-opacity text-xs leading-none p-1';
+    regenBtn.className = btnClass;
     regenBtn.textContent = '↻';
     regenBtn.title = 'Regenerate from here';
     regenBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       regenerateFrom(wrapper);
     });
-    bubble.appendChild(regenBtn);
+
+    btnRow.appendChild(editBtn);
+    btnRow.appendChild(regenBtn);
+    bubble.appendChild(btnRow);
   }
 
   // Render images in user bubbles
