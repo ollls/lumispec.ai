@@ -419,7 +419,7 @@ export async function listPluginGroups() {
         delete entry.config.enabled; // enabled is already top-level
         // For web plugin, include available engines info
         if (group === 'web') {
-          entry.config.modes = ['regular', 'stealth', 'browser'];
+          entry.config.modes = ['auto', 'regular', 'stealth', 'browser'];
           entry.config.availableEngines = [
             { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
             { id: 'keiro', label: 'Keiro', available: !!config.keiro.apiKey },

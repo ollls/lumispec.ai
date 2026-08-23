@@ -3407,9 +3407,7 @@ function renderPluginConfig(plugins) {
       }
       modeSelect.addEventListener('change', async () => {
         const newMode = modeSelect.value;
-        let engines = [...(p.config.engines || [])];
-        // Auto-remove DDG if switching to regular
-        if (newMode === 'regular') engines = engines.filter(e => e !== 'duckduckgo');
+        const engines = [...(p.config.engines || [])];
         await fetch(`/api/plugins/${p.group}/toggle`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3436,25 +3434,14 @@ function renderPluginConfig(plugins) {
         if (!eng.available && eng.id !== 'duckduckgo') continue; // Hide unavailable API engines
         const wrapper = document.createElement('label');
         wrapper.className = 'flex items-center gap-1.5 cursor-pointer';
-        const isDDGDisabled = eng.id === 'duckduckgo' && p.config.mode === 'regular';
-
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = (p.config.engines || []).includes(eng.id);
-        cb.disabled = isDDGDisabled;
-        Object.assign(cb.style, { accentColor: '#6366f1', cursor: isDDGDisabled ? 'not-allowed' : 'pointer' });
+        Object.assign(cb.style, { accentColor: '#6366f1', cursor: 'pointer' });
 
         const lbl = document.createElement('span');
-        Object.assign(lbl.style, {
-          fontSize: '12px',
-          color: isDDGDisabled ? '#52525b' : '#d4d4d8',
-        });
+        Object.assign(lbl.style, { fontSize: '12px', color: '#d4d4d8' });
         lbl.textContent = eng.label;
-
-        if (isDDGDisabled) {
-          wrapper.style.opacity = '0.5';
-          wrapper.style.cursor = 'not-allowed';
-        }
 
         cb.addEventListener('change', async () => {
           const engines = [];

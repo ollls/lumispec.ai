@@ -463,8 +463,8 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             // Strip heavy or UI-only data from LLM context (kept for frontend via SSE).
             // _citeWarnings is the diff-preview claim highlighter output — purely a UI
             // affordance for the human approver, not something the LLM should reason about.
-            if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings) {
-              const { _images, _rateMap, _diff, _citeWarnings, ...rest } = parsed;
+            if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings || parsed._tier) {
+              const { _images, _rateMap, _diff, _citeWarnings, _tier, ...rest } = parsed;
               if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
               if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
               llmResult = JSON.stringify(rest);
