@@ -529,22 +529,26 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             }
           }
         }
-        // Detect bare JSON or truncated tool calls and retry the round
-        // Skip this check if content contains applet blocks (HTML/JS may have {"name": patterns)
+        // Detect unparseable tool calls and retry the round. Two distinct defects, two messages:
+        // the tag is missing (bare-json), or the tag is there but its JSON is broken/truncated
+        // (malformed-tag). The tag test gates both, so they are disjoint — without it bare-json
+        // matched first and told the model "not wrapped" about calls that were wrapped.
+        // Skip both if content contains applet blocks (HTML/JS may have {"name": patterns)
         const hasApplet = /<applet[\s>]/i.test(result.content);
-        if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
-          console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
+        const hasToolCallTag = /<tool_call/i.test(result.content);
+        if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
+          console.warn(`[tool-loop] response contains bare JSON tool call with no <tool_call> tag. Content (last 200 chars): ...${result.content.slice(-200)}`);
           logRoute('repair', 'bare-json');
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
-        if (!hasApplet && /<tool_call/i.test(result.content)) {
+        if (!hasApplet && hasToolCallTag) {
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
           logRoute('repair', 'malformed-tag');
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed and could not be parsed. Please retry the tool call with valid JSON: {"name": "tool_name", "arguments": {...}}' });
+          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         logRoute('end');

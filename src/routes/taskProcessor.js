@@ -486,18 +486,20 @@ CRITICAL RULES:
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + `\n\nRounds left: ${roundsLeft}. REMINDER: tool calls MUST use <tool_call></tool_call> tags.` });
 
       } else {
-        // No tool calls — check for malformed calls
+        // No tool calls — check for unparseable ones. Mirrors conversations.js: the tag test gates
+        // both branches so they stay disjoint, and each defect gets the message that fits it.
         const hasApplet = /<applet[\s>]/i.test(result.content);
-        if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
+        const hasToolCallTag = /<tool_call/i.test(result.content);
+        if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
           logRoute('repair', 'bare-json');
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
-        if (!hasApplet && /<tool_call/i.test(result.content)) {
+        if (!hasApplet && hasToolCallTag) {
           logRoute('repair', 'malformed-tag');
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed and could not be parsed. Please retry with valid JSON.' });
+          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         logRoute('end');
