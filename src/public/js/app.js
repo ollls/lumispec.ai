@@ -1693,21 +1693,24 @@ async function sendTasks(tasks, displayText) {
               const subHeader = document.createElement('div');
               subHeader.className = 'text-xs text-zinc-400 ml-3 mt-2 mb-1';
               subHeader.textContent = `  Subtask ${subtaskIndex + 1}/${total}: ${text}`;
-              currentSection.section.insertBefore(subHeader, currentSection.contentSpan);
+              // Append, don't splice. Inserting before the previous contentSpan stacked each
+              // new subtask above the last, so headers clustered and outputs came out reversed.
+              // Appending keeps the run chronological: the active subtask is always at the bottom.
+              currentSection.section.appendChild(subHeader);
               // Reset per-subtask accumulators
               currentSection.accumulated = '';
               currentSection.accumulatedReasoning = '';
               // Create fresh content span for this subtask
               const newContentSpan = document.createElement('span');
               newContentSpan.className = 'ml-3 block max-h-60 overflow-y-auto slim-scrollbar';
-              currentSection.section.insertBefore(newContentSpan, currentSection.contentSpan);
+              currentSection.section.appendChild(newContentSpan);
               currentSection.contentSpan = newContentSpan;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
 
             if (data.subtask_complete) {
               // Finalize subtask content rendering, then fold it away
-              if (currentSection && currentSection.accumulated) {
+              if (currentSection && currentSection.accumulated && currentSection.contentSpan.tagName !== 'DETAILS') {
                 renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
                 const fold = foldStepOutput(currentSection.section, currentSection.contentSpan);
                 if (fold) {
@@ -1720,8 +1723,11 @@ async function sendTasks(tasks, displayText) {
             }
 
             if (data.task_complete) {
-              // Finalize task content rendering, then fold it away
-              if (currentSection && currentSection.accumulated) {
+              // Finalize task content rendering, then fold it away.
+              // For a task with subtasks this fires right after the last subtask_complete, when
+              // contentSpan is already that subtask's <details> — rendering into it would wipe
+              // the fold, and its content is already final. Skip.
+              if (currentSection && currentSection.accumulated && currentSection.contentSpan.tagName !== 'DETAILS') {
                 renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
                 const fold = foldStepOutput(currentSection.section, currentSection.contentSpan);
                 if (fold) {
