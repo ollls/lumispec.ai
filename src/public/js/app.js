@@ -833,6 +833,25 @@ let _renderTimer = null;
 let _lastRenderTime = 0;
 const RENDER_INTERVAL = 80;
 
+// Fold a completed step's output into a collapsed <details>, in place.
+// Pipeline steps each emit a full formatted answer; left expanded they stack into an
+// unreadable wall and bury the final result. Folding on completion keeps the task
+// checklist legible — the content is still in the DOM, one click away.
+// Returns the <details> so the caller can re-open the last step (that one IS the answer).
+function foldStepOutput(parent, span, label = 'Output') {
+  if (!span || span.tagName === 'DETAILS' || !span.textContent.trim()) return null;
+  span.classList.remove('max-h-60', 'overflow-y-auto', 'slim-scrollbar');
+  const details = document.createElement('details');
+  details.className = 'mb-2 text-xs';
+  const summary = document.createElement('summary');
+  summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400' + (span.classList.contains('ml-3') ? ' ml-3' : '');
+  summary.textContent = label;
+  details.appendChild(summary);
+  parent.insertBefore(details, span);
+  details.appendChild(span);
+  return details;
+}
+
 function scheduleRender(text, container) {
   const now = Date.now();
   if (now - _lastRenderTime >= RENDER_INTERVAL) {
@@ -1132,6 +1151,7 @@ function appendMessage(role, text, images, meta = {}) {
 
   // Render stored task run with per-step reasoning + tool uses
   if (role === 'assistant' && meta.taskRun && meta.taskRun.length > 0) {
+    const outputFolds = []; // every step's folded output; the last one is re-opened below
     for (let ti = 0; ti < meta.taskRun.length; ti++) {
       const tr = meta.taskRun[ti];
       const taskHeader = document.createElement('div');
@@ -1173,11 +1193,13 @@ function appendMessage(role, text, images, meta = {}) {
           }
           bubble.appendChild(container);
         }
-        // Content
+        // Content (collapsed — see foldStepOutput; the final step is re-opened after the loop)
         if (step.result) {
           const contentSpan = document.createElement('span');
           bubble.appendChild(contentSpan);
           renderFormattedContent(step.result, contentSpan, { renderMermaid: true });
+          const fold = foldStepOutput(bubble, contentSpan);
+          if (fold) outputFolds.push(fold);
         }
       };
 
@@ -1206,6 +1228,8 @@ function appendMessage(role, text, images, meta = {}) {
         }
       }
     }
+    // The final step's output is the answer — the rest stay folded
+    if (outputFolds.length > 0) outputFolds[outputFolds.length - 1].open = true;
   } else if (role === 'assistant' && text) {
     const contentSpan = document.createElement('span');
     bubble.appendChild(contentSpan);
@@ -1595,6 +1619,7 @@ async function sendTasks(tasks, displayText) {
   bubble.textContent = '';
   const taskSections = new Map(); // index → { header, toolContainer, contentSpan }
   let currentSection = null;
+  let lastOutputFold = null; // most recently folded step — re-opened at the end, it is the answer
 
   state.abortController = new AbortController();
   _lastRenderTime = 0;
@@ -1652,6 +1677,9 @@ async function sendTasks(tasks, displayText) {
               section.appendChild(toolContainer);
 
               const contentSpan = document.createElement('span');
+              // Capped while live — a verbose step scrolls inside its own box instead of
+              // shoving the rest of the transcript off screen.
+              contentSpan.className = 'block max-h-60 overflow-y-auto slim-scrollbar';
               section.appendChild(contentSpan);
 
               bubble.appendChild(section);
@@ -1671,23 +1699,35 @@ async function sendTasks(tasks, displayText) {
               currentSection.accumulatedReasoning = '';
               // Create fresh content span for this subtask
               const newContentSpan = document.createElement('span');
-              newContentSpan.className = 'ml-3 block';
+              newContentSpan.className = 'ml-3 block max-h-60 overflow-y-auto slim-scrollbar';
               currentSection.section.insertBefore(newContentSpan, currentSection.contentSpan);
               currentSection.contentSpan = newContentSpan;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
 
             if (data.subtask_complete) {
-              // Finalize subtask content rendering
+              // Finalize subtask content rendering, then fold it away
               if (currentSection && currentSection.accumulated) {
                 renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
+                const fold = foldStepOutput(currentSection.section, currentSection.contentSpan);
+                if (fold) {
+                  lastOutputFold = fold;
+                  // The span now lives inside the <details>; subtask_start inserts the next
+                  // subtask relative to this node, so it must stay a child of section.
+                  currentSection.contentSpan = fold;
+                }
               }
             }
 
             if (data.task_complete) {
-              // Finalize task content rendering
+              // Finalize task content rendering, then fold it away
               if (currentSection && currentSection.accumulated) {
                 renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
+                const fold = foldStepOutput(currentSection.section, currentSection.contentSpan);
+                if (fold) {
+                  lastOutputFold = fold;
+                  currentSection.contentSpan = fold;
+                }
               }
               if (currentSection?.hasReasoning && currentSection.reasoningDetails) {
                 currentSection.reasoningDetails.querySelector('summary').textContent = THOUGHT_LABEL;
@@ -1877,6 +1917,14 @@ async function sendTasks(tasks, displayText) {
                 thinkDetails.querySelector('summary').innerHTML = THOUGHT_HTML;
                 delete currentSection.toolContainer._thinkingEl;
               }
+              // If the previous step already folded, contentSpan points at its <details>.
+              // Never render into that — it would destroy the summary. Start a fresh span.
+              if (currentSection.contentSpan.tagName === 'DETAILS') {
+                const span = document.createElement('span');
+                span.className = 'block max-h-60 overflow-y-auto slim-scrollbar';
+                currentSection.section.insertBefore(span, currentSection.contentSpan.nextSibling);
+                currentSection.contentSpan = span;
+              }
               currentSection.accumulated += data.content;
               scheduleRender(currentSection.accumulated, currentSection.contentSpan);
               responseArea.scrollTop = responseArea.scrollHeight;
@@ -1908,8 +1956,13 @@ async function sendTasks(tasks, displayText) {
     stopElapsedTimer();
     // Final render pass for any remaining section
     for (const [, sec] of taskSections) {
-      if (sec.accumulated) renderFormattedContent(sec.accumulated, sec.contentSpan, { renderMermaid: true });
+      // Skip folded steps — contentSpan points at the <details>, already rendered
+      if (sec.accumulated && sec.contentSpan.tagName !== 'DETAILS') {
+        renderFormattedContent(sec.accumulated, sec.contentSpan, { renderMermaid: true });
+      }
     }
+    // The last step's output is the actual answer — leave it open
+    if (lastOutputFold) lastOutputFold.open = true;
     state.abortController = null;
     sendBtn.disabled = false;
     stopBtn.classList.add('hidden');
