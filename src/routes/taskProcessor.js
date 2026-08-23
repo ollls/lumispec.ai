@@ -2,7 +2,8 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 
 const router = Router();
 
@@ -131,6 +132,7 @@ router.post('/:id/tasks', async (req, res) => {
             systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
             stepLabel: `Subtask ${si + 1}/${task.subtasks.length} of Task ${ti + 1}`,
             allTasks: normalizedTasks, parentText: task.text,
+            step: { task: ti, subtask: si },
           });
 
           if (result.error) {
@@ -181,6 +183,7 @@ router.post('/:id/tasks', async (req, res) => {
           systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
           stepLabel: `Task ${ti + 1}/${normalizedTasks.length}`,
           allTasks: normalizedTasks,
+          step: { task: ti, subtask: null },
         });
 
         if (result.error) {
@@ -263,7 +266,7 @@ router.post('/:id/tasks', async (req, res) => {
 });
 
 // Process one task/subtask step with full tool loop
-async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, cite, conv, res, stepLabel, allTasks, parentText = '' }) {
+async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, cite, conv, res, stepLabel, allTasks, parentText = '', step = null }) {
   const { result: prevResult } = prev;
   const savedFiles = [...prev.files];
   console.log(`[task-processor] ${stepLabel}: "${taskText.slice(0, 80)}" | prevResult: ${prevResult ? prevResult.length + ' chars' : 'none'} | savedFiles: ${savedFiles.length}`);
@@ -306,6 +309,12 @@ CRITICAL RULES:
   const toolUses = [];
   const toolCallSigCounts = {};
   const toolCallSigs = new Set();
+
+  // Tracked for route logging only — this loop has no finance guard, unlike conversations.js:467.
+  // Records where missingChains/fabricatedGreeks are true but the edge is 'end' ARE the drift.
+  const financeEnabled = isToolGroupEnabled('finance');
+  let hadChainData = false;
+  let hadExpiryCall = false;
 
   // streamRound — same pattern as conversations.js
   async function streamRound(messages, isToolRound = false) {
@@ -369,6 +378,42 @@ CRITICAL RULES:
 
       const toolCallsFound = parseToolCalls(result.content);
 
+      // Route logging (observation only — the if-chain below still decides).
+      // Captured before the parallel cap mutates toolCallsFound.
+      const roundToolCallCount = toolCallsFound.length;
+      const roundSigs = toolCallsFound.map(tc => tc.name + ':' + JSON.stringify(tc.arguments || {}));
+      const logRoute = (edge, reason = null) => void logRouteDecision({
+        run: conv.id,
+        loop: 'pipeline',
+        step,
+        round,
+        edge,
+        reason,
+        content: result.content,
+        pred: evalPredicates({
+          content: result.content,
+          toolCallCount: roundToolCallCount,
+          callSigs: roundSigs,
+          sigCounts: toolCallSigCounts,
+          maxRepeats: MAX_SAME_TOOL_REPEATS,
+          hadChainData,
+          hadExpiryCall,
+          toolUseCount: toolUses.length,
+          financeEnabled,
+          round,
+          maxRounds: MAX_TOOL_ROUNDS,
+        }),
+        state: {
+          sigCounts: { ...toolCallSigCounts },
+          hadChainData,
+          hadExpiryCall,
+          toolUseCount: toolUses.length,
+          financeEnabled,
+          round,
+          maxRounds: MAX_TOOL_ROUNDS,
+        },
+      });
+
       if (toolCallsFound.length > 0) {
         // Track repeat tool calls
         for (const tc of toolCallsFound) {
@@ -389,6 +434,7 @@ CRITICAL RULES:
           const overName = overLimit[0].name;
           const overSig = overName + ':' + JSON.stringify(overLimit[0].arguments || {});
           const overCount = toolCallSigCounts[overSig];
+          logRoute('force', 'repeat-limit');
 
           // Execute remaining allowed tools
           const allowedCalls = toolCallsFound.filter(tc => {
@@ -417,9 +463,17 @@ CRITICAL RULES:
           toolCallsFound.length = MAX_PARALLEL_TOOLS;
         }
 
+        logRoute('tools');
         // Execute tools
         const context = buildToolContext(autorun, cite, conv, res);
         const results = await Promise.all(toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context)));
+
+        // Mirrors conversations.js:453-456 — tracked for route logging, not acted on here
+        for (const tc of toolCallsFound) {
+          if (tc.arguments?.action === 'optionchains') hadChainData = true;
+          if (tc.arguments?.action === 'optionexpiry') hadExpiryCall = true;
+        }
+
         const resultParts = [];
         for (let i = 0; i < toolCallsFound.length; i++) {
           toolUses.push({ name: toolCallsFound[i].name, result: results[i] });
@@ -435,15 +489,18 @@ CRITICAL RULES:
         // No tool calls — check for malformed calls
         const hasApplet = /<applet[\s>]/i.test(result.content);
         if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
+          logRoute('repair', 'bare-json');
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         if (!hasApplet && /<tool_call/i.test(result.content)) {
+          logRoute('repair', 'malformed-tag');
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed and could not be parsed. Please retry with valid JSON.' });
           continue;
         }
+        logRoute('end');
         finalContent = result.content;
         break;
       }
