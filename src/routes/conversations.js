@@ -5,6 +5,8 @@ import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
+import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
+import { looksLikeChainQuote } from '../services/chainQuote.js';
 
 const router = Router();
 
@@ -298,6 +300,42 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       if (result.usage) lastUsage = result.usage;
 
       const toolCallsFound = parseToolCalls(result.content);
+      // Route logging (observation only — the if-chain below still decides).
+      // Captured before the parallel cap mutates toolCallsFound.
+      const roundToolCallCount = toolCallsFound.length;
+      const roundSigs = toolCallsFound.map(tc => tc.name + ':' + JSON.stringify(tc.arguments || {}));
+      const logRoute = (edge, reason = null) => void logRouteDecision({
+        run: conv.id,
+        loop: 'chat',
+        step: null,
+        round,
+        edge,
+        reason,
+        content: result.content,
+        pred: evalPredicates({
+          content: result.content,
+          toolCallCount: roundToolCallCount,
+          callSigs: roundSigs,
+          sigCounts: toolCallSigCounts,
+          maxRepeats: MAX_SAME_TOOL_REPEATS,
+          hadChainData,
+          hadExpiryCall,
+          toolUseCount: toolUses.length,
+          financeEnabled,
+          round,
+          maxRounds: MAX_TOOL_ROUNDS,
+        }),
+        state: {
+          sigCounts: { ...toolCallSigCounts },
+          hadChainData,
+          hadExpiryCall,
+          toolUseCount: toolUses.length,
+          financeEnabled,
+          round,
+          maxRounds: MAX_TOOL_ROUNDS,
+        },
+      });
+
       if (toolCallsFound.length === 0 && /\{"name"\s*:/.test(result.content)) {
         console.warn(`[tool-loop] round ${round + 1}: parseToolCalls returned empty but content has {"name":. Content length: ${result.content.length}. First 500 chars:\n${result.content.slice(0, 500)}\n...Last 200 chars:\n${result.content.slice(-200)}`);
       }
@@ -322,6 +360,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           const overName = overLimit[0].name;
           const overCount = toolCallSigCounts[overSig];
           console.warn(`[tool-loop] tool "${overName}" called ${overCount} times, forcing final answer`);
+          logRoute('force', 'repeat-limit');
           // Filter out over-limit tools; execute remaining tools if any
           const allowedCalls = toolCallsFound.filter(tc => {
             const sig = tc.name + ':' + JSON.stringify(tc.arguments || {});
@@ -366,6 +405,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           console.warn(`[tool-loop] round ${round + 1}: capping ${toolCallsFound.length} tool calls to ${MAX_PARALLEL_TOOLS} (dropped: ${toolCallsFound.slice(MAX_PARALLEL_TOOLS).map(tc => tc.name).join(', ')})`);
           toolCallsFound.length = MAX_PARALLEL_TOOLS;
         }
+        logRoute('tools');
         // Execute all tool calls in parallel
         const toolNames = toolCallsFound.map(tc => tc.name).join(', ');
         console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
@@ -423,8 +463,8 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             // Strip heavy or UI-only data from LLM context (kept for frontend via SSE).
             // _citeWarnings is the diff-preview claim highlighter output — purely a UI
             // affordance for the human approver, not something the LLM should reason about.
-            if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings) {
-              const { _images, _rateMap, _diff, _citeWarnings, ...rest } = parsed;
+            if (parsed._images || parsed._rateMap || parsed._diff || parsed._citeWarnings || parsed._tier) {
+              const { _images, _rateMap, _diff, _citeWarnings, _tier, ...rest } = parsed;
               if (_images) rest.imageCount = Array.isArray(_images) ? _images.length : 0;
               if (_rateMap) rest.rateCount = Object.keys(_rateMap).length;
               llmResult = JSON.stringify(rest);
@@ -468,39 +508,50 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           // If LLM fetched optionexpiry (signals options analysis) but never called optionchains, force continuation
           if (!hadChainData && round < MAX_TOOL_ROUNDS - 1 && hadExpiryCall) {
             console.warn(`[tool-loop] round ${round + 1}: LLM stopped after prep data without fetching option chains — forcing continuation`);
+            logRoute('repair', 'missing-chains');
             llmMessages.push({ role: 'assistant', content: result.content });
             llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
             continue;
           }
-          // Detect fabricated option data: LLM presents Greeks/prices without ever calling optionchains
-          if (!hadChainData && round < MAX_TOOL_ROUNDS - 1) {
-            const greeksRe = /\b(delta|gamma|theta|vega|rho)\b.*?-?\d+\.\d{2,}/i;
-            const optionTableRe = /\b(strike|premium|call|put)\b.*?\$?\d+(\.\d+)?/i;
-            const looksLikeOptionData = greeksRe.test(result.content) || (optionTableRe.test(result.content) && /\b(expir|strike|IV|implied.?vol)/i.test(result.content));
-            if (looksLikeOptionData) {
-              console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use`);
+          // Detect fabricated option data: LLM presents chain quotes without ever calling optionchains.
+          // Only armed when NO tool ran this turn — an answer built on transactions, positions, or a
+          // run_python pass over a saved chain CSV is grounded in real data, not fabricated.
+          // See looksLikeChainQuote(): it wants an actual chain row (2+ quote fields), so prose like
+          // "theta is front-loaded ... $16.64" or a tax table with "call premium income" no longer trips it.
+          if (!hadChainData && toolUses.length === 0 && round < MAX_TOOL_ROUNDS - 1) {
+            const chainQuoteLine = looksLikeChainQuote(result.content);
+            if (chainQuoteLine) {
+              console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use. Trigger line: ${chainQuoteLine}`);
+              logRoute('repair', 'fabricated-greeks');
               llmMessages.push({ role: 'assistant', content: result.content });
               llmMessages.push({ role: 'user', content: 'STOP. You are presenting option prices, Greeks, or strike data WITHOUT having fetched real data via the etrade_account tool. This data is fabricated. You MUST call etrade_account with action "optionchains" to get real data before presenting any option analysis. First call optionexpiry to get available dates, then optionchains with the expiry you need.' });
               continue;
             }
           }
         }
-        // Detect bare JSON or truncated tool calls and retry the round
-        // Skip this check if content contains applet blocks (HTML/JS may have {"name": patterns)
+        // Detect unparseable tool calls and retry the round. Two distinct defects, two messages:
+        // the tag is missing (bare-json), or the tag is there but its JSON is broken/truncated
+        // (malformed-tag). The tag test gates both, so they are disjoint — without it bare-json
+        // matched first and told the model "not wrapped" about calls that were wrapped.
+        // Skip both if content contains applet blocks (HTML/JS may have {"name": patterns)
         const hasApplet = /<applet[\s>]/i.test(result.content);
-        if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
-          console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
+        const hasToolCallTag = /<tool_call/i.test(result.content);
+        if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
+          console.warn(`[tool-loop] response contains bare JSON tool call with no <tool_call> tag. Content (last 200 chars): ...${result.content.slice(-200)}`);
+          logRoute('repair', 'bare-json');
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
-        if (!hasApplet && /<tool_call/i.test(result.content)) {
+        if (!hasApplet && hasToolCallTag) {
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
+          logRoute('repair', 'malformed-tag');
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed and could not be parsed. Please retry the tool call with valid JSON: {"name": "tool_name", "arguments": {...}}' });
+          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
+        logRoute('end');
         finalContent = result.content;
         break;
       }

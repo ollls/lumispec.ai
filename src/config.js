@@ -38,6 +38,7 @@ export default {
   llm: {
     backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
   },
+  routeLog: process.env.ROUTE_LOG === '1',
   location: process.env.LOCATION || '',
   sourceDir: process.env.SOURCE_DIR || '',
   sourceTest: process.env.SOURCE_TEST || '',

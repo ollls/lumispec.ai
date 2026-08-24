@@ -18,7 +18,7 @@ router.post('/:group/toggle', async (req, res) => {
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be boolean' });
   }
-  const VALID_MODES = ['regular', 'stealth', 'browser'];
+  const VALID_MODES = ['auto', 'regular', 'stealth', 'browser'];
   if (mode !== undefined && !VALID_MODES.includes(mode)) {
     return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(', ')}` });
   }

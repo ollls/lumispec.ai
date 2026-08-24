@@ -16,6 +16,11 @@ async function getGotScraping() {
 import { execSync } from 'child_process';
 
 let _browser;
+let _browserPromise;   // in-flight launch, shared by concurrent callers
+let _idleTimer;
+let _activePages = 0;
+const BROWSER_IDLE_MS = 5 * 60 * 1000;
+
 function findChrome() {
   if (config.chromePath) return config.chromePath;
   for (const cmd of ['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium']) {
@@ -27,23 +32,74 @@ function findChrome() {
   return undefined;
 }
 
+// Close the shared browser once it has been idle — otherwise a single
+// browser-mode fetch leaves headless Chrome resident for the server's lifetime.
+function armIdleTimer() {
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(closeIdleBrowser, BROWSER_IDLE_MS);
+  _idleTimer.unref?.();
+}
+
+async function closeIdleBrowser() {
+  if (_activePages > 0) return armIdleTimer();   // still in use, check again later
+  const browser = _browser;
+  _browser = undefined;
+  _browserPromise = undefined;
+  if (browser?.connected) {
+    await browser.close().catch(err => console.warn(`[web_fetch] browser close failed: ${err.message}`));
+  }
+}
+
 async function getBrowser() {
-  if (_browser?.isConnected()) return _browser;
-  const puppeteerExtra = (await import('puppeteer-extra')).default;
-  const StealthPlugin = (await import('puppeteer-extra-plugin-stealth')).default;
-  puppeteerExtra.use(StealthPlugin());
-  const executablePath = findChrome();
-  if (!executablePath) throw new Error('No Chrome/Chromium found. Set CHROME_PATH env var or install google-chrome.');
-  _browser = await puppeteerExtra.launch({
-    executablePath,
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
+  if (_browser?.connected) {
+    armIdleTimer();
+    return _browser;
+  }
+  if (_browser) {           // cached instance died — drop it and relaunch
+    _browser = undefined;
+    _browserPromise = undefined;
+  }
+  // Tool calls run up to MAX_PARALLEL_TOOLS at a time, so concurrent fetches can
+  // reach this together. Share the in-flight launch instead of each starting Chrome
+  // and orphaning every instance but the last.
+  if (_browserPromise) return _browserPromise;
+
+  _browserPromise = (async () => {
+    const puppeteerExtra = (await import('puppeteer-extra')).default;
+    const StealthPlugin = (await import('puppeteer-extra-plugin-stealth')).default;
+    puppeteerExtra.use(StealthPlugin());
+    const executablePath = findChrome();
+    if (!executablePath) throw new Error('No Chrome/Chromium found. Set CHROME_PATH env var or install google-chrome.');
+    const browser = await puppeteerExtra.launch({
+      executablePath,
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      // page.content() issues Runtime.callFunctionOn, which has no timeout of its
+      // own and otherwise inherits puppeteer's 180s default — pages that keep the
+      // renderer busy (politico.com) stalled a fetch for over three minutes.
+      protocolTimeout: 30000,
+    });
+    browser.once('disconnected', () => {
+      if (_browser === browser) {
+        _browser = undefined;
+        _browserPromise = undefined;
+      }
+    });
+    return browser;
+  })();
+
+  try {
+    _browser = await _browserPromise;
+  } catch (err) {
+    _browserPromise = undefined;   // failed launch must not be cached
+    throw err;
+  }
+  armIdleTimer();
   return _browser;
 }
 
 // ── Web config from plugins.json ────────────────────
-const DEFAULTS = { mode: 'stealth', engines: ['keiro'] };
+const DEFAULTS = { mode: 'auto', engines: ['keiro'] };
 
 async function getWebConfig() {
   const cfg = await readPluginConfig();
@@ -91,7 +147,7 @@ async function searchKeiro(query) {
   return { results: results.slice(0, 5).map(r => ({ title: r.title || '', url: r.url || '', description: r.snippet || '' })) };
 }
 
-async function searchDDG(query) {
+async function ddgScrape(query) {
   const gotScraping = await getGotScraping();
   const res = await gotScraping({
     url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
@@ -115,6 +171,21 @@ async function searchDDG(query) {
       description: snippet?.textContent?.trim() || '',
     });
     if (results.length >= 5) break;
+  }
+  return results;
+}
+
+async function searchDDG(query) {
+  let results = await ddgScrape(query);
+  // DDG's HTML endpoint returns nothing for quoted phrases, which the LLM writes out
+  // of Google habit. Retry unquoted only when the alternative is an empty result set,
+  // so a quoted search that does work is never silently broadened.
+  if (!results.length && query.includes('"')) {
+    const unquoted = query.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
+    if (unquoted) {
+      console.warn(`[web_search] DDG empty for quoted query, retrying without quotes: ${unquoted}`);
+      results = await ddgScrape(unquoted);
+    }
   }
   if (!results.length) {
     console.warn('[web_search] DDG returned no parseable results (layout change or blocked)');
@@ -150,23 +221,53 @@ async function fetchStealth(url) {
   return res.body;
 }
 
+const FETCHERS = { regular: fetchRegular, stealth: fetchStealth, browser: fetchBrowser };
+
+// "enable JS" is the common phrasing in the wild — "enable javascript" alone misses it.
+const JS_WALL = /(enable js\b|enable javascript|just a moment|checking your browser|verify you are human|attention required)/i;
+const MIN_USEFUL_CHARS = 200;
+
+async function fetchTier(tier, url) {
+  const fetcher = FETCHERS[tier] || fetchRegular;
+  const { markdown, title } = htmlToMarkdown(await fetcher(url));
+  return { url, title, content: markdown, _tier: tier };
+}
+
+function looksBlocked({ content }) {
+  return content.length < MIN_USEFUL_CHARS || JS_WALL.test(content.slice(0, 500));
+}
+
+// Output is Readability -> Turndown -> truncated text, so these never reach the LLM.
+const BLOCKED_RESOURCES = new Set(['image', 'media', 'font']);
+
 async function fetchBrowser(url) {
   const browser = await getBrowser();
   const page = await browser.newPage();
+  _activePages++;
   try {
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const handler = BLOCKED_RESOURCES.has(req.resourceType()) ? req.abort() : req.continue();
+      handler.catch(() => {});   // request may already be handled/gone
+    });
     try {
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 });
+      // domcontentloaded + a short settle: networkidle2 stalls the full 15s on
+      // ad/analytics-heavy pages for markup we already have.
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForNetworkIdle({ idleTime: 500, timeout: 3000 }).catch(() => {});
     } catch (navErr) {
-      // Timeout on networkidle2 (long-polling sites) — fall back to what loaded
+      // Fall back to whatever loaded rather than failing the fetch outright
       if (navErr.name === 'TimeoutError') {
-        console.warn(`[web_fetch] networkidle2 timeout for ${url}, using partial content`);
+        console.warn(`[web_fetch] navigation timeout for ${url}, using partial content`);
       } else {
         throw navErr;
       }
     }
     return await page.content();
   } finally {
-    await page.close();
+    _activePages--;
+    await page.close().catch(() => {});
+    armIdleTimer();
   }
 }
 
@@ -208,21 +309,15 @@ export default {
   prompt: `## Web Research
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (Cloudflare block, login wall, "enable JavaScript", empty content), use the search snippet descriptions directly — they often contain the data you need.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
+- Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks — the search backend returns no results for quoted phrases. \`site:\` is fine.
 - Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
   tools: {
     web_search: {
       description: 'Search the web. Requires a "query" argument.',
       parameters: { query: 'string' },
       execute: async ({ query }) => {
-        const { mode, engines } = await getWebConfig();
-        // Filter out DDG if mode is regular (needs scraping lib)
-        const active = engines.filter(e => {
-          if (e === 'duckduckgo' && mode === 'regular') {
-            console.warn('[web_search] DDG skipped — requires stealth or browser mode');
-            return false;
-          }
-          return !!SEARCH_BACKENDS[e];
-        });
+        const { engines } = await getWebConfig();
+        const active = engines.filter(e => !!SEARCH_BACKENDS[e]);
 
         if (active.length === 0) {
           return { error: 'No search engines configured or available', results: [] };
@@ -271,16 +366,30 @@ export default {
       parameters: { url: 'string' },
       execute: async ({ url }) => {
         const { mode } = await getWebConfig();
-        let html;
-        if (mode === 'browser') {
-          html = await fetchBrowser(url);
-        } else if (mode === 'stealth') {
-          html = await fetchStealth(url);
-        } else {
-          html = await fetchRegular(url);
+        if (mode !== 'auto') return fetchTier(mode, url);
+
+        // Tier A — one HTTP request, no JS. Serves the large majority of pages.
+        let cheap = null;
+        try {
+          cheap = await fetchTier('stealth', url);
+          if (!looksBlocked(cheap)) return cheap;
+        } catch (err) {
+          console.warn(`[web_fetch] stealth tier failed for ${url}: ${err.message}`);
         }
-        const { markdown, title } = htmlToMarkdown(html);
-        return { url, title, content: markdown };
+
+        // Tier B — real browser. Only for pages that need JS or refused tier A.
+        let rich;
+        try {
+          rich = await fetchTier('browser', url);
+        } catch (err) {
+          console.warn(`[web_fetch] browser tier failed for ${url}: ${err.message}`);
+          if (cheap) return cheap;
+          throw err;
+        }
+        // Hard-blocked sites answer Chrome with an empty shell, which is worse than
+        // the challenge page tier A got — keep whichever actually carries content.
+        if (cheap && rich.content.length < cheap.content.length) return cheap;
+        return rich;
       },
     },
   },
