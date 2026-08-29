@@ -13,16 +13,23 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
 
 ## LLM Server Configuration
-Running Qwen3.6-27B (dense) on RTX 5090 (recommended backend; Gemma also supported — see README "Choosing & running your model"):
+Running Qwen3.8-27B (dense) on RTX 5090 (recommended backend; Gemma also supported — see README "Choosing & running your model"):
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.6-27B-GGUF:Q6_K_XL \
-  --n-gpu-layers 99 \
-  --ctx-size 76000 \
+  -hf unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
+  --alias qwen3.8-27b \
+  -ngl 99 \
+  -np 1 \
+  --ctx-size 65536 \
   --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 3 \
+  --cache-reuse 256 \
   --temp 1.0 \
   --top-p 0.95 \
   --top-k 20 \
@@ -30,6 +37,17 @@ export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
   --jinja \
   --port 8080
 ```
+
+Notes that matter for the code:
+- **`--ctx-size 65536`** is the source of truth for the context budget. Both tool loops read the live
+  slot's `n_ctx` via `slots.getSlotContextSize()` and wind down at 80% (~52K tokens) — see
+  **Context Budget** below. `LLAMA_MAX_CONTEXT` in `.env` is only the fallback when slots are unreachable.
+- **`--cache-type-k/v q8_0`** (quantized KV cache) is what fits 64K next to a Q6 27B on 32 GB. It
+  requires `--flash-attn on`, so keep that explicit rather than relying on `auto`.
+- **`-np 1`** — one slot. Tool loops each want the full window; splitting `--ctx-size` across parallel
+  slots starves them.
+- **`--spec-type draft-mtp` / `--cache-reuse 256`** — MTP speculative decoding and prefix-cache reuse.
+  Long tool loops resend a near-identical prompt every round, so both target the dominant workload here.
 
 ## Project Structure
 ```
@@ -57,9 +75,9 @@ src/
     templates.js           # Template CRUD, sanitizer, LLM optimize endpoint
   services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
-    llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
+    llm.js                 # llama-server client (streaming, non-streaming, SSE parser), prompt sizing + tool-result trimming
     tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
-    slots.js               # Slot monitor (polling, assignment, pin/unpin)
+    slots.js               # Slot monitor (polling, assignment, pin/unpin, per-slot n_ctx lookup)
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
@@ -237,6 +255,35 @@ Safety mechanisms:
 - Queue-based command confirmation: parallel calls confirmed FIFO (not single-slot)
 - Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
 - run_python auto-fixes: Python booleans (`fixPythonBooleans`), backslash+newline double-escaping in string literals
+- Context budget: `MAX_TOOL_ROUNDS` bounds rounds, this bounds tokens — see **Context Budget** below
+
+#### Context Budget
+Every tool round appends its results to the LLM message array, so a long tool run walks the prompt
+into the slot's context wall. llama-server does **not** error there — it returns HTTP 200 with
+`finish_reason: "length"` and an empty message, which used to surface as a blank assistant bubble
+with the whole turn discarded (see `OVERFLOW.md`).
+
+Both tool loops (`conversations.js`, `taskProcessor.js`) now measure the real prompt at the top of
+every round via `countPromptTokens()` and wind down at 80% of the slot's `n_ctx`:
+- `trimOldToolResults()` shrinks the oldest tool results to 400 chars, keeping the newest 3 intact
+- a `{tool_status}` SSE event announces the wind-down
+- an "answer now, no tools" instruction is injected and **that round becomes terminal** — tool calls
+  in it are logged and ignored, since there is no room to feed results back in
+
+`countPromptTokens()` (`src/services/llm.js`) calls llama-server's `/tokenize` — accurate to ~0.1%,
+~78ms for a 64K prompt, with a `chars / 3.5` fallback. It does **not** use `timings.prompt_n` from
+the completion response: that is the number of tokens actually *processed*, which with KV cache
+reuse reads 37 for a 64K prompt and would never see the wall coming.
+
+The limit comes from the live slot (`slots.getSlotContextSize()`), so raising `--ctx-size` raises
+the budget with no code change. `LLAMA_MAX_CONTEXT` is only the fallback when slots are unreachable.
+
+**Empty / truncated answers are never silent:**
+- `finish_reason: "length"` with content → a "⚠ Answer cut off at the context limit" marker is appended
+- empty final content in chat → stored as `[Error: Empty response after N tool call(s)…]` and sent as
+  an `{error}` event, with `toolUses` and `reasoning` kept on the message so the work stays on screen
+- empty step output in the pipeline → returned as a step error, so the run stops with `{task_error}`
+  instead of handing the next step an empty context (a step's output is the next step's only context)
 
 ### Registered Tools
 | Tool | Description |
@@ -333,7 +380,9 @@ Key isolation rules:
 
 Each step also gets a pipeline-aware system prompt addition (step number, "complete ONLY the current task" rules). Previous output framed as user message with "Previous Step Output" header (max 32K chars).
 
-**Execution engine:** Each task/subtask runs through the same tool loop as regular chat (up to 20 tool rounds, repeat detection, parallel tool cap, confirmation flow, full SSE streaming).
+**Execution engine:** Each task/subtask runs through the same tool loop as regular chat (up to 20 tool rounds, repeat detection, parallel tool cap, context budget, confirmation flow, full SSE streaming).
+
+**Empty step = pipeline halt:** A step that produces no output (context exhausted, or content stripped as a bare tool call) returns a step error instead of an empty result — the run stops with `{task_error}` naming the token counts and any files the dead step saved. A step's output is the next step's only context, so passing an empty one through would make every downstream step invent from nothing. This is the one place the pipeline loop deliberately diverges from the chat loop, which only reports and ends the turn.
 
 **File exchange between steps:** Large tool results (option chains, etc.) auto-save to CSV files. Filenames passed to the next step via "Available Data Files" section in the user message (scoping described in table above).
 
