@@ -40,17 +40,17 @@ cp .env.example .env           # then edit — see "Configuration" below
 
 # 3. Start your LLM server (separate terminal — see "Choosing & running your model")
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
-  -ngl 99 --ctx-size 65536 --flash-attn on --jinja \
+  -hf unsloth/Qwen3.8-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 --ctx-size 64000 --flash-attn on --jinja \
   --cache-type-k q8_0 --cache-type-v q8_0 \
-  --spec-type draft-mtp --spec-draft-n-max 3 \
+  --spec-default --spec-type draft-mtp \
   --port 8080
 
 # 4. Run the workbench
 npm start                      # → http://localhost:3000
 ```
 
-**Requirements:** Node.js 20+, a running llama.cpp server (or set `LLM_BACKEND=claude` and supply a key), and an NVIDIA GPU if you want fast local inference. Tested daily on an RTX 5090 with Qwen3.8-27B (dense, `UD-Q6_K_XL`) at 64K context.
+**Requirements:** Node.js 20+, a running llama.cpp server (or set `LLM_BACKEND=claude` and supply a key), and an NVIDIA GPU if you want fast local inference. Tested daily on an RTX 5090 with Qwen3.8-27B (dense, `Q6_K_XL`) at a 64K per-slot window.
 
 Smaller GPUs work too — drop to an 8B model and a smaller `--ctx-size`; see the next section for the full launch scripts and what each flag buys you.
 
@@ -62,25 +62,24 @@ Any llama.cpp-compatible GGUF works. The two launch scripts below are the ones a
 
 ### ✅ Qwen3.8-27B (recommended — this is what we run)
 
-Qwen is the recommended backend — it's the most reliable with this app's prompt-based tool-calling protocol and reasoning (`reasoning_content`) handling.
+Qwen is the recommended backend — it's the most reliable with this app's prompt-based tool-calling
+protocol and reasoning (`reasoning_content`) handling. This exact configuration is the one proven
+stable over long multi-step tool flows on an RTX 5090; see the note below before adding flags to it.
 
 ```bash
 #!/bin/bash
-# Qwen3.8-27B (thinking mode) on an RTX 5090
+# Qwen3.8-27B on an RTX 5090
 export CUDA_VISIBLE_DEVICES=0            # pin the RTX 5090
 
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
-  --alias qwen3.8-27b \
-  -ngl 99 \
-  -np 1 \
-  --ctx-size 65536 \
+  -hf unsloth/Qwen3.8-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 \
+  --ctx-size 64000 \
   --flash-attn on \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
+  --spec-default \
   --spec-type draft-mtp \
-  --spec-draft-n-max 3 \
-  --cache-reuse 256 \
   --temp 1.0 \
   --top-p 0.95 \
   --top-k 20 \
@@ -93,15 +92,25 @@ Why these flags matter for this app:
 
 | Flag | Why |
 |---|---|
-| `--ctx-size 65536` | The whole context budget derives from this. The tool loops read the live slot's `n_ctx` and start winding down at 80% (~52K tokens), trimming old tool results. Raise `--ctx-size` and the budget follows — no code change, no `.env` edit. |
-| `--cache-type-k q8_0` / `--cache-type-v q8_0` | Quantized KV cache — what makes 64K fit alongside a Q6 27B on 32 GB. Requires `--flash-attn on`, so keep that explicit rather than relying on `auto`. |
-| `--spec-type draft-mtp` + `--spec-draft-n-max 3` | Multi-token-prediction speculative decoding. Long tool loops are the dominant workload here, and the speedup is most visible on them. |
-| `--cache-reuse 256` | Prefix-cache reuse across turns. Each tool round resends a prompt that is mostly identical to the last one, so this cuts a lot of re-prefill. |
-| `-np 1` | One slot. Each tool loop wants the full window, so splitting `--ctx-size` across parallel slots starves them rather than speeding anything up. |
+| `--ctx-size 64000` | The whole context budget derives from this. In current llama.cpp builds it is the **per-slot** window, not a total to be divided — verified by feeding one slot a 56,001-token prompt untruncated. The tool loops read the live slot's `n_ctx` and start winding down at 80% (~51K tokens), trimming old tool results. Raise it and the budget follows — no code change, no `.env` edit. |
+| `--cache-type-k q8_0` / `--cache-type-v q8_0` | Quantized KV cache — what makes a 64K window per slot fit alongside a Q6 27B. Requires `--flash-attn on`, so keep that explicit rather than relying on `auto`. |
+| `--spec-default` + `--spec-type draft-mtp` | Multi-token-prediction speculative decoding. Long tool loops are the dominant workload here, and the speedup is most visible on them. |
 | `--jinja` | Applies the model's own embedded chat template. Non-negotiable — see the warning below. |
-| `--alias qwen3.8-27b` | Cosmetic: the name the server reports back, which is what shows up in logs. |
 
 Sampling values are Qwen's own recommendations (`temp 1.0`, `top-p 0.95`, `top-k 20`, `min-p 0.0`).
+
+> ⚠️ **On adding flags to this.** A tuned variant of the above — `UD-Q6_K_XL`, `--ctx-size 65536`,
+> `-np 1`, `--spec-draft-n-max 3`, `--cache-reuse 256` — produced an `NVRM: Xid 8` GPU channel hang
+> under a tool-heavy session (2026-08-29 10:31, RC watchdog, llama-server killed, no reboot needed).
+> One fault is not a controlled experiment, and `CRASH.md` records an earlier `Xid 79` on a
+> different config, so the card's stability under sustained inference load is its own open question.
+> The point stands regardless: **the block above is the one with hours of long multi-step flows
+> behind it.** Change one flag at a time and watch `journalctl -k | grep Xid`.
+
+**Note on slot count.** This runs llama-server's default slot count (4 here), and each slot gets its
+own full `--ctx-size`, so VRAM cost scales with slot count while the usable window per conversation
+does not change. At 64K × 4 the card sits around 30.8 GB of 32 GB. Drop to `-np 1` if you want that
+headroom back; it does not shrink any single conversation's window.
 
 ### 🔹 Gemma (alternative)
 

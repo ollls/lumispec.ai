@@ -13,23 +13,22 @@ Multi-conversation chat interface connected to a local llama-server. Express-bas
 - **Dependencies**: `@mozilla/readability`, `linkedom`, `turndown` (web content extraction), `oauth` (E*TRADE), `dotenv`
 
 ## LLM Server Configuration
-Running Qwen3.8-27B (dense) on RTX 5090 (recommended backend; Gemma also supported — see README "Choosing & running your model"):
+Running Qwen3.8-27B (dense) on RTX 5090 (recommended backend; Gemma also supported — see README
+"Choosing & running your model"). This is the configuration proven stable over long multi-step tool
+flows — see the stability note below before adding flags:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 
 ./llama.cpp/build/bin/llama-server \
-  -hf unsloth/Qwen3.8-27B-GGUF:UD-Q6_K_XL \
-  --alias qwen3.8-27b \
-  -ngl 99 \
-  -np 1 \
-  --ctx-size 65536 \
+  -hf unsloth/Qwen3.8-27B-GGUF:Q6_K_XL \
+  --n-gpu-layers 99 \
+  --ctx-size 64000 \
   --flash-attn on \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
+  --spec-default \
   --spec-type draft-mtp \
-  --spec-draft-n-max 3 \
-  --cache-reuse 256 \
   --temp 1.0 \
   --top-p 0.95 \
   --top-k 20 \
@@ -39,15 +38,23 @@ export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
 ```
 
 Notes that matter for the code:
-- **`--ctx-size 65536`** is the source of truth for the context budget. Both tool loops read the live
-  slot's `n_ctx` via `slots.getSlotContextSize()` and wind down at 80% (~52K tokens) — see
-  **Context Budget** below. `LLAMA_MAX_CONTEXT` in `.env` is only the fallback when slots are unreachable.
-- **`--cache-type-k/v q8_0`** (quantized KV cache) is what fits 64K next to a Q6 27B on 32 GB. It
-  requires `--flash-attn on`, so keep that explicit rather than relying on `auto`.
-- **`-np 1`** — one slot. Tool loops each want the full window; splitting `--ctx-size` across parallel
-  slots starves them.
-- **`--spec-type draft-mtp` / `--cache-reuse 256`** — MTP speculative decoding and prefix-cache reuse.
-  Long tool loops resend a near-identical prompt every round, so both target the dominant workload here.
+- **`--ctx-size 64000`** is the source of truth for the context budget. It is the **per-slot**
+  window in current llama.cpp builds, not a total split across slots — verified by feeding one slot
+  a 56,001-token prompt untruncated while 4 slots were live. Both tool loops read the live slot's
+  `n_ctx` via `slots.getSlotContextSize()` and wind down at 80% (~51K tokens) — see **Context
+  Budget** below. `LLAMA_MAX_CONTEXT` in `.env` is only the fallback when slots are unreachable, and
+  must not exceed the real window or the wind-down never fires.
+- **`--cache-type-k/v q8_0`** (quantized KV cache) is what fits a 64K per-slot window next to a Q6
+  27B. It requires `--flash-attn on`, so keep that explicit rather than relying on `auto`.
+- **Slot count** is llama-server's default (4). Each slot carries its own full `--ctx-size`, so more
+  slots cost VRAM (≈30.8 GB of 32 GB at 64K × 4) without changing any conversation's usable window.
+- **`--spec-default` / `--spec-type draft-mtp`** — MTP speculative decoding, aimed at the tool-loop
+  workload that dominates here.
+- **Stability:** a tuned variant (`UD-Q6_K_XL`, `--ctx-size 65536`, `-np 1`, `--spec-draft-n-max 3`,
+  `--cache-reuse 256`) produced an `NVRM: Xid 8` GPU channel hang under a tool-heavy session
+  (2026-08-29 10:31; RC watchdog killed llama-server, no reboot required). `CRASH.md` records an
+  earlier `Xid 79` on a different config. Change one flag at a time and watch
+  `journalctl -k | grep Xid`.
 
 ## Project Structure
 ```
@@ -149,7 +156,11 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ## Environment Variables (via .env, required)
 - `PORT` — server port (default: 3000)
 - `LLAMA_URL` — llama-server base URL (default: `http://localhost:8080`)
-- `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 65536, overridden by slot `n_ctx`)
+- `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 131072). Only used when `/slots` is
+  unreachable; the live slot `n_ctx` wins otherwise. Keep it at or below llama-server's
+  `--ctx-size` — a value above the true window makes the tool loop skip its wind-down
+- `MAX_PREV_RESULT_CHARS` — chars of the previous step's output a task-pipeline step receives
+  (default: 32000). Absolute, not derived from `n_ctx` — raising `--ctx-size` does not raise it
 - `SEARCH_ENGINE` — `keiro`, `tavily`, or `both` (default: `keiro`)
 - `TAVILY_API_KEY` — Tavily search API key
 - `KEIRO_API_KEY` — Keiro search API key
