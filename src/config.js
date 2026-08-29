@@ -16,6 +16,11 @@ export default {
     baseUrl: process.env.LLAMA_URL || 'http://localhost:8080',
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
   },
+  pipeline: {
+    // Chars of the previous step's output a task-pipeline step is allowed to receive.
+    // Absolute, not derived from n_ctx: raising --ctx-size does NOT raise this.
+    maxPrevResultChars: parseInt(process.env.MAX_PREV_RESULT_CHARS || '32000', 10),
+  },
   chromePath: process.env.CHROME_PATH || '',
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',

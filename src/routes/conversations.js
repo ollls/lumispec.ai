@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
@@ -179,6 +179,12 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     cancelConfirmation(conv.id);
   });
 
+  // Declared outside the try so the catch can still see the work done before the throw.
+  // llama-server dying mid-stream (GPU fault, OOM, restart) lands here with rounds of tool
+  // results already gathered — those are the expensive part of the turn and must survive.
+  let accumulatedReasoning = '';
+  const toolUses = [];
+
   try {
     // Build messages with system prompt for tool support
     const systemPrompt = getSystemPrompt({ applets, precision, cite });
@@ -226,11 +232,13 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       const { response, backend } = await streamChatCompletion(messages, opts);
       let content = '';
       let usage = null;
+      let finishReason = null;
       let suppressToolContent = false;
       let toolContentBuffer = '';   // buffer tool_content until we know it's not a tool call
       let toolContentFlushed = false; // true once buffer has been flushed (safe to stream directly)
 
       for await (const chunk of parseSSEChunks(response, backend)) {
+        if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.reasoning_content) {
           accumulatedReasoning += delta.reasoning_content;
@@ -274,16 +282,24 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
       }
 
-      return { content, usage };
+      return { content, usage, finishReason };
     }
 
     const MAX_TOOL_ROUNDS = 20;
     const MAX_SAME_TOOL_REPEATS = 3;
     const MAX_PARALLEL_TOOLS = 4;
+    // Context budget. Every round appends its tool results to llmMessages, so a long tool run
+    // walks the prompt into the slot's context wall. llama-server does NOT error there: it
+    // returns 200 with finish_reason "length" and an empty message, which surfaced as a blank
+    // bubble (2026-08-25: 17 rounds, 18 tool results, prompt 63999 of 64000, answer lost).
+    // MAX_TOOL_ROUNDS bounds rounds; this bounds tokens.
+    const ctxLimit = slots.getSlotContextSize(slotId);
+    const CTX_WIND_DOWN = 0.8;      // start winding down at 80% of the slot
+    let promptTokens = 0;           // true size of the prompt for the round about to run
+    let lastFinishReason = null;    // "length" means the answer was cut off by the context wall
+    let ctxWindDown = false;        // true once the "answer now" instruction has been injected
     let finalContent = '';
     let lastUsage = null;
-    let accumulatedReasoning = '';
-    const toolUses = [];
     const toolCallSigCounts = {}; // track repeat counts per unique signature (name+args)
     const toolCallSigs = new Set(); // track unique tool+args signatures for dedup
     const financeEnabled = isToolGroupEnabled('finance');
@@ -291,6 +307,21 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     let hadExpiryCall = false;       // whether optionexpiry was called (signals options analysis)
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // Out of headroom: trim the oldest tool results to make room and tell the model to
+      // answer with what it has. The next round is terminal — see the ctxWindDown break below.
+      promptTokens = await countPromptTokens(llmMessages);
+      if (!ctxWindDown && promptTokens > ctxLimit * CTX_WIND_DOWN) {
+        ctxWindDown = true;
+        const freed = trimOldToolResults(llmMessages);
+        promptTokens = await countPromptTokens(llmMessages);
+        console.warn(`[tool-loop] round ${round + 1}: prompt hit the context budget — trimmed ${freed} chars of old tool results, now ${promptTokens}/${ctxLimit} tokens, forcing final answer`);
+        res.write(`data: ${JSON.stringify({ tool_status: '⚠ Context nearly full — wrapping up with the data gathered so far' })}\n\n`);
+        llmMessages.push({
+          role: 'user',
+          content: `CONTEXT LIMIT REACHED (${promptTokens} of ${ctxLimit} tokens). This is your LAST round — older tool results above have been trimmed to free room. Write your final answer NOW from the data you already have. Do NOT call any tools. If something is incomplete, say so explicitly instead of fetching more.`,
+        });
+      }
+
       // Stream content as tool_content so user sees progress during generation
       const result = await streamRound(llmMessages, {
         slotId,
@@ -298,6 +329,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       }, true);
 
       if (result.usage) lastUsage = result.usage;
+      lastFinishReason = result.finishReason;
 
       const toolCallsFound = parseToolCalls(result.content);
       // Route logging (observation only — the if-chain below still decides).
@@ -335,6 +367,15 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           maxRounds: MAX_TOOL_ROUNDS,
         },
       });
+
+      // Wind-down round: whatever came back is the answer. Tool calls are not executed here —
+      // there is no context left to feed their results back into.
+      if (ctxWindDown) {
+        logRoute('end', 'ctx-budget');
+        console.warn(`[tool-loop] round ${round + 1}: wind-down round returned ${result.content.length} chars${toolCallsFound.length ? ` (ignoring ${toolCallsFound.length} tool call(s))` : ''}`);
+        finalContent = result.content;
+        break;
+      }
 
       if (toolCallsFound.length === 0 && /\{"name"\s*:/.test(result.content)) {
         console.warn(`[tool-loop] round ${round + 1}: parseToolCalls returned empty but content has {"name":. Content length: ${result.content.length}. First 500 chars:\n${result.content.slice(0, 500)}\n...Last 200 chars:\n${result.content.slice(-200)}`);
@@ -557,18 +598,22 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       }
     }
 
-    // If tool loop exhausted without a final answer, force LLM to respond without tools
-    if (!finalContent) {
+    // If tool loop exhausted without a final answer, force LLM to respond without tools.
+    // Not after a wind-down: that round already WAS the forced answer, and re-asking would push
+    // another message onto a prompt that is already at the wall. Empty there means empty.
+    if (!finalContent && !ctxWindDown) {
       console.warn(`[tool-loop] no final content after ${MAX_TOOL_ROUNDS} rounds, forcing answer`);
       llmMessages.push({
         role: 'user',
         content: 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.',
       });
+      promptTokens = await countPromptTokens(llmMessages);
       const forced = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
       }, true);
       if (forced.usage) lastUsage = forced.usage;
+      lastFinishReason = forced.finishReason;
 
       // If the LLM STILL emitted a tool call, try one last execution
       const lastChanceCalls = parseToolCalls(forced.content);
@@ -596,6 +641,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         const final2 = await streamRound(llmMessages, { slotId, signal: abortController.signal }, true);
         finalContent = final2.content;
         if (final2.usage) lastUsage = final2.usage;
+        lastFinishReason = final2.finishReason;
       } else {
         finalContent = forced.content;
       }
@@ -603,7 +649,10 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
 
     // Safety net: if finalContent still looks like a bare tool call, try parsing and executing it
     // This catches edge cases where the tool loop somehow failed to parse a valid tool call
-    if (finalContent && !/<applet[\s>]/i.test(finalContent) && /\{"name"\s*:\s*"/.test(finalContent)) {
+    // Skipped after a wind-down: executing these would append results to a prompt with no room
+    // for them and burn another round, which is the exact failure the wind-down exists to avoid.
+    // The tool-call strip below still removes them from the answer.
+    if (finalContent && !ctxWindDown && !/<applet[\s>]/i.test(finalContent) && /\{"name"\s*:\s*"/.test(finalContent)) {
       // Strip <think> blocks that might interfere with parsing
       const stripped = finalContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const safetyCalls = parseToolCalls(stripped);
@@ -635,6 +684,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           clearTimeout(safetyTimeout);
           finalContent = safetyRound.content;
           if (safetyRound.usage) lastUsage = safetyRound.usage;
+          lastFinishReason = safetyRound.finishReason;
         } catch (e) {
           console.warn(`[safety-net] streamRound failed/timed out: ${e.message}`);
           // Use tool results as final content since the LLM won't answer
@@ -654,6 +704,13 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       }
     }
 
+    // A "length" finish means the model ran out of context mid-sentence. Say so rather than
+    // handing back a paragraph that just stops.
+    if (finalContent && lastFinishReason === 'length') {
+      console.warn(`[tool-loop] answer truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
+      finalContent += `\n\n---\n⚠ **Answer cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Ask a narrower follow-up or start a fresh conversation to get the rest.`;
+    }
+
     // Send final content as a single event
     if (finalContent) {
       const stored = { text: finalContent };
@@ -661,6 +718,21 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       if (toolUses.length > 0) stored.toolUses = toolUses;
       conversations.updateMessageContent(conv.id, msgIndex, stored);
       res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
+    } else {
+      // No answer, no exception: llama-server returns 200 with an empty message when the prompt
+      // fills the slot (finish_reason "length"), and the safety net strips content that was only
+      // a bare tool call. Either way the turn is dead — say so and keep the tool results so the
+      // work is still on screen, instead of leaving a blank bubble.
+      const detail = lastFinishReason === 'length'
+        ? `prompt reached ${promptTokens} of ${ctxLimit} tokens — no room left to answer`
+        : 'the model returned no content';
+      const errMsg = `Empty response after ${toolUses.length} tool call(s): ${detail}. Tool results are kept below. Retry with a narrower question, or start a fresh conversation.`;
+      console.warn(`[tool-loop] ${errMsg}`);
+      const stored = { text: `[Error: ${errMsg}]` };
+      if (accumulatedReasoning) stored.reasoning = accumulatedReasoning;
+      if (toolUses.length > 0) stored.toolUses = toolUses;
+      conversations.updateMessageContent(conv.id, msgIndex, stored);
+      res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
     }
 
     if (lastUsage) {
@@ -669,9 +741,19 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     }
   } catch (err) {
     if (err.name !== 'AbortError') {
+      // Store the same shape as the success path. A bare string here would discard every tool
+      // result and the reasoning trace — the most costly part of the turn, and the part the
+      // user most wants back when the backend dies partway through.
       const errMsg = err.message || 'LLM request failed';
-      conversations.updateMessageContent(conv.id, msgIndex, `[Error: ${errMsg}]`);
-      res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
+      const detail = toolUses.length
+        ? `${errMsg} — ${toolUses.length} tool result(s) gathered before the failure are kept below.`
+        : errMsg;
+      const stored = { text: `[Error: ${detail}]` };
+      if (accumulatedReasoning) stored.reasoning = accumulatedReasoning;
+      if (toolUses.length > 0) stored.toolUses = toolUses;
+      console.warn(`[tool-loop] request failed after ${toolUses.length} tool call(s): ${errMsg}`);
+      conversations.updateMessageContent(conv.id, msgIndex, stored);
+      res.write(`data: ${JSON.stringify({ error: detail })}\n\n`);
     }
   }
 

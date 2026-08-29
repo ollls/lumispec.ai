@@ -80,6 +80,17 @@ function unpinConversation(convId) {
   releaseSlot(convId);
 }
 
+// Context window of a slot, as llama-server reports it. The tool loop needs this to know
+// how much room it has left before the prompt hits the wall.
+function getSlotContextSize(slotId) {
+  // No slot assigned means llama-server picks one, so fall back to the smallest window on offer
+  // rather than the .env guess — undershooting the real limit is the safe direction here.
+  const slot = cachedSlots.find(s => s.id === slotId);
+  if (slot?.n_ctx) return slot.n_ctx;
+  const sizes = cachedSlots.map(s => s.n_ctx).filter(Boolean);
+  return sizes.length ? Math.min(...sizes) : config.llama.maxContextTokens;
+}
+
 function getSlotForConversation(convId) {
   return conversationSlotMap.get(convId) ?? null;
 }
@@ -106,7 +117,7 @@ function stopPolling() {
 
 export default {
   fetchSlots, checkHealth, getCachedSlots, getHealth,
-  assignSlot, releaseSlot,
+  assignSlot, releaseSlot, getSlotContextSize,
   pinConversation, unpinConversation,
   getSlotForConversation, getConversationForSlot,
   startPolling, stopPolling,
