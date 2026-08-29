@@ -1,6 +1,8 @@
 node_modules/
 src/public/css/output.css
 .env
+.env.*
+!.env.example
 data/*
 !data/prompts.json
 !data/templates.json

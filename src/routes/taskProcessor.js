@@ -1,16 +1,20 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
+import config from '../config.js';
 
 const router = Router();
 
 const MAX_TOOL_ROUNDS = 20;
 const MAX_SAME_TOOL_REPEATS = 3;
 const MAX_PARALLEL_TOOLS = 4;
-const MAX_PREV_RESULT_CHARS = 32000;
+// How much of the previous step's output a step may receive. This is the pipeline's ONLY
+// channel between steps, and unlike the tool-loop context budget it does not scale with the
+// slot's n_ctx — a bigger --ctx-size buys nothing here. Tune via MAX_PREV_RESULT_CHARS.
+const MAX_PREV_RESULT_CHARS = config.pipeline.maxPrevResultChars;
 
 // Review pause mechanism — pending promises per conversation
 const pendingReviews = new Map(); // convId → { resolve }
@@ -324,11 +328,13 @@ CRITICAL RULES:
     });
     let content = '';
     let usage = null;
+    let finishReason = null;
     let suppressToolContent = false;
     let toolContentBuffer = '';
     let toolContentFlushed = false;
 
     for await (const chunk of parseSSEChunks(response, backend)) {
+      if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
       const delta = chunk.choices?.[0]?.delta;
       if (delta?.reasoning_content) {
         accumulatedReasoning += delta.reasoning_content;
@@ -365,16 +371,39 @@ CRITICAL RULES:
       res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
     }
 
-    return { content, usage };
+    return { content, usage, finishReason };
   }
 
   let finalContent = '';
   let lastUsage = null;
+  // Context budget — same wall as the chat loop (see conversations.js), with a sharper failure
+  // mode: a step that runs out of room returns nothing, and its output IS the next step's only
+  // context, so an unguarded overflow poisons everything downstream.
+  const ctxLimit = slots.getSlotContextSize(slotId);
+  const CTX_WIND_DOWN = 0.8;
+  let promptTokens = 0;
+  let lastFinishReason = null;
+  let ctxWindDown = false;
 
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // Out of headroom: trim the oldest tool results and make this round terminal.
+      promptTokens = await countPromptTokens(llmMessages);
+      if (!ctxWindDown && promptTokens > ctxLimit * CTX_WIND_DOWN) {
+        ctxWindDown = true;
+        const freed = trimOldToolResults(llmMessages);
+        promptTokens = await countPromptTokens(llmMessages);
+        console.warn(`[task-processor] ${stepLabel}: prompt hit the context budget — trimmed ${freed} chars of old tool results, now ${promptTokens}/${ctxLimit} tokens, forcing step output`);
+        res.write(`data: ${JSON.stringify({ tool_status: '⚠ Context nearly full — wrapping up this step with the data gathered so far' })}\n\n`);
+        llmMessages.push({
+          role: 'user',
+          content: `CONTEXT LIMIT REACHED (${promptTokens} of ${ctxLimit} tokens). This is your LAST round for this step — older tool results above have been trimmed to free room. Write your step output NOW from the data you already have. Do NOT call any tools. Name any file you saved, and state plainly what is missing so the next step can pick it up.`,
+        });
+      }
+
       const result = await streamRound(llmMessages, true);
       if (result.usage) lastUsage = result.usage;
+      lastFinishReason = result.finishReason;
 
       const toolCallsFound = parseToolCalls(result.content);
 
@@ -413,6 +442,15 @@ CRITICAL RULES:
           maxRounds: MAX_TOOL_ROUNDS,
         },
       });
+
+      // Wind-down round: whatever came back is this step's output. Tool calls are not executed
+      // here — there is no context left to feed their results back into.
+      if (ctxWindDown) {
+        logRoute('end', 'ctx-budget');
+        console.warn(`[task-processor] ${stepLabel}: wind-down round returned ${result.content.length} chars${toolCallsFound.length ? ` (ignoring ${toolCallsFound.length} tool call(s))` : ''}`);
+        finalContent = result.content;
+        break;
+      }
 
       if (toolCallsFound.length > 0) {
         // Track repeat tool calls
@@ -454,6 +492,7 @@ CRITICAL RULES:
           llmMessages.push({ role: 'user', content: `Tool "${overName}" called ${overCount} times with identical arguments and is now DISABLED. Provide your final answer NOW using the results you have. Do NOT call any tools.` });
           const forceResult = await streamRound(llmMessages, true);
           if (forceResult.usage) lastUsage = forceResult.usage;
+          lastFinishReason = forceResult.finishReason;
           finalContent = forceResult.content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
           break;
         }
@@ -511,8 +550,10 @@ CRITICAL RULES:
     // Force answer if loop exhausted
     if (!finalContent) {
       llmMessages.push({ role: 'user', content: 'You have used all available tool rounds. Provide your best answer now. Do NOT call any tools.' });
+      promptTokens = await countPromptTokens(llmMessages);
       const forced = await streamRound(llmMessages, true);
       if (forced.usage) lastUsage = forced.usage;
+      lastFinishReason = forced.finishReason;
       finalContent = forced.content;
     }
 
@@ -525,10 +566,11 @@ CRITICAL RULES:
       }
     }
 
-    // Stream final content for this step
-    console.log(`[task-processor] step done: "${taskText.slice(0, 40)}" → ${finalContent ? finalContent.length + ' chars' : 'empty'}`);
-    if (finalContent) {
-      res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
+    // A "length" finish means the step ran out of context mid-sentence. Downstream steps read
+    // this output as fact, so mark the seam rather than passing a sentence that just stops.
+    if (finalContent && lastFinishReason === 'length') {
+      console.warn(`[task-processor] ${stepLabel}: output truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
+      finalContent += `\n\n---\n⚠ **Step output cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Anything the step had left to say is missing from this output.`;
     }
 
     // Extract saved filenames from tool results
@@ -542,7 +584,24 @@ CRITICAL RULES:
       } catch {}
     }
 
-    return { content: finalContent || '', usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+    // No output, no exception: the prompt filled the slot (llama-server answers 200 with an
+    // empty message and finish_reason "length"), or the safety strip removed content that was
+    // only a bare tool call. This step's output is the next step's ONLY context, so an empty
+    // one is a pipeline failure, not a quiet pass-through — stop and say why.
+    if (!finalContent) {
+      const detail = lastFinishReason === 'length'
+        ? `prompt reached ${promptTokens} of ${ctxLimit} tokens — no room left to write it`
+        : 'the model returned no content';
+      const errMsg = `Step produced no output after ${toolUses.length} tool call(s): ${detail}. The next step would have received nothing, so the pipeline stopped here.${stepFiles.length ? ` Files saved by this step are still on disk: ${stepFiles.map(f => f.filename).join(', ')}.` : ''}`;
+      console.warn(`[task-processor] ${stepLabel}: ${errMsg}`);
+      return { error: errMsg, content: '', usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+    }
+
+    // Stream final content for this step
+    console.log(`[task-processor] step done: "${taskText.slice(0, 40)}" → ${finalContent.length} chars`);
+    res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
+
+    return { content: finalContent, usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
 
   } catch (err) {
     if (err.name === 'AbortError') throw err;

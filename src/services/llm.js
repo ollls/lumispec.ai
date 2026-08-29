@@ -41,6 +41,68 @@ function convertVisionForClaude(messages) {
   });
 }
 
+// ── Prompt size ──────────────────────────────────────────
+
+// True size of the prompt about to be sent, in tokens.
+//
+// The obvious source — `timings.prompt_n` from the completion response — is the number of
+// tokens the server actually *processed*, so with KV cache reuse it reports 37 for a 64K
+// prompt. Anything budgeting context off that number never sees the wall coming. llama-server
+// exposes /tokenize, which is authoritative and costs ~50ms; the char estimate is the fallback
+// when it is unreachable or the backend is Claude.
+export async function countPromptTokens(messages) {
+  let text = '';
+  let images = 0;
+  for (const m of messages) {
+    if (typeof m.content === 'string') { text += m.content + '\n'; continue; }
+    for (const part of m.content || []) {
+      if (part.type === 'text') text += part.text + '\n';
+      else if (part.type === 'image_url' || part.type === 'image') images++;
+    }
+  }
+  const overhead = messages.length * 4 + images * 800;  // chat template + rough per-image cost
+  const fallback = Math.ceil(text.length / 3.5) + overhead;
+  if (config.llm.backend !== 'llama') return fallback;
+  try {
+    const res = await fetch(`${config.llama.baseUrl}/tokenize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text }),
+    });
+    if (!res.ok) return fallback;
+    const json = await res.json();
+    // Guard the shape, not the sum: `n + overhead || fallback` can never reach the fallback,
+    // because overhead is always non-zero — a response without `tokens` would quietly report
+    // ~80 tokens and switch the whole budget off.
+    const n = json.tokens?.length;
+    return n ? n + overhead : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Shrink the oldest tool-result messages in place so a context-starved final round has room
+// to actually write an answer. The most recent `keep` results are left intact — those are what
+// the answer is usually built from. Returns the number of characters freed.
+//
+// Tool-result messages are recognised two ways because both loops build them two ways: most
+// carry a `Tool "x" result:` / `⚠ TOOL ERROR` / `⚠ DENIED` prefix, but a result rendered as a
+// markdown table is pushed bare. What every one of them does carry is the round reminder the
+// loop appends after the results, so that suffix is the reliable marker.
+export function trimOldToolResults(messages, keep = 3, cap = 400) {
+  const isToolResult = (m) => m.role === 'user' && typeof m.content === 'string'
+    && (/^(Tool "|⚠ TOOL ERROR|⚠ DENIED)/.test(m.content) || /REMINDER: tool calls MUST use/.test(m.content));
+  const idxs = messages.map((m, i) => (isToolResult(m) ? i : -1)).filter(i => i >= 0);
+  let freed = 0;
+  for (const i of idxs.slice(0, Math.max(0, idxs.length - keep))) {
+    const c = messages[i].content;
+    if (c.length <= cap) continue;
+    messages[i] = { ...messages[i], content: `${c.slice(0, cap)}\n… [${c.length - cap} chars trimmed to free context]` };
+    freed += c.length - cap;
+  }
+  return freed;
+}
+
 // ── Streaming ────────────────────────────────────────────
 
 export async function streamChatCompletion(messages, { slotId, signal } = {}) {
