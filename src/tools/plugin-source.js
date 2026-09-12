@@ -1,8 +1,54 @@
 import { mkdir, writeFile, readFile, stat, unlink } from 'fs/promises';
-import { join, resolve, basename } from 'path';
+import { join, resolve, basename, extname } from 'path';
 import config from '../config.js';
 import { listTemplates, getTemplateByName } from '../services/templates.js';
 import { fixPythonBooleans, tagLineCount, extractAddedLines, detectUncitedClaims, validateCitations } from './index.js';
+
+// Single source of truth for "what counts as source": used by the tree action
+// and as the candidate set for grep, so grep can never wander into
+// node_modules/ or .git/ regardless of glob.
+const TREE_FIND_CMD = 'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort';
+
+// Extensions grep searches when no glob is given.
+const GREP_DEFAULT_EXTS = ['.js', '.json', '.html', '.css', '.md'];
+
+export async function listSourceFiles(sourceRoot) {
+  const { execSync } = await import('child_process');
+  const output = execSync(TREE_FIND_CMD, { cwd: sourceRoot, encoding: 'utf-8', timeout: 5000 });
+  return output.trim().split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
+}
+
+// Convert a file glob to a RegExp. Supports *, ?, **, and {a,b}.
+// A glob with no "/" matches the basename (like grep --include); a glob with a
+// "/" matches the root-relative path — so "src/tools/*.js" and
+// "**/plugin-etrade.js" both work. A leading "./" or "/" is ignored.
+export function globToRegex(glob) {
+  let g = glob.trim().replace(/^(\.\/|\/)+/, '');
+  const pathMode = g.includes('/');
+  let re = '';
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === '*') {
+      if (g[i + 1] === '*') {
+        i++;
+        if (g[i + 1] === '/') { i++; re += '(?:.*/)?'; } // "**/" → zero or more dirs
+        else re += '.*';
+      } else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else if (c === '{') {
+      const end = g.indexOf('}', i);
+      if (end === -1) { re += '\\{'; continue; }
+      re += '(?:' + g.slice(i + 1, end).split(',').map(s => s.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('|') + ')';
+      i = end;
+    } else re += c.replace(/[.+^$()|[\]\\]/g, '\\$&');
+  }
+  return { regex: new RegExp('^' + re + '$'), pathMode };
+}
+
+export function matchGlob(glob, relPath) {
+  const { regex, pathMode } = globToRegex(glob);
+  return regex.test(pathMode ? relPath : basename(relPath));
+}
 
 // Cite mode helper — runs the diff-preview claim highlighter on a markdown
 // file write/edit. Combines two checks:
@@ -143,7 +189,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
             const treeRoot = resolve(config.sourceDir);
             try {
               const output = execSync(
-                'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+                TREE_FIND_CMD,
                 { cwd: treeRoot, encoding: 'utf-8', timeout: 5000 }
               );
               const files = output.trim().split('\n').filter(Boolean);
@@ -163,12 +209,12 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
         + 'Actions:\n'
         + '- "tree": list all source files (respects .gitignore, excludes node_modules/data/logs)\n'
         + '- "read": read a file. Requires "path" (relative to project root, e.g. "src/server.js")\n'
-        + '- "grep": search source code. Requires "pattern" (regex). Optional "glob" to filter files (e.g. "*.js")',
+        + '- "grep": search source code. Requires "pattern" (extended regex). Optional "glob" to filter files: no "/" matches file names (e.g. "*.js"), with "/" matches the path from project root (e.g. "src/tools/*.js", "**/plugin-etrade.js"). node_modules/.git/data/logs are always excluded',
       parameters: {
         action: 'string (tree, read, grep)',
         path: 'string (optional, relative file path for read)',
         pattern: 'string (optional, regex for grep)',
-        glob: 'string (optional, file glob for grep)',
+        glob: 'string (optional, file glob for grep: "*.js" matches names, "src/**/*.js" matches paths)',
       },
       execute: async ({ action, path: filePath, pattern, glob: fileGlob }) => {
         if (!action && filePath) action = 'read';
@@ -183,7 +229,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
             const { execSync } = await import('child_process');
             try {
               const output = execSync(
-                'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+                TREE_FIND_CMD,
                 { cwd: sourceRoot, encoding: 'utf-8', timeout: 5000 }
               );
               const files = output.trim().split('\n').filter(Boolean);
@@ -212,19 +258,62 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
           }
           case 'grep': {
             if (!pattern?.trim()) return { error: 'pattern is required for grep action' };
-            const { execSync } = await import('child_process');
+            const { execFileSync } = await import('child_process');
             try {
-              let cmd = `grep -rn --include="*.js" --include="*.json" --include="*.html" --include="*.css" --include="*.md"`;
-              if (fileGlob) cmd = `grep -rn --include="${fileGlob.replace(/"/g, '')}"`;
-              cmd += ` -E ${JSON.stringify(pattern)} . || true`;
-              const output = execSync(cmd, {
-                cwd: sourceRoot, encoding: 'utf-8', timeout: 10000, maxBuffer: 512 * 1024,
-              });
-              const lines = output.trim().split('\n').filter(Boolean);
-              if (lines.length > 50) {
-                return { pattern, matchCount: lines.length, matches: lines.slice(0, 50), truncated: true };
+              // Candidate set is the same file list "tree" returns, so
+              // node_modules/.git/data/logs are excluded no matter what glob
+              // the caller passes. Glob filtering is done here, path-aware,
+              // instead of via grep --include (which only ever sees basenames
+              // and silently matches nothing for globs containing "/").
+              const all = await listSourceFiles(sourceRoot);
+              const globStr = fileGlob?.trim();
+              const files = globStr
+                ? all.filter(f => matchGlob(globStr, f))
+                : all.filter(f => GREP_DEFAULT_EXTS.includes(extname(f)));
+              if (!files.length) {
+                return {
+                  pattern, glob: globStr || null, filesSearched: 0, matchCount: 0, matches: [],
+                  warning: globStr
+                    ? `glob "${globStr}" matched no source files — nothing was searched. Globs without "/" match the file name (e.g. "*.js"); globs with "/" match the path from the project root (e.g. "src/tools/*.js", "**/plugin-etrade.js"). Use action "tree" to list files.`
+                    : 'no source files with a searchable extension found',
+                };
               }
-              return { pattern, matchCount: lines.length, matches: lines };
+              const lines = [];
+              const CHUNK = 500;
+              const MAX_OUT = 4 * 1024 * 1024;
+              let overflowed = false;
+              for (let i = 0; i < files.length && !overflowed; i += CHUNK) {
+                try {
+                  // -I skips binary files (screenshots, .node addons) instead of
+                  // emitting "binary file matches" noise
+                  const out = execFileSync('grep', ['-nHIE', '-e', pattern, '--', ...files.slice(i, i + CHUNK)], {
+                    cwd: sourceRoot, encoding: 'utf-8', timeout: 10000, maxBuffer: MAX_OUT, stdio: ['ignore', 'pipe', 'pipe'],
+                  });
+                  lines.push(...out.split('\n').filter(Boolean));
+                } catch (err) {
+                  // grep exits 1 when nothing matched; anything else is real
+                  if (err.status === 1) { if (err.stdout) lines.push(...err.stdout.split('\n').filter(Boolean)); continue; }
+                  if (err.code === 'ENOBUFS') {
+                    // Output exceeded maxBuffer. Keep what arrived (minus a
+                    // possibly cut-off last line) and report it as partial
+                    // rather than failing the whole call.
+                    const partial = (err.stdout || '').split('\n');
+                    partial.pop();
+                    lines.push(...partial.filter(Boolean));
+                    overflowed = true;
+                    continue;
+                  }
+                  if (err.status === 2 && /regex|Unmatched|Invalid/i.test(err.stderr || '')) return { error: `Invalid regex: ${(err.stderr || '').trim()}` };
+                  throw err;
+                }
+              }
+              const base = { pattern, glob: globStr || null, filesSearched: files.length, matchCount: lines.length };
+              if (overflowed) {
+                base.matchCount = `${lines.length}+`;
+                base.warning = `output exceeded ${MAX_OUT / 1024 / 1024}MB; matchCount is a lower bound. Narrow the pattern or add a glob.`;
+              }
+              if (lines.length > 50 || overflowed) return { ...base, matches: lines.slice(0, 50), truncated: true };
+              return { ...base, matches: lines };
             } catch (err) {
               return { error: err.message };
             }
