@@ -8,11 +8,15 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
-## ✨ v1.1.0 highlights
+## ✨ v1.3.0 highlights
 
-- 📝 **Cite mode** *(new)* — code-citation discipline that guards against documentation hallucination. When on (default), architectural claims in `.md` writes and wiki entries require `(file:line)` citations: the diff preview soft-warns on uncited claims, and `wiki_index` hard-refuses entries whose citations don't resolve on disk. See [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md).
+- 🧮 **Token-bounded tool loops** *(new)* — both loops measure the real prompt via `/tokenize` every round and wind down at 80% of the live slot's `n_ctx`. Truncated answers are marked, empty ones keep their tool results, and an empty pipeline step halts the run instead of poisoning the next one.
+- ⚡ **Stable prompt prefix** *(new)* — the clock lives on the user message, not the system prompt, so llama-server's KV cache prefix survives across turns: ~6,400 processed prompt tokens per turn → ~80.
+- 🧠 **Retain toggle** *(new)* — send the model's own reasoning back as `reasoning_content` so it sees its prior thinking in later rounds and turns. Off by default. See [`docs/RETAIN.md`](docs/RETAIN.md).
+- 🔍 **Route decision logging** *(new)* — `ROUTE_LOG=1` writes a JSONL record per tool-loop routing decision; the finance fabrication guard no longer fires on grounded answers.
+- 📝 **Cite mode** — code-citation discipline that guards against documentation hallucination. When on (default), architectural claims in `.md` writes and wiki entries require `(file:line)` citations: the diff preview soft-warns on uncited claims, and `wiki_index` hard-refuses entries whose citations don't resolve on disk. See [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md).
 - 🛠️ **Self-aware code tools** — point the assistant at any project (`SOURCE_DIR`) and it can read, edit, write, delete, run tests, and use git on it. Every change shows a color-coded diff preview before applying. Git pushes always require approval; destructive ops (`reset --hard`, `push --force`, `clean -f`, `rebase`) are blocked.
-- 🌐 **Three search engines, three fetch modes** — Tavily, Keiro, and DuckDuckGo run in parallel and merge by URL. Stealth (default, `got-scraping`) and full Puppeteer browser modes handle anti-bot pages.
+- 🌐 **Three search engines, tiered fetch** — Tavily, Keiro, and DuckDuckGo run in parallel and merge by URL. The default `auto` fetch mode tries a stealth HTTP fetch (`got-scraping`) and escalates to a shared, idle-closing Puppeteer browser only when a page is blocked or empty.
 - 📊 **E\*TRADE brokerage** — accounts, options chains with full Greeks, transactions, real-time quotes, gain/loss with cost basis. The LLM never does math itself — Python does.
 - 🧮 **Precision mode** — auto-enabled for finance work; forces `run_python` for every calculation, blocks `iterrows()`/row loops, and refuses fabricated numbers.
 - 🧩 **Plugin architecture** — 7 hot-loadable plugin groups (core, web, execution, source, travel, finance, wiki) with declarative dependencies. Toggle them at runtime from the Plugins panel.
@@ -22,7 +26,7 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.1.0.md`](releases/1.1.0.md) (latest) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.3.0.md`](releases/1.3.0.md) (latest) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -321,7 +325,10 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/AUTO_DEPENDECY_FOR_PLUGINS.md`](docs/AUTO_DEPENDECY_FOR_PLUGINS.md) | Cross-plugin dependency cascade design |
 | [`docs/TOOL_MODULARIZATION.md`](docs/TOOL_MODULARIZATION.md) | History of the prompt-modularization refactor |
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
-| [`releases/1.1.0.md`](releases/1.1.0.md) | v1.1.0 release notes (latest) |
+| [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
+| [`releases/1.3.0.md`](releases/1.3.0.md) | v1.3.0 release notes (latest) |
+| [`releases/1.2.0.md`](releases/1.2.0.md) | v1.2.0 release notes |
+| [`releases/1.1.0.md`](releases/1.1.0.md) | v1.1.0 release notes |
 | [`releases/1.0.0.md`](releases/1.0.0.md) | v1.0.0 release notes |
 
 ---
