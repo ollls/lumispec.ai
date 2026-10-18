@@ -56,8 +56,8 @@ router.post('/:id/tasks', async (req, res) => {
   const conv = conversations.get(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
-  const { tasks, applets, autorun, review, precision, cite } = req.body;
-  console.log(`[task-processor] autorun=${autorun} cite=${!!cite}`);
+  const { tasks, applets, autorun, review, precision, cite, retain } = req.body;
+  console.log(`[task-processor] autorun=${autorun} cite=${!!cite} retain=${!!retain}`);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -133,7 +133,7 @@ router.post('/:id/tasks', async (req, res) => {
           res.write(`data: ${JSON.stringify({ subtask_start: { taskIndex: ti, subtaskIndex: si, total: task.subtasks.length, text: task.subtasks[si] } })}\n\n`);
 
           const result = await processOneStep(task.subtasks[si], prev, {
-            systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
+            systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, retain: !!retain, conv, res,
             stepLabel: `Subtask ${si + 1}/${task.subtasks.length} of Task ${ti + 1}`,
             allTasks: normalizedTasks, parentText: task.text,
             step: { task: ti, subtask: si },
@@ -184,7 +184,7 @@ router.post('/:id/tasks', async (req, res) => {
         res.write(`data: ${JSON.stringify({ task_start: { index: ti, total: normalizedTasks.length, text: task.text } })}\n\n`);
 
         const result = await processOneStep(task.text, prev, {
-          systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, conv, res,
+          systemPrompt, slotId, abortController, autorun: !!autorun, cite: !!cite, retain: !!retain, conv, res,
           stepLabel: `Task ${ti + 1}/${normalizedTasks.length}`,
           allTasks: normalizedTasks,
           step: { task: ti, subtask: null },
@@ -270,7 +270,7 @@ router.post('/:id/tasks', async (req, res) => {
 });
 
 // Process one task/subtask step with full tool loop
-async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, cite, conv, res, stepLabel, allTasks, parentText = '', step = null }) {
+async function processOneStep(taskText, prev, { systemPrompt, slotId, abortController, autorun, cite, retain = false, conv, res, stepLabel, allTasks, parentText = '', step = null }) {
   const { result: prevResult } = prev;
   const savedFiles = [...prev.files];
   console.log(`[task-processor] ${stepLabel}: "${taskText.slice(0, 80)}" | prevResult: ${prevResult ? prevResult.length + ' chars' : 'none'} | savedFiles: ${savedFiles.length}`);
@@ -312,6 +312,10 @@ CRITICAL RULES:
 
   let accumulatedReasoning = '';
   const toolUses = [];
+  // Retain: attach the round's own reasoning as reasoning_content — same helper as conversations.js.
+  // Reasoning stays inside the step; prev.result between steps is content only.
+  const asAssistant = (content, reasoning) =>
+    retain && reasoning ? { role: 'assistant', content, reasoning_content: reasoning } : { role: 'assistant', content };
   const toolCallSigCounts = {};
   const toolCallSigs = new Set();
 
@@ -328,6 +332,7 @@ CRITICAL RULES:
       signal: abortController.signal,
     });
     let content = '';
+    let reasoning = '';
     let usage = null;
     let finishReason = null;
     let suppressToolContent = false;
@@ -339,6 +344,7 @@ CRITICAL RULES:
       const delta = chunk.choices?.[0]?.delta;
       if (delta?.reasoning_content) {
         accumulatedReasoning += delta.reasoning_content;
+        reasoning += delta.reasoning_content;
         res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
       }
       if (delta?.content) {
@@ -372,7 +378,7 @@ CRITICAL RULES:
       res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
     }
 
-    return { content, usage, finishReason };
+    return { content, reasoning, usage, finishReason };
   }
 
   let finalContent = '';
@@ -489,7 +495,7 @@ CRITICAL RULES:
             }
           }
 
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: `Tool "${overName}" called ${overCount} times with identical arguments and is now DISABLED. Provide your final answer NOW using the results you have. Do NOT call any tools.` });
           const forceResult = await streamRound(llmMessages, true);
           if (forceResult.usage) lastUsage = forceResult.usage;
@@ -521,7 +527,7 @@ CRITICAL RULES:
           resultParts.push(buildToolResultText(toolCallsFound[i].name, results[i]));
         }
 
-        llmMessages.push({ role: 'assistant', content: result.content });
+        llmMessages.push(asAssistant(result.content, result.reasoning));
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + `\n\nRounds left: ${roundsLeft}. REMINDER: tool calls MUST use <tool_call></tool_call> tags.` });
 
@@ -532,13 +538,13 @@ CRITICAL RULES:
         const hasToolCallTag = /<tool_call/i.test(result.content);
         if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
           logRoute('repair', 'bare-json');
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         if (!hasApplet && hasToolCallTag) {
           logRoute('repair', 'malformed-tag');
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }

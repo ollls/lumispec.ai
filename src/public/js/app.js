@@ -16,6 +16,7 @@ const state = {
   listMode: false, // bullet list editing mode
   reviewEnabled: localStorage.getItem('reviewEnabled') === 'true', // pause after each task step
   precisionEnabled: localStorage.getItem('precisionEnabled') === 'true', // strict computation mode
+  retainEnabled: localStorage.getItem('retainEnabled') === 'true', // send the model's reasoning back as context (default off)
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
   sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
   sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
@@ -1293,6 +1294,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
         autorun: state.autorunEnabled,
         precision: state.precisionEnabled,
         cite: state.citeEnabled,
+        retain: state.retainEnabled,
         sessionInit: sessionInit || false,
       }),
       signal: state.abortController.signal,
@@ -1635,6 +1637,7 @@ async function sendTasks(tasks, displayText) {
         autorun: state.autorunEnabled,
         precision: state.precisionEnabled,
         cite: state.citeEnabled,
+        retain: state.retainEnabled,
         review: state.reviewEnabled,
       }),
       signal: state.abortController.signal,
@@ -2668,6 +2671,14 @@ reviewToggle.checked = state.reviewEnabled;
 reviewToggle.addEventListener('change', () => {
   state.reviewEnabled = reviewToggle.checked;
   localStorage.setItem('reviewEnabled', state.reviewEnabled);
+});
+
+// Retain toggle (reasoning_content sent back to the model; Think shows it, Retain keeps it)
+const retainToggle = document.getElementById('retain-toggle');
+retainToggle.checked = state.retainEnabled;
+retainToggle.addEventListener('change', () => {
+  state.retainEnabled = retainToggle.checked;
+  localStorage.setItem('retainEnabled', state.retainEnabled);
 });
 
 // Precision toggle
