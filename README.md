@@ -58,7 +58,7 @@ Smaller GPUs work too — drop to an 8B model and a smaller `--ctx-size`; see th
 
 ## 🧠 Choosing & running your model
 
-Any llama.cpp-compatible GGUF works. The two launch scripts below are the ones actually used to develop this app on an RTX 5090 (32 GB); copy either into a file, `chmod +x`, and run it in a separate terminal before `npm start`. The server defaults to `http://localhost:8080`, matching the default `LLAMA_URL`.
+Any llama.cpp-compatible GGUF works. The three launch scripts below are the ones actually used to develop this app on an RTX 5090 (32 GB); copy one into a file, `chmod +x`, and run it in a separate terminal before `npm start`. The server defaults to `http://localhost:8080`, matching the default `LLAMA_URL`.
 
 ### ✅ Qwen3.8-27B (recommended — this is what we run)
 
@@ -111,6 +111,109 @@ Sampling values are Qwen's own recommendations (`temp 1.0`, `top-p 0.95`, `top-k
 own full `--ctx-size`, so VRAM cost scales with slot count while the usable window per conversation
 does not change. At 64K × 4 the card sits around 30.8 GB of 32 GB. Drop to `-np 1` if you want that
 headroom back; it does not shrink any single conversation's window.
+
+### 🔸 Qwen3.8-27B Defiance (uncensored variant, 40 reasoning modes)
+
+Same 27B Qwen3.8 architecture as above, different weights and a different chat template.
+[`ttindall/Qwen3.8-27B-Defiance-Uncensored-MTP-GGUF`](https://huggingface.co/ttindall/Qwen3.8-27B-Defiance-Uncensored-MTP-GGUF)
+packages two community pieces: HauhauCS's refusal-removed Qwen3.8-27B weights (byte-identical to the
+upstream release) and DavidAU's "Turbo-Brilliance" chat template, which turns 40 named reasoning
+constructs — `coder`, `einstein` (a 20-agent panel), `socrates`, `house`, `joker`, … — into a
+one-word switch. Apache-2.0. The `Q6_K_P` quant is 25.9 GB.
+
+> ⚠️ **This model is uncensored.** The weights have refusals removed and every mode's system turn
+> tells the model to answer without disclaimers. It will write what other models decline to. You are
+> responsible for what you generate.
+
+```bash
+#!/bin/bash
+# run-defiance-server-5090.sh — Qwen3.8-27B Defiance Uncensored (MTP)
+# Uses the MTP head fused into the main GGUF (blk.64.nextn.*).
+# Do NOT add -hfd ...:FastMTP-32K: that draft has a 32K-trimmed vocab (FR-Spec)
+# and needs d2t remapping that mainline draft-mtp does not support.
+export CUDA_VISIBLE_DEVICES=0
+
+TEMPLATE=./defiance-27b.jinja
+if [ ! -f "$TEMPLATE" ]; then
+  hf download ttindall/Qwen3.8-27B-Defiance-Uncensored-MTP-GGUF defiance-27b.jinja --local-dir .
+fi
+
+./llama.cpp/build/bin/llama-server \
+  --jinja \
+  --chat-template-file "$TEMPLATE" \
+  -hf ttindall/Qwen3.8-27B-Defiance-Uncensored-MTP-GGUF:Q6_K_P \
+  --n-gpu-layers 99 \
+  --ctx-size 64000 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 3 \
+  --spec-draft-p-min 0 \
+  --reasoning on \
+  --reasoning-format deepseek \
+  --reasoning-budget 16384 \
+  --temp 0.7 \
+  --top-p 0.95 \
+  --top-k 64 \
+  --min-p 0.05 \
+  --repeat-penalty 1.0 \
+  --port 8080
+```
+
+Run it from the directory that contains `llama.cpp/` — every path is relative. The first run
+downloads the template with the `hf` CLI (`pip install huggingface_hub`) and pulls the 25.9 GB GGUF
+into the Hugging Face cache.
+
+What differs from the stock Qwen script, and why:
+
+| Flag | Why |
+|---|---|
+| `--chat-template-file defiance-27b.jinja` | The modes live in the template, not the weights. The GGUF embeds an earlier copy; the file from the repo adds two post-release fixes (the preamble switch and a readable error for a bad mode name). Any other template drops every mode and you are left with plain uncensored Qwen. |
+| `--spec-type draft-mtp` with **no** draft model | The MTP head is fused into the main GGUF as `blk.64.nextn.*`, so speculative decoding needs no second file. The repo also ships a `FastMTP-32K` draft GGUF — **do not** pass it via `-hfd`. Its vocabulary is trimmed to 32K entries (FR-Spec) and needs a draft-to-target token remap that mainline llama.cpp's `draft-mtp` does not implement. |
+| `--spec-draft-n-max 3` / `--spec-draft-p-min 0` | The model card's recommended draft settings. Note these are explicit where the stock script uses `--spec-default`. |
+| `--reasoning on` + `--reasoning-format deepseek` | Forces the thinking block on and returns it in `message.reasoning_content` — the exact field this app streams as the "Thinking" panel and sends back when **Retain** is on. |
+| `--reasoning-budget 16384` | Caps one response's thinking at 16K tokens. The app's 80% wind-down measures the *prompt*, not the current generation, so without this cap a single long think could still run the slot into the wall. |
+| `temp 0.7`, `top-k 64`, `min-p 0.05`, `repeat-penalty 1.0` | The model card's sampling. Different from Qwen's stock recommendations (`temp 1.0`, `top-k 20`, `min-p 0.0`), so don't carry the values across. |
+
+**Picking a mode.** Type a tag anywhere in a user message: `{REASON:coder}` for thinking mode,
+`{REASON:icoder}` (an `i` prefix) for the faster instruct form without a thinking block,
+`{REASON:help}` for DavidAU's own menu. The template strips the tag, applies the last one it finds,
+and keeps that mode for the rest of the chat. With no tag it runs `xhigh`, the stock Qwen3.8 default.
+The modes, from the model card:
+
+| Group | Modes |
+|---|---|
+| Native | `xhigh` (default), `medium`, `low`, `off`, `help` |
+| Frameworks | `omni`, `deeptree`, `hyper`, `socrates`, `logic`, `ultra` |
+| Frameworks, xhigh-boosted | `xomni`, `xdeeptree`, `xhyper`, `xsocrates`, `xlogic`, `xeinstein`, `xspoon` |
+| Panels | `einstein` (20 agents), `spoon` (5 experts), `holodeck` |
+| Specialists | `prompt`, `007`, `musk`, `curie`, `joe` |
+| Characters | `pkd`, `neo`, `stark`, `matlock`, `house`, `vader`, `joker`, `quinn` |
+| Supers | `brainstorm`, `business`, `coder`, `comedy`, `story`, `teacher` |
+
+How it fits this app:
+
+- **System prompt.** The template prepends the mode's instructions to the app's own system prompt in
+  the same system turn, so the tool protocol, routing rules and precision rules are all still there.
+  It raises an error on any system message after the first; the app sends exactly one, so that is fine.
+- **Mode cost.** `xhigh` and `low` add one sentence; `medium` adds nothing. The persona and super
+  modes (`coder`, `teacher`, `house`, …) are 2,500–3,600 tokens of system prompt on **every** turn.
+  Because that text lands in message one, switching modes mid-chat also invalidates the slot's KV
+  cache prefix — start a new chat when you switch, as the model card advises.
+- **Tool calls.** The template carries Qwen's native XML `<function=…>` tool format, but this app
+  never sends a `tools` array — it uses its own prompt-based JSON `<tool_call>` protocol — so that
+  path is never rendered. Nothing changes on the app side.
+- **Retain.** The template renders `reasoning_content` for every assistant message, same as stock
+  Qwen3.8, so the Retain toggle works unchanged.
+
+> ⚠️ **Not the proven-stable config.** This script has far fewer long tool-flow hours behind it than
+> the stock Qwen block above. It also includes `--spec-draft-n-max 3`, one of the flags present in
+> the variant that produced the `Xid 8` hang described in that section. The model author tested only
+> `IQ4_XS` on a 24 GB card and has not run `Q6_K_P` at all. The same rule applies: change one flag at
+> a time and watch `journalctl -k | grep Xid`. If 25.9 GB of weights plus four 64K slots of q8 KV
+> cache does not fit your card, add `-np 1` or lower `--ctx-size`; the app's context budget follows
+> the live slot automatically.
 
 ### 🔹 Gemma (alternative)
 
