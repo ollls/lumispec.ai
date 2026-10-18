@@ -87,7 +87,9 @@ function updateTitle(id, title) {
 function addMessage(id, role, content) {
   const conv = store.get(id);
   if (!conv) return null;
-  const msg = { role, content };
+  // sentAt lets the LLM history rebuild re-derive the same [Now: ...] stamp for a user message on
+  // every later turn, so the prompt prefix stays byte-identical for KV cache reuse.
+  const msg = { role, content, sentAt: new Date().toISOString() };
   conv.messages.push(msg);
   conv.updatedAt = new Date().toISOString();
   if (conv.pinned) savePinned(id);

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
 
@@ -307,7 +307,8 @@ CRITICAL RULES:
   const userContent = contextParts.length > 0
     ? `${contextParts.join('\n\n')}\n\n---\n\n## Current Task\n\n${taskText}`
     : taskText;
-  llmMessages.push({ role: 'user', content: userContent });
+  // Date/time stamp on the step's user message, not the system prompt — keeps the prefix stable.
+  llmMessages.push({ role: 'user', content: `${userContent}\n\n${getDatetimeStamp()}` });
 
   let accumulatedReasoning = '';
   const toolUses = [];

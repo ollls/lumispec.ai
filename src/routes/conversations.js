@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
@@ -135,7 +135,7 @@ router.post('/:id/messages', async (req, res) => {
   const storedContent = images && images.length > 0
     ? { text: displayContent, images }
     : displayContent;
-  conversations.addMessage(conv.id, 'user', storedContent);
+  const userMsg = conversations.addMessage(conv.id, 'user', storedContent);
 
   // Expand [template: name] tags — inject saved applet HTML as context for the LLM
   const templateRe = /\[template:\s*([^\]]+)\]/gi;
@@ -191,11 +191,15 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;
+    // Earlier user messages are re-stamped from their sentAt, byte-identical to when they were
+    // sent, so the slot's KV cache prefix keeps matching. Messages without sentAt (older pinned
+    // conversations) are sent as stored.
+    const stampUser = (text, msg) => msg.sentAt ? `${text}\n\n${getDatetimeStamp(new Date(msg.sentAt))}` : text;
     const historyMessages = conv.messages.slice(0, -1).map(msg => {
       if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
         const parts = [];
         if (msg.content.text) {
-          parts.push({ type: 'text', text: msg.content.text });
+          parts.push({ type: 'text', text: stampUser(msg.content.text, msg) });
         }
         for (const img of msg.content.images) {
           parts.push({
@@ -211,14 +215,20 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         const stripped = text.replace(appletRe, (_m, type) => `[Applet: ${type} visualization]`);
         return { role: 'assistant', content: stripped };
       }
+      if (msg.role === 'user' && typeof msg.content === 'string') {
+        return { role: 'user', content: stampUser(msg.content, msg) };
+      }
       return msg;
     });
 
     // Use expanded content (with template HTML) for the current user message
     // History stores unexpanded version for clean display, but LLM needs the expanded one
+    // The date/time stamp goes on the newest message only (not stored, not in the system prompt),
+    // so earlier turns stay byte-identical and the slot's KV cache prefix keeps matching.
+    const stamped = `${content}\n\n${getDatetimeStamp(new Date(userMsg.sentAt))}`;
     const currentUserMsg = images && images.length > 0
-      ? { role: 'user', content: [{ type: 'text', text: content }, ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } }))] }
-      : { role: 'user', content };
+      ? { role: 'user', content: [{ type: 'text', text: stamped }, ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } }))] }
+      : { role: 'user', content: stamped };
     const llmMessages = [
       { role: 'system', content: systemPrompt },
       ...historyMessages.slice(0, -1),
