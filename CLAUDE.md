@@ -288,6 +288,7 @@ reuse reads 37 for a 64K prompt and would never see the wall coming.
 
 The limit comes from the live slot (`slots.getSlotContextSize()`), so raising `--ctx-size` raises
 the budget with no code change. `LLAMA_MAX_CONTEXT` is only the fallback when slots are unreachable.
+`countPromptTokens()` also counts `reasoning_content` on assistant messages (see **Retain Toggle**).
 
 **Empty / truncated answers are never silent:**
 - `finish_reason: "length"` with content → a "⚠ Answer cut off at the context limit" marker is appended
@@ -436,6 +437,39 @@ Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/think
 
 **Session init behavior**: Think is temporarily disabled during session init prompts (auto-submitted when clicking a colored New Chat button), then restored to its previous state after the response completes.
 
+### Retain Toggle
+Checkbox labeled "Retain" next to Think. Think shows the model's reasoning; Retain sends it back. When on,
+every assistant message handed to llama-server carries `reasoning_content`, which the Qwen chat template
+renders as that message's `<think>` block. Default **off** — retained reasoning makes every prompt larger.
+
+**Toggle**: State in `state.retainEnabled`, persisted to localStorage (default: off). Sent as
+`retain: true|false` in both the message POST body and the task-pipeline POST body.
+
+**What gets attached** (`asAssistant()` helper in `conversations.js` and `taskProcessor.js`):
+- Tool-loop rounds: each round's assistant message carries **that round's own** reasoning, so the
+  prompt prefix matches what the model generated and the KV cache can reuse it.
+- History rebuild: each stored assistant message carries its stored `reasoning`, which is the whole
+  turn's thinking concatenated across rounds (tool rounds are not replayed in history, so the final
+  answer is the only message to attach it to).
+- Task pipeline: reasoning stays inside a step. `prev.result` between steps is content only.
+- The flag is read at send time: toggling off drops all prior reasoning from the next prompt.
+
+**No server flag needed**: the Qwen3.8 template preserves reasoning for every assistant message when
+`preserve_thinking` is undefined, and llama.cpp treats `--reasoning-preserve` as on by default. The
+template reads only the `reasoning_content` field — it does not parse `<think>` tags out of `content`,
+so inlining tags would produce a double think block.
+
+**Context budget**: `countPromptTokens()` includes `reasoning_content`, so the 80% wind-down measures
+the true prompt. Nothing else changes — retained reasoning just makes the wall arrive sooner.
+
+**KV cache**: with Retain on, each re-sent assistant turn matches what the model generated, so the
+slot's cached prefix extends through the whole history and a new turn processes only the new
+question (~80 tokens measured vs ~780–1,100 when the toggle flips and the history is re-read). This
+depends on the system prompt being stable — see the date/time bullet under **Key Architecture Details**.
+
+**Claude backend**: `reasoning_content` is stripped in `mergeConsecutiveRoles()` before the request;
+the Anthropic API rejects unknown message fields.
+
 ### Session System
 Colored session types that define conversation categories. Each conversation is associated with a session color. Session prompts are saved per color and auto-submitted when creating a new chat.
 
@@ -535,7 +569,7 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 - `[DONE]` — stream complete
 
 ## UI Layout
-Full-width top bar spanning entire window width with: colored session `+` buttons (left, 7 primary + 3 collapsible extra), Plugins button, status indicator grid (2 rows: core + APIs), menus (Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Plugins config opens as a full-width panel overlaying the chat area. Input area has textarea with vertical button stack (Send/Stop/Save Prompt/Save Session), list mode button, and checkboxes (Applets/Autorun/Think/Precision/Taskmaster/Review).
+Full-width top bar spanning entire window width with: colored session `+` buttons (left, 7 primary + 3 collapsible extra), Plugins button, status indicator grid (2 rows: core + APIs), menus (Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Plugins config opens as a full-width panel overlaying the chat area. Input area has textarea with vertical button stack (Send/Stop/Save Prompt/Save Session), list mode button, and checkboxes (Applets/Autorun/Think/Retain/Precision/Taskmaster/Review).
 
 ### Conversation Pinning
 Pin button (📌) in sidebar persists conversations to disk across server restarts. Compact button (≡) on pinned conversations sends the full conversation to the LLM for summarization — messages are irreversibly replaced with a structured summary preserving outcomes, decisions, and lessons learned. Two-click confirmation (click → "Compact?" → click again). Especially useful for long coding sessions with many tool rounds. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
@@ -550,6 +584,14 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 - Vision: images sent as base64 `image_url` parts in OpenAI multipart format
 - Template `[template: name]` expansion tells LLM to fetch fresh data first, update all dates/values, keep layout intact
 - Conversations auto-titled from first visible user message text (truncated to 60 chars); hidden session init prompts skipped
+- **Date/time is never in the system prompt.** `getDatetimeStamp(date)` (`src/tools/index.js`) renders a
+  `[Now: ...]` line that is appended to every user message *as sent to the LLM*, never stored. Every
+  stored message carries `sentAt` (set in `addMessage`), and the history rebuild re-derives each user
+  message's stamp from it, so earlier turns are byte-identical across requests. The system prompt is
+  therefore stable between turns and llama-server's KV cache prefix holds: measured 6,393 processed
+  prompt tokens on a cold slot, then ~80 per turn with Retain on (only the new question). A clock in the
+  system prompt used to force a full re-prefill on every turn. Messages without `sentAt` (older pinned
+  conversations) are sent as stored. The pipeline stamps each step's user message at step time.
 - Prompts/sessions titled by LLM via separate non-streaming completion (defensive prompt with triple-backtick wrapping, HTML stripping, error/refusal detection)
 - Weather tool auto-adjusts `startDate` to tomorrow if today or earlier (LiteAPI requirement)
 - Search engine switchable at runtime via POST `/api/health/search`

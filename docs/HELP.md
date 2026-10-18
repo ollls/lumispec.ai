@@ -53,6 +53,7 @@ Saved HTML visualizations (charts, dashboards). Click a template to insert a `[t
 - **Applets** — when on, the AI can create interactive charts and visualizations in your chat
 - **Autorun** — when on, code execution, shell commands, and source code edits run without asking for approval first (except project switching and git push, which always ask)
 - **Think** — when on, shows the AI's reasoning process and tool usage. Turn off for cleaner output
+- **Retain** — when on, the AI keeps its own earlier reasoning in mind for later steps and later questions. Uses more of the context window, so long conversations hit the limit sooner. Off by default
 
 ## What the AI Can Do
 
