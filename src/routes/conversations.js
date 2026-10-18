@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
@@ -125,6 +125,7 @@ router.post('/:id/messages', async (req, res) => {
   const autorun = !!req.body.autorun;
   const precision = !!req.body.precision;
   const cite = !!req.body.cite;
+  const retain = !!req.body.retain; // send the model's own reasoning back as reasoning_content
   const sessionInit = !!req.body.sessionInit;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
@@ -135,7 +136,7 @@ router.post('/:id/messages', async (req, res) => {
   const storedContent = images && images.length > 0
     ? { text: displayContent, images }
     : displayContent;
-  conversations.addMessage(conv.id, 'user', storedContent);
+  const userMsg = conversations.addMessage(conv.id, 'user', storedContent);
 
   // Expand [template: name] tags — inject saved applet HTML as context for the LLM
   const templateRe = /\[template:\s*([^\]]+)\]/gi;
@@ -183,7 +184,15 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
   // llama-server dying mid-stream (GPU fault, OOM, restart) lands here with rounds of tool
   // results already gathered — those are the expensive part of the turn and must survive.
   let accumulatedReasoning = '';
+  let lastRoundReasoning = '';   // reasoning of the most recent streamRound call only
   const toolUses = [];
+
+  // Assistant message for the LLM array. With Retain on, the round's own reasoning is attached as
+  // reasoning_content so the template renders it as that round's <think> block and the KV prefix
+  // matches what the model generated. Every push site pushes the most recent round's content, so
+  // lastRoundReasoning is the right default.
+  const asAssistant = (content, reasoning = lastRoundReasoning) =>
+    retain && reasoning ? { role: 'assistant', content, reasoning_content: reasoning } : { role: 'assistant', content };
 
   try {
     // Build messages with system prompt for tool support
@@ -191,11 +200,15 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;
+    // Earlier user messages are re-stamped from their sentAt, byte-identical to when they were
+    // sent, so the slot's KV cache prefix keeps matching. Messages without sentAt (older pinned
+    // conversations) are sent as stored.
+    const stampUser = (text, msg) => msg.sentAt ? `${text}\n\n${getDatetimeStamp(new Date(msg.sentAt))}` : text;
     const historyMessages = conv.messages.slice(0, -1).map(msg => {
       if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
         const parts = [];
         if (msg.content.text) {
-          parts.push({ type: 'text', text: msg.content.text });
+          parts.push({ type: 'text', text: stampUser(msg.content.text, msg) });
         }
         for (const img of msg.content.images) {
           parts.push({
@@ -209,16 +222,25 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         const text = typeof msg.content === 'object' && msg.content.text
           ? msg.content.text : typeof msg.content === 'string' ? msg.content : '';
         const stripped = text.replace(appletRe, (_m, type) => `[Applet: ${type} visualization]`);
-        return { role: 'assistant', content: stripped };
+        // Retain: the stored turn reasoning (all rounds concatenated) rides along as reasoning_content,
+        // which the chat template renders as this turn's <think> block. Off: content only, as before.
+        const reasoning = retain && typeof msg.content === 'object' ? msg.content.reasoning : undefined;
+        return reasoning ? { role: 'assistant', content: stripped, reasoning_content: reasoning } : { role: 'assistant', content: stripped };
+      }
+      if (msg.role === 'user' && typeof msg.content === 'string') {
+        return { role: 'user', content: stampUser(msg.content, msg) };
       }
       return msg;
     });
 
     // Use expanded content (with template HTML) for the current user message
     // History stores unexpanded version for clean display, but LLM needs the expanded one
+    // The date/time stamp goes on the newest message only (not stored, not in the system prompt),
+    // so earlier turns stay byte-identical and the slot's KV cache prefix keeps matching.
+    const stamped = `${content}\n\n${getDatetimeStamp(new Date(userMsg.sentAt))}`;
     const currentUserMsg = images && images.length > 0
-      ? { role: 'user', content: [{ type: 'text', text: content }, ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } }))] }
-      : { role: 'user', content };
+      ? { role: 'user', content: [{ type: 'text', text: stamped }, ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } }))] }
+      : { role: 'user', content: stamped };
     const llmMessages = [
       { role: 'system', content: systemPrompt },
       ...historyMessages.slice(0, -1),
@@ -231,6 +253,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     async function streamRound(messages, opts, isToolRound = false) {
       const { response, backend } = await streamChatCompletion(messages, opts);
       let content = '';
+      let reasoning = '';
       let usage = null;
       let finishReason = null;
       let suppressToolContent = false;
@@ -242,6 +265,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.reasoning_content) {
           accumulatedReasoning += delta.reasoning_content;
+          reasoning += delta.reasoning_content;
           res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
         }
         if (delta?.content) {
@@ -282,7 +306,8 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
       }
 
-      return { content, usage, finishReason };
+      lastRoundReasoning = reasoning;
+      return { content, reasoning, usage, finishReason };
     }
 
     const MAX_TOOL_ROUNDS = 20;
@@ -425,7 +450,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
               res.write(`data: ${JSON.stringify({ tool_use: { name: allowedCalls[i].name, result: results[i] } })}\n\n`);
             }
           }
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({
             role: 'user',
             content: `Tool "${overName}" has been called ${overCount} times with identical arguments and is now DISABLED for that call. You MUST provide your final answer NOW using the results you have so far. Do NOT call any tools. If there was an error, explain what went wrong.`,
@@ -525,7 +550,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
           }
         }
-        llmMessages.push({ role: 'assistant', content: result.content });
+        llmMessages.push(asAssistant(result.content, result.reasoning));
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
 
         // Track chain completions and nudge LLM toward next step (finance group only)
@@ -550,7 +575,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           if (!hadChainData && round < MAX_TOOL_ROUNDS - 1 && hadExpiryCall) {
             console.warn(`[tool-loop] round ${round + 1}: LLM stopped after prep data without fetching option chains — forcing continuation`);
             logRoute('repair', 'missing-chains');
-            llmMessages.push({ role: 'assistant', content: result.content });
+            llmMessages.push(asAssistant(result.content, result.reasoning));
             llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
             continue;
           }
@@ -564,7 +589,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
             if (chainQuoteLine) {
               console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use. Trigger line: ${chainQuoteLine}`);
               logRoute('repair', 'fabricated-greeks');
-              llmMessages.push({ role: 'assistant', content: result.content });
+              llmMessages.push(asAssistant(result.content, result.reasoning));
               llmMessages.push({ role: 'user', content: 'STOP. You are presenting option prices, Greeks, or strike data WITHOUT having fetched real data via the etrade_account tool. This data is fabricated. You MUST call etrade_account with action "optionchains" to get real data before presenting any option analysis. First call optionexpiry to get available dates, then optionchains with the expiry you need.' });
               continue;
             }
@@ -580,7 +605,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
           console.warn(`[tool-loop] response contains bare JSON tool call with no <tool_call> tag. Content (last 200 chars): ...${result.content.slice(-200)}`);
           logRoute('repair', 'bare-json');
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
@@ -588,7 +613,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
           logRoute('repair', 'malformed-tag');
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
-          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
@@ -635,7 +660,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           res.write(`data: ${JSON.stringify({ tool_use: { name: lastChanceCalls[i].name, result: results[i] } })}\n\n`);
         }
         // One final round for the answer
-        llmMessages.push({ role: 'assistant', content: forced.content });
+        llmMessages.push(asAssistant(forced.content, forced.reasoning));
         const resultParts = lastChanceCalls.map((tc, i) => `Tool "${tc.name}" result: ${results[i]}`);
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + '\n\nNow provide your final answer. Do NOT call any tools.' });
         const final2 = await streamRound(llmMessages, { slotId, signal: abortController.signal }, true);
@@ -674,7 +699,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           res.write(`data: ${JSON.stringify({ tool_use: { name: safetyCalls[i].name, result: results[i] } })}\n\n`);
         }
         // One more round for the actual answer — with a timeout to prevent hanging
-        llmMessages.push({ role: 'assistant', content: finalContent });
+        llmMessages.push(asAssistant(finalContent));
         const resultParts = safetyCalls.map((tc, i) => `Tool "${tc.name}" result: ${results[i]}`);
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + '\n\nNow provide your final answer based on the tool results above. Do NOT call any more tools — this is your LAST chance to respond.' });
         try {

@@ -657,19 +657,27 @@ Cite mode is active. The following discipline applies for the rest of this conve
 This discipline guards against documentation hallucination — the failure mode where LLM-authored docs contain confident, fluent claims about architecture that does not exist in the code. The wiki indexer and the diff preview will run mechanical checks on your output and flag uncited claims; broken citations in wiki entries are refused.`;
 
 // ── System prompt assembly ──────────────────────────
+// Timestamp line appended to the newest user message at send time (never stored). Kept out of the
+// system prompt so the prompt prefix stays byte-stable across turns — see getSystemPrompt().
+export function getDatetimeStamp(now = new Date()) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const offset = now.getTimezoneOffset();
+  const date = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return `[Now: ${date}, ${time} ${timezone} (UTC${offset > 0 ? '-' : '+'}${Math.abs(offset / 60)}h) — UTC ${now.toISOString()}]`;
+}
+
 export function getSystemPrompt({ applets = false, precision = false, cite = false } = {}) {
   const toolList = Object.entries(tools)
     .filter(([name]) => !disabledTools.has(name))
     .map(([name, t]) => `- ${name}: ${t.description}`)
     .join('\n');
 
-  const now = new Date();
-  const datetime = {
-    utc: now.toISOString(),
-    local: now.toString(),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    offset: now.getTimezoneOffset(),
-  };
+  // The timestamp itself is NOT rendered here — see getDatetimeStamp(). The system prompt is the
+  // first message of every request, and llama-server reuses its KV cache only up to the first
+  // token that differs from the previous prompt. A clock in message one broke the match on every
+  // turn and forced a full re-prefill; the stamp now rides on the newest user message instead.
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   // Inject precision rules if toggle is on OR finance group is active
   const precisionActive = precision || isToolGroupEnabled('finance');
@@ -716,8 +724,8 @@ You MUST NEVER create, invent, or hardcode data that was not returned by a tool 
 - Presenting invented information as real is a critical trust violation. The user relies on you for facts.
 
 ## Current Date and Time
-Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
-Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+The user's timezone is ${timezone}. Every user message ends with a \`[Now: ...]\` line giving the date and time it was sent — added automatically, not typed by the user. The one on the latest message is the current date and time.
+Use that date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
 
 ## File Access

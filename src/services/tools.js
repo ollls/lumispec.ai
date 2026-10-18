@@ -4,6 +4,7 @@ export {
   listTools,
   setToolEnabled,
   getSystemPrompt,
+  getDatetimeStamp,
   parseToolCalls,
   executeTool,
   requestConfirmation,

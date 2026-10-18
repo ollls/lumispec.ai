@@ -20,6 +20,8 @@
 - **Streaming SSE** — real-time token streaming for both backends
 - **Qwen3 reasoning support** — `reasoning_content` field extracted and streamed separately as collapsible "Thinking" blocks
 - **Think block stripping** — `<think>...</think>` blocks auto-removed from context and final output
+- **Stable prompt prefix** — the `[Now: ...]` date/time stamp rides on each user message (re-derived from the stored `sentAt`), not the system prompt, so llama-server's KV cache prefix holds across turns
+- **Retain toggle** — sends the model's reasoning back as `reasoning_content` on every assistant message (tool rounds and history), so the model sees its prior thinking; default off, counted by the context budget
 - **Vision support** — auto-detected from model capabilities; images sent as base64 in OpenAI multipart format
 - **Claude vision conversion** — automatic format conversion from OpenAI image_url to Claude base64 source format
 - **Consecutive role merging** — handles Claude API requirement for alternating user/assistant messages

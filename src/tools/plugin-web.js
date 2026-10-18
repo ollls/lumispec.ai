@@ -143,7 +143,8 @@ async function searchKeiro(query) {
     return { error: `Search failed (HTTP ${res.status})`, results: [] };
   }
   const data = await res.json();
-  const results = data.data?.search_results || [];
+  // Keiro returns hits at top-level `results`; the older envelope nested them under `data.search_results`.
+  const results = data.results || data.data?.search_results || [];
   return { results: results.slice(0, 5).map(r => ({ title: r.title || '', url: r.url || '', description: r.snippet || '' })) };
 }
 

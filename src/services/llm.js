@@ -9,9 +9,11 @@ function extractSystemMessage(messages) {
   return { system: '', messages };
 }
 
+// Claude-only path (both callers are the Claude backend). reasoning_content is a llama-server
+// field the Anthropic API rejects as unknown, so it is dropped here before the request is built.
 function mergeConsecutiveRoles(messages) {
   const merged = [];
-  for (const msg of messages) {
+  for (const { reasoning_content: _reasoning, ...msg } of messages) {
     const prev = merged[merged.length - 1];
     if (prev && prev.role === msg.role) {
       // Merge content — handle both string and array content
@@ -54,6 +56,9 @@ export async function countPromptTokens(messages) {
   let text = '';
   let images = 0;
   for (const m of messages) {
+    // Retained reasoning is rendered into the prompt by the chat template, so it must be counted
+    // here too — otherwise the measured size drifts below the real one and the wind-down fires late.
+    if (m.reasoning_content) text += m.reasoning_content + '\n';
     if (typeof m.content === 'string') { text += m.content + '\n'; continue; }
     for (const part of m.content || []) {
       if (part.type === 'text') text += part.text + '\n';
