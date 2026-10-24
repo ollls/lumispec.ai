@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Lumispec Browser Search",
+  "version": "0.1.0",
+  "description": "Runs web searches in a hidden tab of this browser and returns parsed results to the Lumispec assistant.",
+  "permissions": ["tabs", "scripting", "storage", "alarms"],
+  "host_permissions": [
+    "*://*.google.com/*",
+    "*://duckduckgo.com/*",
+    "*://html.duckduckgo.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Lumispec Browser Search",
+    "default_popup": "popup.html"
+  }
+}
