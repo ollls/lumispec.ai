@@ -25,6 +25,7 @@ The top bar shows the status of connected services:
 - **LLM** — which AI model is active (click to switch between local model and Claude)
 - **Internet** — whether you're online
 - **Search** — which search engine is active (click to switch)
+- **Browser** — whether the Browser Search Chrome extension is connected (green = yes). Only shown when the Browser Search plugin is on
 - **LiteAPI** — travel/hotel service status
 - **E*TRADE** — trading account connection status
 - **Context** — how much of the AI's memory is being used (progress bar)
@@ -59,6 +60,8 @@ Saved HTML visualizations (charts, dashboards). Click a template to insert a `[t
 
 ### Search & Browse
 Ask it to search the web or fetch content from a URL. Example: "Search for best restaurants in Miami" or "Summarize this article: [url]"
+
+**Browser Search (optional).** Normally searches go out from the server. If you turn on **Browser Search** in Plugins, they run in a hidden tab of your own Chrome instead — so Google, Bing and sites that block bots answer normally. This needs a small Chrome extension that you install once; the guide is `extension/README.md` in the project folder (open `chrome://extensions`, turn on Developer mode, Load unpacked, pick the `extension` folder). While it is on, the regular Web Search & Fetch card is grayed out. If the extension is not connected, searches quietly use the regular path and the result says so.
 
 ### Weather
 Ask about weather anywhere. It knows your default location. Example: "Weather this week" or "Weather in Tokyo"
