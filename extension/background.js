@@ -15,6 +15,8 @@ const DEFAULTS = {
 
 const PAGE_LOAD_TIMEOUT_MS = 20000;
 const FETCH_SETTLE_MS = 800;          // let client-rendered pages paint after "complete"
+const FETCH_RETRY_DELAYS_MS = [3000, 4000]; // extra waits when the first read is thin or a bot wall
+const FETCH_MIN_TEXT_CHARS = 200;     // below this the page is "thin" and worth waiting for
 const FETCH_MAX_CHARS_DEFAULT = 2_000_000;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
@@ -118,15 +120,25 @@ function serialized(fn) {
   return p;
 }
 
-/** Open `url` in an inactive tab, run `func(...args)` inside it once loaded, close the tab. */
-async function inHiddenTab(url, func, args, settleMs = 0) {
+/**
+ * Open `url` in an inactive tab, run `func(...args)` inside it once loaded, close the tab.
+ * With `accept`, the script is re-run after each delay in `retryDelays` until it accepts the
+ * result — used to outwait bot-challenge walls (Reuters, Cloudflare) and slow client renders
+ * without opening a second tab. The last result is returned even if never accepted.
+ */
+async function inHiddenTab(url, func, args, { settleMs = 0, retryDelays = [], accept = null } = {}) {
   const tab = await chrome.tabs.create({ url, active: false });
   try {
     await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
-    if (settleMs) await new Promise(r => setTimeout(r, settleMs));
-    const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args });
-    if (!result) throw new Error('Page script returned nothing');
-    if (result.error) throw new Error(result.error);
+    const waits = [settleMs, ...(accept ? retryDelays : [])];
+    let result;
+    for (let i = 0; i < waits.length; i++) {
+      if (waits[i]) await new Promise(r => setTimeout(r, waits[i]));
+      [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args });
+      if (!result) throw new Error('Page script returned nothing');
+      if (result.error) throw new Error(result.error);
+      if (!accept || accept(result)) break;
+    }
     return result;
   } finally {
     chrome.tabs.remove(tab.id).catch(() => {});
@@ -147,15 +159,23 @@ async function doSearch(engine, query, limit) {
 }
 
 // Runs inside the fetched page. Returns the live DOM (after scripts ran), which is what
-// the server's Readability + Turndown pipeline expects.
+// the server's Readability + Turndown pipeline expects, plus `textChars` and a `wall` flag
+// so the caller can tell a bot-challenge shell ("Please enable JS…") from a real page.
 function extractPage(maxChars) {
   const html = document.documentElement ? document.documentElement.outerHTML : '';
   if (!html) return { error: 'Page has no document' };
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  const head = text.slice(0, 2000);
+  const WALL = /(enable js\b|enable javascript|disable any ad ?blocker|just a moment|checking your browser|verify (that )?you are (a )?human|attention required|access denied|are you a robot|unusual traffic|press and hold)/i;
+  const wall = text.length < 1500 && WALL.test(head);
   return {
     title: document.title || '',
     url: location.href,
     html: html.length > maxChars ? html.slice(0, maxChars) : html,
     truncated: html.length > maxChars,
+    textChars: text.length,
+    wall,
+    wallText: wall ? head.slice(0, 160) : undefined,
   };
 }
 
@@ -163,7 +183,13 @@ function runFetch(url, maxChars = FETCH_MAX_CHARS_DEFAULT) {
   return serialized(async () => {
     if (!/^https?:\/\//i.test(url || '')) throw new Error(`Invalid URL: ${url}`);
     const started = Date.now();
-    const page = await inHiddenTab(url, extractPage, [maxChars], FETCH_SETTLE_MS);
+    const page = await inHiddenTab(url, extractPage, [maxChars], {
+      settleMs: FETCH_SETTLE_MS,
+      retryDelays: FETCH_RETRY_DELAYS_MS,
+      // Keep waiting while the page is a challenge wall or has almost no text yet.
+      accept: (p) => !p.wall && p.textChars >= FETCH_MIN_TEXT_CHARS,
+    });
+    page.waitedMs = Date.now() - started;
     return { page, ms: Date.now() - started };
   });
 }

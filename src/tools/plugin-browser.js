@@ -61,8 +61,13 @@ async function fallbackSearch(query, reason) {
 async function fallbackFetch(url, reason) {
   console.warn(`[browser_fetch] falling back to HTTP fetch: ${reason}`);
   logToolCall('web_fetch', 'browser_fallback', { args: { url }, rawResult: reason });
-  const res = await runWebFetch(url);
-  return { ...res, _tier: `${res._tier || 'http'} (fallback: ${reason})`, fallback: reason };
+  try {
+    const res = await runWebFetch(url);
+    return { ...res, _tier: `${res._tier || 'http'} (fallback: ${reason})`, fallback: reason };
+  } catch (err) {
+    // Keep the browser-side reason visible even when the HTTP path fails too.
+    return { url, error: `HTTP fallback failed: ${err.message}`, fallback: reason };
+  }
 }
 
 export default {
@@ -128,9 +133,15 @@ export default {
 
         try {
           const page = await bridge.fetchPage(url);
+          // The extension already waited through its retry schedule (~8 s) for a challenge
+          // wall to clear or a client render to finish; if it is still a wall, say so.
+          if (page.wall) {
+            const snippet = (page.wallText || '').slice(0, 80);
+            return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${Math.round((page.ms || 0) / 1000)}s ("${snippet}")`);
+          }
           const { markdown, title } = htmlToMarkdown(page.html);
           if ((markdown || '').trim().length < MIN_USEFUL_CHARS) {
-            return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content`);
+            return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content after ${Math.round((page.ms || 0) / 1000)}s`);
           }
           return { url: page.url || url, title: title || page.title, content: markdown, _tier: `extension (${page.ms} ms)` };
         } catch (err) {
