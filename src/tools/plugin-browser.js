@@ -90,7 +90,7 @@ const hostIs = (u, suffix) => { try { const h = new URL(u).hostname; return h ==
  * falls back to the HTTP search — there is no chaining between browser engines, since results
  * are never merged and the fallback already provides the backup.
  */
-const ENGINES = {
+export const ENGINES = {
   duckduckgo: {
     label: 'DuckDuckGo',
     url: (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
@@ -108,20 +108,27 @@ const ENGINES = {
     // Results render client-side; give the first paint a moment, then one more read.
     settleMs: 1200, retryDelays: [1500],
     block: (page) => (/are you a robot|verify you are human|unusual traffic/i.test(page.wallText || '') ? 'Brave Search showed a bot challenge page' : null),
+    // Live markup (saved 2026-10-25): <div class="snippet" data-type="web"> > .result-body >
+    // .result-wrapper > .result-content > a.l1[href] > (.site-name-wrapper, .title.search-snippet-title)
+    // and a sibling .generic-snippet > .content whose text starts with a "<n> days ago -" span.
+    // Video/news clusters are data-type="cluster" and are skipped. There is no #results wrapper.
     parse: (page, limit) => {
       const { document } = parseHTML(page.html);
       const out = [];
       const seen = new Set();
-      const blocks = document.querySelectorAll('#results .snippet[data-type="web"], #results .snippet:not([data-type])');
+      const blocks = document.querySelectorAll('.snippet[data-type="web"], #results .snippet:not([data-type])');
       for (const el of blocks) {
-        const a = el.querySelector('a[href^="http"]');
+        const a = el.querySelector('a.l1[href^="http"], .result-content a[href^="http"], a[href^="http"]:not(.thumbnail)');
         if (!a) continue;
         const url = absolute(a.getAttribute('href'), page.url);
         if (!isHttp(url) || hostIs(url, 'brave.com') || seen.has(url)) continue;
         seen.add(url);
-        const titleEl = el.querySelector('.title, .snippet-title, [class*="title"]');
-        const descEl = el.querySelector('.snippet-description, .snippet-content, .description, [class*="description"]');
-        out.push({ title: text(titleEl) || text(a), url, description: text(descEl) });
+        const titleEl = el.querySelector('.title, .search-snippet-title, .snippet-title');
+        const descEl = el.querySelector('.generic-snippet .content, .snippet-description, .snippet-content, .description');
+        // Drop the leading age span ("2 days ago -") so the snippet starts with the text.
+        for (const age of descEl?.querySelectorAll('.t-secondary') || []) age.remove();
+        const description = text(descEl).replace(/^-\s*/, '');
+        out.push({ title: text(titleEl) || text(a), url, description });
         if (out.length >= limit) break;
       }
       return out;
