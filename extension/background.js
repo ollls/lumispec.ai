@@ -53,6 +53,80 @@ const ENGINES = {
     },
   },
 
+  brave: {
+    label: 'Brave',
+    url: (q) => `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
+    parse: function parseBrave(limit) {
+      const text = (document.body?.innerText || '').slice(0, 2000);
+      if (/are you a robot|verify you are human|unusual traffic/i.test(text) && !document.querySelector('#results')) {
+        return { error: 'Brave Search showed a bot challenge page' };
+      }
+      const out = [];
+      const seen = new Set();
+      // Web results are .snippet blocks; news/video/infobox blocks carry other data-type values.
+      const blocks = document.querySelectorAll('#results .snippet[data-type="web"], #results .snippet:not([data-type])');
+      for (const el of blocks) {
+        const a = el.querySelector('a[href^="http"]');
+        if (!a) continue;
+        const url = a.href;
+        if (!/^https?:\/\//.test(url) || /(^|\.)brave\.com\//.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        const titleEl = el.querySelector('.title, .snippet-title, [class*="title"]');
+        const descEl = el.querySelector('.snippet-description, .snippet-content, .description, [class*="description"]');
+        out.push({
+          title: ((titleEl || a).textContent || '').trim(),
+          url,
+          description: (descEl?.textContent || '').trim(),
+        });
+        if (out.length >= limit) break;
+      }
+      if (!out.length) return { error: 'No web results found on the Brave page (layout change?)' };
+      return { results: out };
+    },
+  },
+
+  bing: {
+    label: 'Bing',
+    url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en&count=10`,
+    parse: function parseBing(limit) {
+      if (location.pathname.startsWith('/turing/') || document.querySelector('#b_captcha, form[action*="captcha"]')) {
+        return { error: 'Bing showed a CAPTCHA page' };
+      }
+      // Bing wraps result links as /ck/a?...&u=a1<base64url(url)>; decode back to the real URL.
+      function unwrap(href) {
+        try {
+          const u = new URL(href);
+          if (u.hostname.endsWith('bing.com') && u.pathname.startsWith('/ck/')) {
+            const p = u.searchParams.get('u') || '';
+            if (p.startsWith('a1')) {
+              const b64 = p.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+              return atob(b64 + '='.repeat((4 - b64.length % 4) % 4));
+            }
+          }
+        } catch {}
+        return href;
+      }
+      const out = [];
+      const seen = new Set();
+      for (const li of document.querySelectorAll('#b_results > li.b_algo')) {
+        const a = li.querySelector('h2 a[href]');
+        if (!a) continue;
+        const url = unwrap(a.href);
+        if (!/^https?:\/\//.test(url) || /(^|\.)bing\.com\//.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        const descEl = li.querySelector('.b_caption p, p[class*="b_lineclamp"], .b_algoSlug, .b_paractl');
+        out.push({
+          title: (a.textContent || '').trim(),
+          url,
+          description: (descEl?.textContent || '').replace(/^WEB\s*/i, '').trim(),
+        });
+        if (out.length >= limit) break;
+      }
+      if (!out.length) return { error: 'No organic results found on the Bing page (layout change?)' };
+      return { results: out };
+    },
+  },
+
   google: {
     label: 'Google',
     url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&hl=en&num=10`,

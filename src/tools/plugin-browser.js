@@ -17,8 +17,12 @@ import { readPluginConfig, logToolCall } from './index.js';
 import { runWebSearch, runWebFetch, htmlToMarkdown } from './plugin-web.js';
 
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
+// Card order = try order when several are checked (first with results answers). Ordered by
+// how rarely each walls a real browser: Google is last because it is the one that CAPTCHAs.
 const ENGINES = {
   duckduckgo: { label: 'DuckDuckGo' },
+  brave: { label: 'Brave' },
+  bing: { label: 'Bing' },
   google: { label: 'Google' },
 };
 const MIN_USEFUL_CHARS = 200;
@@ -128,11 +132,14 @@ export default {
           try {
             const { results, ms } = await searchWithRetry(engine, query);
             if (results.length > 0) {
+              if (errors.length) console.warn(`[browser_search] ${ENGINES[engine].label} answered after: ${errors.join('; ')}`);
               return { results, sources: `Browser (${ENGINES[engine].label}, ${ms} ms)` };
             }
             errors.push(`${ENGINES[engine].label}: no results`);
+            console.warn(`[browser_search] ${ENGINES[engine].label} returned no results for "${query}" (parser drift or blocked)`);
           } catch (err) {
             errors.push(`${ENGINES[engine].label}: ${err.message}`);
+            console.warn(`[browser_search] ${ENGINES[engine].label} failed: ${err.message}`);
             // Extension dropped or stopped answering: the next engine would only burn another
             // timeout, so go straight to the HTTP fallback.
             if (!bridge.connected || /did not answer within/.test(err.message)) break;

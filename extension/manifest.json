@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lumispec Browser Search",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Runs web searches in a hidden tab of this browser and returns parsed results to the Lumispec assistant.",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],

@@ -16,8 +16,11 @@ Chrome Web Store and nothing is installed system-wide; removing it is one click.
 | `background.js` | Service worker. Keeps a WebSocket to the server, opens an **inactive** tab per request, runs a script inside the page, closes the tab. `search` returns `[{title, url, description}]`; `fetch` returns the live DOM HTML. One hidden tab at a time. |
 | `popup.html` / `popup.js` | Toolbar popup: connection state, server URL + token, enable toggle, and a **Test search** box that works without the server. |
 
-Engines: `duckduckgo` (HTML endpoint, stable selectors) and `google` (organic results
-only; detects CAPTCHA and consent interstitials and reports them as errors).
+Engines, in the order they are tried when several are checked: `duckduckgo` (HTML
+endpoint, stable selectors), `brave` (independent index, rarely walls), `bing` (decodes its
+`/ck/a?u=a1…` redirect links), `google` (organic results only; detects CAPTCHA and consent
+interstitials). The first engine with results answers; the rest are backups. DuckDuckGo
+serves Bing's index, so Brave is the one that adds real diversity.
 
 ## Install (Chrome, Brave, Edge, or any Chromium browser)
 
