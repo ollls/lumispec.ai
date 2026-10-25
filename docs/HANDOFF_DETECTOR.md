@@ -68,6 +68,39 @@ Plus the existing text heuristics (`verify you are human`, `are you a robot`, `u
 A **silent** challenge — the site decides against the browser and serves a degraded page with no
 visible test — has nothing to hand off and stays a thin-page fallback.
 
+#### Worked case: Brave Search, 2026-10-25 (the motivating CAPTCHA example)
+
+Observed sequence, with pages saved by the debug dump:
+
+| Time | Brave served | Handoff-able? |
+|---|---|---|
+| 20:10:05 | "Verifying you're not a bot — Quick check before you continue searching", one **Verify** button | **Yes** — one click in a focused tab; Brave sets a cookie the hidden tab inherits |
+| 20:10:08, 20:10:32 | same page (the plugin retried the engine on the next two searches) | yes, but each unanswered check counted against the address |
+| 20:11:01 | "Your request has been refused by the server … Tor … VPN" | **No** — IP-level block; nothing to click, only time clears it (a manual attempt in a normal tab was refused too) |
+
+Lessons that shape the design:
+
+- The first challenge is the moment to hand off. Three unanswered checks within a minute turned a
+  one-click problem into an hours-long block. So: when a `captcha` is detected and handoff is
+  enabled, surface the tab **immediately** — do not run the in-tab wait/retry loop first, and do
+  not let the next search hit the same engine while a handoff is pending.
+- **Engine cooldown.** After a `captcha` the user did not clear (handoff off, timed out, or tab
+  closed), skip that engine for 10 minutes and fall back at once with a reason that says so. After
+  a `refused` page, 30 minutes. This is what prevents the escalation when nobody is at the
+  keyboard. Shipped first as a server-side change (no extension reload) — see rollout step 1.
+- Wording is site-specific. Brave says "not a bot" and "quick check", not "verify you are human";
+  the generic phrase list is maintained server-side in `WALL_PATTERNS` (`plugin-browser.js`,
+  added 2026-10-25) precisely so new wordings never need an extension reload. The structural
+  signals above (vendor iframes, container classes) are the wording-independent half.
+- Search engines are handoff targets too, not just fetched pages: Brave's check, Google's
+  `/sorry/`, Bing's `/turing/`. `web_search` therefore passes `interactive` when handoff is on,
+  and a cleared engine challenge should be remembered like a host (`handoff` rule for the engine
+  host) per Decision 1.
+- **Acceptance test for this feature:** reproduce the Brave check (a burst of hidden-tab searches
+  usually provokes it), confirm the tab surfaces on the first challenge with the ✋ badge, click
+  Verify, and confirm the same search completes with `sources: Browser (Brave, …)` and no
+  `fallback`; then confirm the next Brave search runs hidden without a challenge.
+
 ### 4. `consent` — gates that block content until clicked
 
 - Cookie/privacy walls that hide everything else: a visible dialog containing `accept|agree|consent`
@@ -234,7 +267,11 @@ the Browser Search card to allow it` — never a generic fetch failure.
 ## Rollout
 
 1. Detector + unit fixtures (server-side function, exported), no behaviour change yet: the
-   fallback reason starts naming the wall kind. Ship alone — useful on its own.
+   fallback reason starts naming the wall kind. Ship alone — useful on its own. **Partly done
+   2026-10-25:** `WALL_PATTERNS` + `detectWall()` in `plugin-browser.js` name "not a bot",
+   refused, CAPTCHA, unusual-traffic, interstitial and enable-JS pages for searches and fetches.
+   Still to do in this step: the engine cooldown (10 min after an uncleared check, 30 min after a
+   refusal) and the structural CAPTCHA signals.
 2. Bridge `progress` + plugin `sendStatus` plumbing.
 3. Extension 0.5.0: surface tab, wait, stage loop, notification. One extension reload.
 4. Card UI: Handoff toggle, host rules, privacy copy; log exemption for `handoff` hosts.
