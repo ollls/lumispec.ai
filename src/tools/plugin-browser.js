@@ -76,6 +76,43 @@ function recentFailure(url) {
 // ── Parser helpers (linkedom) ───────────────────────
 
 const text = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+
+/** Visible-ish text of a returned page (first 3000 chars), for wall / block detection. */
+function pageText(page) {
+  try {
+    const { document } = parseHTML(page.html || '');
+    for (const el of document.querySelectorAll('script, style, noscript')) el.remove();
+    return `${page.title || ''} ${text(document.body)}`.slice(0, 3000);
+  } catch { return page.title || ''; }
+}
+
+// Generic challenge / block pages, checked server-side on every returned page. The extension's
+// own wall regex (used for its in-tab retry) is a subset; this list is the one that produces the
+// user-facing reason, and it can be extended without an extension reload. First match wins.
+const WALL_PATTERNS = [
+  [/not a bot|verifying you|quick check before you continue/i,
+    'site is running a "not a bot" check on this browser — open it in a normal tab, pass the check once, then retry'],
+  [/request has been refused|request refused|access denied|you have been blocked/i,
+    'site refused the request (IP-level block, usually temporary) — switch engine or wait a while before retrying'],
+  [/verify (that )?you are (a )?human|are you a robot|press and hold/i,
+    'site showed a CAPTCHA — solve it once in a normal tab, then retry'],
+  [/unusual traffic|automated (queries|requests)/i,
+    'site flagged unusual traffic from this address — wait before retrying'],
+  [/just a moment|checking your browser|attention required/i,
+    'site showed a browser-check interstitial that did not clear'],
+  [/enable javascript|enable js\b|disable any ad ?blocker/i,
+    'site showed an "enable JavaScript" shell instead of content'],
+];
+
+/** Returns a reason string if the page looks like a challenge / block page, else null. */
+function detectWall(page) {
+  const t = pageText(page);
+  if (!t) return null;
+  // Real pages mention these words too; only a thin page counts as a wall.
+  if (t.length > 2500 && (page.textChars ?? t.length) > 1500) return null;
+  for (const [re, msg] of WALL_PATTERNS) if (re.test(t)) return msg;
+  return null;
+}
 const absolute = (href, base) => { try { return new URL(href, base).href; } catch { return ''; } };
 const isHttp = (u) => /^https?:\/\//i.test(u);
 const hostIs = (u, suffix) => { try { const h = new URL(u).hostname; return h === suffix || h.endsWith('.' + suffix); } catch { return false; } };
@@ -107,7 +144,21 @@ export const ENGINES = {
     url: (q) => `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
     // Results render client-side; give the first paint a moment, then one more read.
     settleMs: 1200, retryDelays: [1500],
-    block: (page) => (/are you a robot|verify you are human|unusual traffic/i.test(page.wallText || '') ? 'Brave Search showed a bot challenge page' : null),
+    // Brave is the strictest engine about automation. Two distinct pages seen 2026-10-25:
+    // a "Verifying you're not a bot — Quick check before you continue searching" page with a
+    // Verify button (profile-level; one manual click clears it), then, after repeated unanswered
+    // checks, "Your request has been refused by the server" (IP-level; only waiting clears it).
+    block: (page) => {
+      const t = pageText(page);
+      if (/request has been refused|request refused/i.test(t)) {
+        return 'Brave refused the request from this address (IP-level block, usually lifts within minutes to hours of no further requests) — switch the engine to DuckDuckGo or Google for now and try Brave again later';
+      }
+      if (/not a bot|quick check before you continue/i.test(t)) {
+        return 'Brave is bot-checking this browser ("Verifying you\'re not a bot") — open search.brave.com in a normal tab, run any query and click Verify once; the hidden tab then inherits the cookie. Do not retry Brave until then: repeated unanswered checks escalate to a refusal';
+      }
+      if (/are you a robot|verify you are human|unusual traffic/i.test(t)) return 'Brave Search showed a bot challenge page';
+      return null;
+    },
     // Live markup (saved 2026-10-25): <div class="snippet" data-type="web"> > .result-body >
     // .result-wrapper > .result-content > a.l1[href] > (.site-name-wrapper, .title.search-snippet-title)
     // and a sibling .generic-snippet > .content whose text starts with a "<n> days ago -" span.
@@ -243,7 +294,7 @@ async function fetchWithRetry(url, opts) {
 async function searchEngine(id, query) {
   const def = ENGINES[id];
   const page = await fetchWithRetry(def.url(query), { settleMs: def.settleMs, retryDelays: def.retryDelays });
-  const blocked = def.block(page);
+  const blocked = def.block(page) || detectWall(page);
   if (blocked) throw new Error(blocked);
   if (page.wall) throw new Error(`${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")`);
   const results = def.parse(page, RESULT_LIMIT);
@@ -359,6 +410,8 @@ export default {
             const snippet = (page.wallText || '').slice(0, 80);
             return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${Math.round((page.ms || 0) / 1000)}s ("${snippet}")`);
           }
+          const walled = detectWall(page);
+          if (walled) return fallbackFetch(url, `${walled} (after ${Math.round((page.ms || 0) / 1000)}s)`);
           const { markdown, title } = htmlToMarkdown(page.html);
           if ((markdown || '').trim().length < MIN_USEFUL_CHARS) {
             return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content after ${Math.round((page.ms || 0) / 1000)}s`);
