@@ -229,10 +229,10 @@ the Browser Search card to allow it` — never a generic fetch failure.
    pipeline steps pass `interactive: false` and login/CAPTCHA pages fall back as today. Chat turns
    are always interactive when the Handoff toggle is on.
 
-## Open question
+3. **`never` is enforced at fetch time only.** Search results are left untouched; every page read
+   goes through `web_fetch`, so a `never` host is always read over the cookie-less HTTP path no
+   matter how its URL was found, and public pages on that host (a bank's rates page) stay usable.
+   One-sentence rule for the docs: "never-listed hosts are always read without your cookies."
+   The refusal message is the one specified under §Host rules.
 
-- Does `never` also remove that host from **search results**, or only force direct `web_fetch`
-  calls to the cookie-less HTTP path? Recommendation: enforce at fetch only. Every page read goes
-  through `web_fetch`, so a `never` host is always read without cookies regardless of how its URL
-  was found, and public pages on that host (a bank's rates page) stay usable. One-sentence rule for
-  the docs: "never-listed hosts are always read without your cookies."
+All questions are decided; the plan is ready to implement in the rollout order above.
