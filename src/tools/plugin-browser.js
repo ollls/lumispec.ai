@@ -12,9 +12,24 @@
 // which supersession deliberately leaves untouched. Every fallback is disclosed in the tool
 // result (`fallback` + `sources`), so the Think stream shows exactly what happened.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
 import { runWebSearch, runWebFetch, htmlToMarkdown } from './plugin-web.js';
+
+// Version of the extension source shipped in this checkout. Compared with the version the
+// connected extension announces in `hello`, so an un-reloaded extension is called out.
+let SHIPPED_EXTENSION_VERSION = null;
+try {
+  const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../../extension/manifest.json', import.meta.url)), 'utf8'));
+  SHIPPED_EXTENSION_VERSION = manifest.version || null;
+} catch {}
+
+function extensionOutdated() {
+  const v = bridge.info.extension?.version;
+  return !!(v && SHIPPED_EXTENSION_VERSION && v !== SHIPPED_EXTENSION_VERSION);
+}
 
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
 // Card order = try order when several are checked (first with results answers). Ordered by
@@ -32,6 +47,21 @@ async function getEngines() {
   const saved = cfg.browser?.engines;
   const list = Array.isArray(saved) && saved.length ? saved : DEFAULTS.engines;
   return list.filter(e => ENGINES[e]);
+}
+
+/** Split the checked engines into those the connected extension advertised and those it did not. */
+function partitionBySupport(engines) {
+  const advertised = bridge.info.extension?.engines;
+  if (!Array.isArray(advertised) || advertised.length === 0) return { supported: engines, unsupported: [] };
+  return {
+    supported: engines.filter(e => advertised.includes(e)),
+    unsupported: engines.filter(e => !advertised.includes(e)),
+  };
+}
+
+function reloadHint() {
+  const v = bridge.info.extension?.version;
+  return `extension v${v || '?'} is loaded, this checkout ships v${SHIPPED_EXTENSION_VERSION} — reload it at chrome://extensions`;
 }
 
 function offlineReason() {
@@ -95,6 +125,9 @@ export default {
     if (info.connected) {
       const ext = info.extension;
       const detail = ext ? ` v${ext.version}, engines: ${(ext.engines || []).join(', ')}` : '';
+      if (extensionOutdated()) {
+        return { ok: false, text: `Extension connected${detail} — outdated, this checkout ships v${SHIPPED_EXTENSION_VERSION}. Reload it at chrome://extensions to get the new engines/fixes.` };
+      }
       return { ok: true, text: `Extension connected${detail}` };
     }
     if (info.everConnected) {
@@ -126,8 +159,15 @@ export default {
 
         // Engines run in the saved order, one at a time (the extension serializes anyway):
         // first engine with results wins, so a Google CAPTCHA just means DuckDuckGo answers.
-        const engines = await getEngines();
+        // Engines the connected extension did not advertise (older build) are skipped up
+        // front with a reason that says how to fix it, instead of a round trip per engine.
+        const { supported: engines, unsupported } = partitionBySupport(await getEngines());
         const errors = [];
+        if (unsupported.length) {
+          const names = unsupported.map(e => ENGINES[e].label).join(', ');
+          errors.push(`${names} not supported by the connected extension (${reloadHint()})`);
+          console.warn(`[browser_search] skipping ${names}: ${reloadHint()}`);
+        }
         for (const engine of engines) {
           try {
             const { results, ms } = await searchWithRetry(engine, query);
