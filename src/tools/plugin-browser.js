@@ -84,6 +84,24 @@ export default {
     interval: 5000,
     poll: async () => (bridge.connected ? 'ok' : 'unauth'),
   },
+  // Live line on the Plugins card. The viewer's own browser is irrelevant here: the
+  // extension may run in Chrome while the UI is open in Firefox on the same machine.
+  cardStatus: () => {
+    const info = bridge.info;
+    if (info.connected) {
+      const ext = info.extension;
+      const detail = ext ? ` v${ext.version}, engines: ${(ext.engines || []).join(', ')}` : '';
+      return { ok: true, text: `Extension connected${detail}` };
+    }
+    if (info.everConnected) {
+      const seen = info.lastSeen ? new Date(info.lastSeen).toLocaleTimeString() : 'unknown';
+      return { ok: false, text: `Extension disconnected (last seen ${seen}) — searches fall back to HTTP until it reconnects` };
+    }
+    return { ok: false, text: 'No browser extension connected — searches fall back to HTTP. Install it from extension/README.md (Chrome, Edge, Brave; load unpacked)' };
+  },
+  enableWarning: () => bridge.connected
+    ? null
+    : 'Browser Search is on, but no browser extension is connected. Install it from extension/README.md and keep that browser open. Until it connects, searches fall back to Web Search & Fetch.',
   routing: [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
   ],

@@ -3345,6 +3345,15 @@ function renderPluginConfig(plugins) {
       info.appendChild(by);
     }
 
+    // Live status line supplied by the plugin (e.g. "Extension connected v0.2.1")
+    if (p.cardStatus && p.cardStatus.text) {
+      const st = document.createElement('span');
+      st.className = 'text-xs';
+      st.style.color = p.cardStatus.ok ? '#22c55e' : '#d97706';
+      st.textContent = (p.cardStatus.ok ? '● ' : '○ ') + p.cardStatus.text;
+      info.appendChild(st);
+    }
+
     // Tool list
     const toolList = document.createElement('div');
     Object.assign(toolList.style, { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' });
@@ -3398,18 +3407,25 @@ function renderPluginConfig(plugins) {
         });
         const result = await res.json().catch(() => ({}));
         if (res.ok) {
+          let msg = '';
           if (result.cascadedOn && result.cascadedOn.length > 0) {
             const names = result.cascadedOn.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Enabled ${p.label}. Also enabled (dependency): ${names}.`);
+            msg = `Enabled ${p.label}. Also enabled (dependency): ${names}.`;
           } else if (result.cascadedOff && result.cascadedOff.length > 0) {
             const names = result.cascadedOff.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`);
+            msg = `Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`;
           } else if (result.superseded && result.superseded.length > 0) {
             const names = result.superseded.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Enabled ${p.label}. ${names} is paused while it is on — all web searches now go through the browser extension.`);
+            msg = `Enabled ${p.label}. ${names} is paused while it is on — all web searches now go through the browser extension.`;
           } else if (result.restored && result.restored.length > 0) {
             const names = result.restored.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Disabled ${p.label}. ${names} is active again.`);
+            msg = `Disabled ${p.label}. ${names} is active again.`;
+          }
+          // Plugin-supplied warning (e.g. enabled with no extension connected) takes the error style
+          if (result.warning) {
+            showPluginToast(msg ? `${msg} ⚠ ${result.warning}` : `⚠ ${result.warning}`, true);
+          } else if (msg) {
+            showPluginToast(msg);
           }
           await refreshPluginConfig();
           pollPluginStatuses();

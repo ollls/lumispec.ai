@@ -468,6 +468,10 @@ export async function listPluginGroups() {
         // Optional UI descriptor: { modes?: string[], availableEngines?: [{id,label,available}] }
         if (typeof plugin.configUi === 'function') Object.assign(entry.config, plugin.configUi());
       }
+      // Optional live status line for the card: { ok: boolean, text: string }
+      if (typeof plugin.cardStatus === 'function') {
+        try { entry.cardStatus = plugin.cardStatus() || null; } catch { entry.cardStatus = null; }
+      }
       return entry;
     });
 
@@ -588,6 +592,14 @@ export async function updatePluginConfig(groupName, updates) {
   await writePluginConfig(cfg);
 
   const result = { group: groupName, enabled: !!toolGroups[groupName], config: current };
+  // Optional plugin hook: a string to surface as a warning toast right after enabling
+  // (e.g. "enabled, but the browser extension is not connected").
+  if (updates.enabled === true && typeof cached.plugin.enableWarning === 'function') {
+    try {
+      const warning = cached.plugin.enableWarning();
+      if (warning) result.warning = warning;
+    } catch {}
+  }
   if (cascadedOn.length > 0) result.cascadedOn = cascadedOn;
   if (cascadedOff.length > 0) result.cascadedOff = cascadedOff;
   if (superseded.length > 0) result.superseded = superseded;
