@@ -432,7 +432,7 @@ export async function loadPlugins() {
 // ── Plugin config API ──────────────────────────────
 export async function listPluginGroups() {
   const cfg = await readPluginConfig();
-  return Object.entries(pluginModules)
+  const entries = Object.entries(pluginModules)
     .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
     .map(([group, { plugin }]) => {
       // Filter dependency lists to user-visible groups (skip always-on and missing)
@@ -477,6 +477,18 @@ export async function listPluginGroups() {
       }
       return entry;
     });
+
+  // Order: plugin-file scan order (alphabetical), except a superseding plugin is moved to sit
+  // directly after the last group it supersedes, so e.g. "Browser Search" follows "Web Search".
+  for (const entry of [...entries]) {
+    if (!entry.supersedes.length) continue;
+    const from = entries.indexOf(entry);
+    const anchor = Math.max(...entry.supersedes.map(s => entries.findIndex(e => e.group === s)));
+    if (anchor < 0 || anchor === from - 1) continue;
+    entries.splice(from, 1);
+    entries.splice(anchor < from ? anchor + 1 : anchor, 0, entry);
+  }
+  return entries;
 }
 
 export async function updatePluginConfig(groupName, updates) {
