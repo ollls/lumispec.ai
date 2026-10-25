@@ -14,6 +14,8 @@ const DEFAULTS = {
 };
 
 const PAGE_LOAD_TIMEOUT_MS = 20000;
+const FETCH_SETTLE_MS = 800;          // let client-rendered pages paint after "complete"
+const FETCH_MAX_CHARS_DEFAULT = 2_000_000;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
@@ -107,36 +109,63 @@ function waitForTabLoad(tabId, timeoutMs) {
   });
 }
 
-let searchChain = Promise.resolve();
+let tabChain = Promise.resolve();
 
 /** Serialized: one hidden tab at a time keeps us under engine rate limits. */
-function runSearch(engine, query, limit = 8) {
-  const run = () => doSearch(engine, query, limit);
-  const p = searchChain.then(run, run);
-  searchChain = p.catch(() => {});
+function serialized(fn) {
+  const p = tabChain.then(fn, fn);
+  tabChain = p.catch(() => {});
   return p;
+}
+
+/** Open `url` in an inactive tab, run `func(...args)` inside it once loaded, close the tab. */
+async function inHiddenTab(url, func, args, settleMs = 0) {
+  const tab = await chrome.tabs.create({ url, active: false });
+  try {
+    await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
+    if (settleMs) await new Promise(r => setTimeout(r, settleMs));
+    const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args });
+    if (!result) throw new Error('Page script returned nothing');
+    if (result.error) throw new Error(result.error);
+    return result;
+  } finally {
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+function runSearch(engine, query, limit = 8) {
+  return serialized(() => doSearch(engine, query, limit));
 }
 
 async function doSearch(engine, query, limit) {
   const def = ENGINES[engine];
   if (!def) throw new Error(`Unknown engine "${engine}" (have: ${Object.keys(ENGINES).join(', ')})`);
   if (!query || !query.trim()) throw new Error('Empty query');
-
   const started = Date.now();
-  const tab = await chrome.tabs.create({ url: def.url(query), active: false });
-  try {
-    await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
-    const [{ result } = {}] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: def.parse,
-      args: [limit],
-    });
-    if (!result) throw new Error('Parser returned nothing');
-    if (result.error) throw new Error(result.error);
-    return { engine: def.label, results: result.results, ms: Date.now() - started };
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
+  const result = await inHiddenTab(def.url(query), def.parse, [limit]);
+  return { engine: def.label, results: result.results, ms: Date.now() - started };
+}
+
+// Runs inside the fetched page. Returns the live DOM (after scripts ran), which is what
+// the server's Readability + Turndown pipeline expects.
+function extractPage(maxChars) {
+  const html = document.documentElement ? document.documentElement.outerHTML : '';
+  if (!html) return { error: 'Page has no document' };
+  return {
+    title: document.title || '',
+    url: location.href,
+    html: html.length > maxChars ? html.slice(0, maxChars) : html,
+    truncated: html.length > maxChars,
+  };
+}
+
+function runFetch(url, maxChars = FETCH_MAX_CHARS_DEFAULT) {
+  return serialized(async () => {
+    if (!/^https?:\/\//i.test(url || '')) throw new Error(`Invalid URL: ${url}`);
+    const started = Date.now();
+    const page = await inHiddenTab(url, extractPage, [maxChars], FETCH_SETTLE_MS);
+    return { page, ms: Date.now() - started };
+  });
 }
 
 // ── WebSocket client ────────────────────────────────
@@ -191,7 +220,13 @@ async function connect() {
   ws.onopen = () => {
     reconnectDelay = RECONNECT_MIN_MS;
     setState('connected');
-    send({ type: 'hello', version: 1, engines: Object.keys(ENGINES), ua: navigator.userAgent });
+    send({
+      type: 'hello',
+      version: chrome.runtime.getManifest().version,
+      engines: Object.keys(ENGINES),
+      capabilities: ['search', 'fetch'],
+      ua: navigator.userAgent,
+    });
   };
   ws.onmessage = (ev) => handleServerMessage(ev.data);
   ws.onerror = () => { lastError = 'Connection failed'; };
@@ -226,6 +261,15 @@ async function handleServerMessage(raw) {
       try {
         const { results, engine, ms } = await runSearch(msg.engine, msg.query, msg.limit);
         send({ type: 'result', id: msg.id, engine, results, ms });
+      } catch (e) {
+        send({ type: 'error', id: msg.id, message: e.message });
+      }
+      return;
+    }
+    case 'fetch': {
+      try {
+        const { page, ms } = await runFetch(msg.url, msg.maxChars);
+        send({ type: 'result', id: msg.id, page, ms });
       } catch (e) {
         send({ type: 'error', id: msg.id, message: e.message });
       }

@@ -69,7 +69,7 @@ src/
     plugin-source.js       # source_read/write/edit/delete/git/run/test/project, template_save + file locks, diff helpers
     plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
-    plugin-browser.js      # web_search/web_fetch via the Chrome extension; supersedes 'web' while enabled (stub until part 3)
+    plugin-browser.js      # web_search/web_fetch via the Chrome extension bridge; supersedes 'web' while enabled, falls back to it offline
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     tasks.js               # Task pipeline CRUD + reorder
@@ -86,6 +86,7 @@ src/
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser), prompt sizing + tool-result trimming
     tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
     slots.js               # Slot monitor (polling, assignment, pin/unpin, per-slot n_ctx lookup)
+    browserBridge.js       # WebSocket endpoint /ws/browser for the Chrome extension (search/fetch requests, heartbeat, token)
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
@@ -174,6 +175,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `LOCATION` — default user location for weather/travel queries and `{$location}` macro
 - `SOURCE_DIR` — project root path for source tools (self-awareness + code editing)
 - `SOURCE_TEST` — test command for `source_test` tool (e.g. `npm test`, `pytest -x`, `cargo test`)
+- `BROWSER_SEARCH_TOKEN` — optional shared secret the Browser Search Chrome extension must send as `?token=` on `/ws/browser`
+- `BROWSER_SEARCH_TIMEOUT_MS` — how long `web_search`/`web_fetch` wait for the extension before falling back (default: 25000)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -260,9 +263,14 @@ export default {
 | `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — | — |
 | `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` | — |
 | `wiki` | plugin-wiki.js | `wiki_scan`, `wiki_index` | `config.sourceDir` set | `source` |
-| `browser` | plugin-browser.js | `web_search`, `web_fetch` (stubs until part 3) | off by default; supersedes `web` | — |
+| `browser` | plugin-browser.js | `web_search`, `web_fetch` (via Chrome extension) | off by default; supersedes `web` | — |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
+
+#### Browser Search (Chrome extension bridge)
+`extension/` is a Manifest V3 extension loaded unpacked (install/remove guide in `extension/README.md`). It keeps a WebSocket to `ws://localhost:PORT/ws/browser`, served by `src/services/browserBridge.js` on the main Express server (attached in `server.js`, live whenever the server runs, loopback only, optional `BROWSER_SEARCH_TOKEN`). On a `search` request it opens the engine results page in an **inactive** tab of the user's real Chrome, parses `[{title,url,description}]` in-page, closes the tab; on a `fetch` request it returns the live DOM's HTML, which `plugin-browser.js` runs through the same `htmlToMarkdown()` as the HTTP path. One hidden tab at a time; a newer extension connection replaces the old one; liveness via protocol-level ping/pong every 30 s.
+
+`plugin-browser.js` supersedes `web`. Engines (`duckduckgo`, `google`) are tried in saved order, first with results wins — a Google CAPTCHA/consent page is reported by the extension as an error and DuckDuckGo answers. **Fallback with disclosure**: if no extension is connected, the request times out, every engine fails, or a fetched page yields under 200 chars, the call runs `runWebSearch()` / `runWebFetch()` exported from `plugin-web.js` (the saved Web Search & Fetch settings, untouched by supersession) and the result carries `fallback: "<reason>"` plus a `sources`/`_tier` suffix, so the Think stream shows what happened. The status dot "Browser" is green when the extension is connected, amber otherwise. Plugins declare their panel controls via `configUi()` → `{ modes?, availableEngines? }`; the `web` plugin uses both, `browser` only engines.
 
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled

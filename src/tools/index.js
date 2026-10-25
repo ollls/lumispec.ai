@@ -465,15 +465,8 @@ export async function listPluginGroups() {
         const saved = cfg[group] || {};
         entry.config = { ...defaults, ...saved };
         delete entry.config.enabled; // enabled is already top-level
-        // For web plugin, include available engines info
-        if (group === 'web') {
-          entry.config.modes = ['auto', 'regular', 'stealth', 'browser'];
-          entry.config.availableEngines = [
-            { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
-            { id: 'keiro', label: 'Keiro', available: !!config.keiro.apiKey },
-            { id: 'duckduckgo', label: 'DuckDuckGo', available: true },
-          ];
-        }
+        // Optional UI descriptor: { modes?: string[], availableEngines?: [{id,label,available}] }
+        if (typeof plugin.configUi === 'function') Object.assign(entry.config, plugin.configUi());
       }
       return entry;
     });

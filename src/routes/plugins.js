@@ -22,10 +22,11 @@ router.post('/:group/toggle', async (req, res) => {
   if (mode !== undefined && !VALID_MODES.includes(mode)) {
     return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(', ')}` });
   }
-  const VALID_ENGINES = ['tavily', 'keiro', 'duckduckgo'];
+  // Engine ids are plugin-specific (web: tavily/keiro/duckduckgo, browser: duckduckgo/google);
+  // each plugin ignores ids it does not know, so only the shape is validated here.
   if (engines !== undefined) {
-    if (!Array.isArray(engines) || !engines.every(e => VALID_ENGINES.includes(e))) {
-      return res.status(400).json({ error: `engines must be array of: ${VALID_ENGINES.join(', ')}` });
+    if (!Array.isArray(engines) || !engines.every(e => typeof e === 'string' && /^[a-z0-9_-]{1,32}$/.test(e))) {
+      return res.status(400).json({ error: 'engines must be an array of engine ids' });
     }
   }
   const updates = {};

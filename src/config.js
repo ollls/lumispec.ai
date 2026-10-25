@@ -22,6 +22,12 @@ export default {
     maxPrevResultChars: parseInt(process.env.MAX_PREV_RESULT_CHARS || '32000', 10),
   },
   chromePath: process.env.CHROME_PATH || '',
+  browserSearch: {
+    // Optional shared secret the Chrome extension must send as ?token= on /ws/browser
+    token: process.env.BROWSER_SEARCH_TOKEN || '',
+    // How long a search / fetch waits for the extension before falling back (ms)
+    timeoutMs: parseInt(process.env.BROWSER_SEARCH_TIMEOUT_MS || '25000', 10),
+  },
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',
   },

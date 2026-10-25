@@ -17,6 +17,7 @@ import taskRoutes from './routes/tasks.js';
 import taskProcessorRoutes from './routes/taskProcessor.js';
 import pluginRoutes from './routes/plugins.js';
 import slots from './services/slots.js';
+import browserBridge from './services/browserBridge.js';
 import { loadPlugins } from './services/tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -154,7 +155,11 @@ const server = app.listen(config.port, () => {
   slots.startPolling();
 });
 
+// WebSocket endpoint for the Browser Search Chrome extension (same port, path /ws/browser)
+browserBridge.attach(server);
+
 process.on('SIGTERM', () => {
   slots.stopPolling();
+  browserBridge.close();
   server.close();
 });

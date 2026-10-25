@@ -3426,12 +3426,16 @@ function renderPluginConfig(plugins) {
     topRow.appendChild(toggle);
     card.appendChild(topRow);
 
-    // Web plugin config: mode dropdown + engine checkboxes
-    if (p.group === 'web' && p.config && p.enabled) {
+    // Per-plugin config: optional mode dropdown + optional engine checkboxes, driven by the
+    // plugin's configUi() descriptor (web: both; browser: engines only).
+    const hasModes = Array.isArray(p.config?.modes) && p.config.modes.length > 0;
+    const hasEngines = Array.isArray(p.config?.availableEngines) && p.config.availableEngines.length > 0;
+    if (p.config && p.enabled && (hasModes || hasEngines)) {
       const configSection = document.createElement('div');
       Object.assign(configSection.style, { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #3f3f46' });
 
       // Mode dropdown
+      if (hasModes) {
       const modeRow = document.createElement('div');
       modeRow.className = 'flex items-center gap-3';
       const modeLabel = document.createElement('span');
@@ -3463,10 +3467,12 @@ function renderPluginConfig(plugins) {
       modeRow.appendChild(modeLabel);
       modeRow.appendChild(modeSelect);
       configSection.appendChild(modeRow);
+      }
 
       // Engine checkboxes
+      if (hasEngines) {
       const engRow = document.createElement('div');
-      Object.assign(engRow.style, { marginTop: '10px' });
+      Object.assign(engRow.style, { marginTop: hasModes ? '10px' : '0' });
       const engLabel = document.createElement('span');
       Object.assign(engLabel.style, { fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' });
       engLabel.textContent = 'Search engines';
@@ -3476,7 +3482,7 @@ function renderPluginConfig(plugins) {
       checkboxRow.className = 'flex items-center gap-4';
 
       for (const eng of p.config.availableEngines) {
-        if (!eng.available && eng.id !== 'duckduckgo') continue; // Hide unavailable API engines
+        if (eng.available === false) continue; // Hide engines whose API key is missing
         const wrapper = document.createElement('label');
         wrapper.className = 'flex items-center gap-1.5 cursor-pointer';
         const cb = document.createElement('input');
@@ -3509,6 +3515,7 @@ function renderPluginConfig(plugins) {
 
       engRow.appendChild(checkboxRow);
       configSection.appendChild(engRow);
+      }
       card.appendChild(configSection);
     }
 
