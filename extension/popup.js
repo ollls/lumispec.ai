@@ -4,19 +4,12 @@ const call = (msg) => chrome.runtime.sendMessage(msg);
 async function refresh() {
   const s = await call({ type: 'status' });
   $('dot').className = s.state;
-  $('stateText').textContent = s.state === 'connected' ? 'Connected to Lumispec' : s.state === 'connecting' ? 'Connecting…' : 'Not connected';
+  $('stateText').textContent = (s.state === 'connected' ? 'Connected to Lumispec' : s.state === 'connecting' ? 'Connecting…' : 'Not connected') + ` · v${s.version}`;
   $('err').textContent = s.state === 'connected' ? '' : (s.lastError || '');
   if (document.activeElement?.tagName !== 'INPUT') {
     $('serverUrl').value = s.settings.serverUrl;
     $('token').value = s.settings.token;
     $('enabled').checked = s.settings.enabled;
-  }
-  if (!$('engine').options.length) {
-    for (const e of s.engines) {
-      const o = document.createElement('option');
-      o.value = e; o.textContent = e;
-      $('engine').appendChild(o);
-    }
   }
 }
 
@@ -31,29 +24,27 @@ $('save').onclick = async () => {
 
 $('reconnect').onclick = async () => { await call({ type: 'reconnect' }); setTimeout(refresh, 500); };
 
+// Test = load a URL in a hidden tab and report what came back. Proves the install works
+// without the server; engine parsing lives server-side and is not exercised here.
 async function runTest() {
-  const query = $('query').value.trim();
-  if (!query) return;
-  $('out').textContent = 'Searching…';
-  const res = await call({ type: 'test', engine: $('engine').value, query });
+  let url = $('url').value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   const out = $('out');
+  out.textContent = 'Loading in a hidden tab…';
+  const r = await call({ type: 'test', url });
   out.textContent = '';
-  if (res.error) { out.textContent = `Error: ${res.error}`; return; }
-  const head = document.createElement('div');
-  head.textContent = `${res.engine}: ${res.results.length} results in ${res.ms} ms`;
-  out.appendChild(head);
-  for (const r of res.results) {
-    const div = document.createElement('div');
-    div.className = 'r';
-    const a = document.createElement('a'); a.href = r.url; a.target = '_blank'; a.textContent = r.title || '(no title)';
-    const u = document.createElement('div'); u.className = 'u'; u.textContent = r.url;
-    const d = document.createElement('div'); d.className = 'd'; d.textContent = r.description;
-    div.append(a, u, d);
-    out.appendChild(div);
-  }
+  if (r.error) { out.textContent = `Error: ${r.error}`; return; }
+  const line = (label, value) => { const d = document.createElement('div'); d.className = 'r'; d.innerHTML = `<b>${label}</b> `; d.appendChild(document.createTextNode(value)); out.appendChild(d); };
+  line('Title', r.title || '(none)');
+  line('Final URL', r.url);
+  line('Loaded in', `${r.ms} ms`);
+  line('Text', `${r.textChars} chars · HTML ${r.htmlChars} chars`);
+  line('Bot wall', r.wall ? `YES — "${r.wallText}"` : 'no');
+  line('Snippet', r.textSnippet || '');
 }
 $('run').onclick = runTest;
-$('query').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTest(); });
+$('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTest(); });
 
 refresh();
 setInterval(refresh, 2000);

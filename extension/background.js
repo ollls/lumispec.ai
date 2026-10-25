@@ -1,11 +1,18 @@
 // Lumispec Browser Search — MV3 service worker.
 //
-// Two jobs:
-//  1. Run a web search in a hidden (inactive) tab of the user's real browser and
-//     parse the result page into [{ title, url, description }].
-//  2. Keep a WebSocket open to the Lumispec server and answer its `search`
-//     requests with those results. (Server side lands in part 2; the client is
-//     complete and can be exercised from the popup's "Test search" without it.)
+// The extension is deliberately engine-agnostic. It does ONE thing for the server: open a
+// URL in a hidden (inactive) tab of the user's real browser, wait for it to render, return
+// the live DOM's HTML plus a few generic hints (text length, bot-wall flag), close the tab.
+// Which URL to open (DuckDuckGo, Google, Bing, …) and how to parse the result page is the
+// server's business (src/tools/plugin-browser.js), so adding or fixing a search engine never
+// requires reloading this extension.
+//
+// Protocol (JSON text frames over one WebSocket):
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch'], ua }
+//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays? }
+//   ext → srv  { type: 'result', id, page: { title, url, html, textChars, wall, wallText?, truncated }, ms }
+//   ext → srv  { type: 'error', id, message }
+//   srv → ext  { type: 'ping', id }   →   ext → srv  { type: 'pong', id }
 
 const DEFAULTS = {
   serverUrl: 'ws://localhost:3000/ws/browser',
@@ -14,165 +21,20 @@ const DEFAULTS = {
 };
 
 const PAGE_LOAD_TIMEOUT_MS = 20000;
-const FETCH_SETTLE_MS = 800;          // let client-rendered pages paint after "complete"
-const FETCH_RETRY_DELAYS_MS = [3000, 4000]; // extra waits when the first read is thin or a bot wall
-const FETCH_MIN_TEXT_CHARS = 200;     // below this the page is "thin" and worth waiting for
+const FETCH_SETTLE_MS = 800;                // let client-rendered pages paint after "complete"
+const FETCH_RETRY_DELAYS_MS = [3000, 4000]; // extra waits while the first read is thin or a bot wall
+const FETCH_MIN_TEXT_CHARS = 200;           // below this the page is "thin" and worth waiting for
 const FETCH_MAX_CHARS_DEFAULT = 2_000_000;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
-// ── Search engines ──────────────────────────────────
-// Each parser runs INSIDE the result page via chrome.scripting.executeScript,
-// so it must be self-contained: no closures over worker-scope variables.
-
-const ENGINES = {
-  duckduckgo: {
-    label: 'DuckDuckGo',
-    url: (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
-    parse: function parseDdg(limit) {
-      const out = [];
-      if (document.querySelector('.anomaly-modal, #challenge-form')) {
-        return { error: 'DuckDuckGo showed a bot challenge page' };
-      }
-      for (const el of document.querySelectorAll('.result')) {
-        const a = el.querySelector('.result__a');
-        if (!a) continue;
-        const href = a.getAttribute('href') || '';
-        const m = href.match(/uddg=([^&]+)/);
-        let url = m ? decodeURIComponent(m[1]) : href;
-        if (url.startsWith('//')) url = 'https:' + url;
-        if (!/^https?:\/\//.test(url)) continue;
-        out.push({
-          title: (a.textContent || '').trim(),
-          url,
-          description: (el.querySelector('.result__snippet')?.textContent || '').trim(),
-        });
-        if (out.length >= limit) break;
-      }
-      return { results: out };
-    },
-  },
-
-  brave: {
-    label: 'Brave',
-    url: (q) => `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
-    parse: function parseBrave(limit) {
-      const text = (document.body?.innerText || '').slice(0, 2000);
-      if (/are you a robot|verify you are human|unusual traffic/i.test(text) && !document.querySelector('#results')) {
-        return { error: 'Brave Search showed a bot challenge page' };
-      }
-      const out = [];
-      const seen = new Set();
-      // Web results are .snippet blocks; news/video/infobox blocks carry other data-type values.
-      const blocks = document.querySelectorAll('#results .snippet[data-type="web"], #results .snippet:not([data-type])');
-      for (const el of blocks) {
-        const a = el.querySelector('a[href^="http"]');
-        if (!a) continue;
-        const url = a.href;
-        if (!/^https?:\/\//.test(url) || /(^|\.)brave\.com\//.test(url) || seen.has(url)) continue;
-        seen.add(url);
-        const titleEl = el.querySelector('.title, .snippet-title, [class*="title"]');
-        const descEl = el.querySelector('.snippet-description, .snippet-content, .description, [class*="description"]');
-        out.push({
-          title: ((titleEl || a).textContent || '').trim(),
-          url,
-          description: (descEl?.textContent || '').trim(),
-        });
-        if (out.length >= limit) break;
-      }
-      if (!out.length) return { error: 'No web results found on the Brave page (layout change?)' };
-      return { results: out };
-    },
-  },
-
-  bing: {
-    label: 'Bing',
-    url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en&count=10`,
-    parse: function parseBing(limit) {
-      if (location.pathname.startsWith('/turing/') || document.querySelector('#b_captcha, form[action*="captcha"]')) {
-        return { error: 'Bing showed a CAPTCHA page' };
-      }
-      // Bing wraps result links as /ck/a?...&u=a1<base64url(url)>; decode back to the real URL.
-      function unwrap(href) {
-        try {
-          const u = new URL(href);
-          if (u.hostname.endsWith('bing.com') && u.pathname.startsWith('/ck/')) {
-            const p = u.searchParams.get('u') || '';
-            if (p.startsWith('a1')) {
-              const b64 = p.slice(2).replace(/-/g, '+').replace(/_/g, '/');
-              return atob(b64 + '='.repeat((4 - b64.length % 4) % 4));
-            }
-          }
-        } catch {}
-        return href;
-      }
-      const out = [];
-      const seen = new Set();
-      for (const li of document.querySelectorAll('#b_results > li.b_algo')) {
-        const a = li.querySelector('h2 a[href]');
-        if (!a) continue;
-        const url = unwrap(a.href);
-        if (!/^https?:\/\//.test(url) || /(^|\.)bing\.com\//.test(url) || seen.has(url)) continue;
-        seen.add(url);
-        const descEl = li.querySelector('.b_caption p, p[class*="b_lineclamp"], .b_algoSlug, .b_paractl');
-        out.push({
-          title: (a.textContent || '').trim(),
-          url,
-          description: (descEl?.textContent || '').replace(/^WEB\s*/i, '').trim(),
-        });
-        if (out.length >= limit) break;
-      }
-      if (!out.length) return { error: 'No organic results found on the Bing page (layout change?)' };
-      return { results: out };
-    },
-  },
-
-  google: {
-    label: 'Google',
-    url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&hl=en&num=10`,
-    parse: function parseGoogle(limit) {
-      const path = location.pathname;
-      if (path.startsWith('/sorry') || document.querySelector('form#captcha-form, #recaptcha')) {
-        return { error: 'Google showed a CAPTCHA / unusual-traffic page' };
-      }
-      if (location.hostname.startsWith('consent.') || /before you continue/i.test(document.title)) {
-        return { error: 'Google consent interstitial — open google.com once in this browser and accept it' };
-      }
-      const out = [];
-      const seen = new Set();
-      // Organic results: an <h3> inside an anchor. Ads and "People also ask" don't match.
-      for (const h3 of document.querySelectorAll('#search a h3, #rso a h3')) {
-        const a = h3.closest('a');
-        if (!a) continue;
-        let url = a.href || '';
-        const m = url.match(/[?&]q=([^&]+)/);
-        if (url.includes('/url?') && m) url = decodeURIComponent(m[1]);
-        if (!/^https?:\/\//.test(url) || url.includes('google.com/')) continue;
-        if (seen.has(url)) continue;
-        seen.add(url);
-        // Snippet lives in a sibling block; selectors vary, try the stable ones first.
-        const block = a.closest('[data-hveid], .g, [jscontroller]') || a.parentElement;
-        const snippetEl = block?.querySelector('[data-sncf], .VwiC3b, div[style*="-webkit-line-clamp"]');
-        out.push({
-          title: (h3.textContent || '').trim(),
-          url,
-          description: (snippetEl?.textContent || '').trim(),
-        });
-        if (out.length >= limit) break;
-      }
-      if (!out.length) return { error: 'No organic results found on the Google page (layout change?)' };
-      return { results: out };
-    },
-  },
-};
-
-// ── Hidden-tab search ───────────────────────────────
+// ── Hidden-tab page loading ─────────────────────────
 
 function waitForTabLoad(tabId, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error(`Result page did not finish loading within ${timeoutMs / 1000}s`));
+      reject(new Error(`Page did not finish loading within ${timeoutMs / 1000}s`));
     }, timeoutMs);
     function onUpdated(id, info) {
       if (id === tabId && info.status === 'complete') {
@@ -187,54 +49,16 @@ function waitForTabLoad(tabId, timeoutMs) {
 
 let tabChain = Promise.resolve();
 
-/** Serialized: one hidden tab at a time keeps us under engine rate limits. */
+/** Serialized: one hidden tab at a time keeps us under site rate limits. */
 function serialized(fn) {
   const p = tabChain.then(fn, fn);
   tabChain = p.catch(() => {});
   return p;
 }
 
-/**
- * Open `url` in an inactive tab, run `func(...args)` inside it once loaded, close the tab.
- * With `accept`, the script is re-run after each delay in `retryDelays` until it accepts the
- * result — used to outwait bot-challenge walls (Reuters, Cloudflare) and slow client renders
- * without opening a second tab. The last result is returned even if never accepted.
- */
-async function inHiddenTab(url, func, args, { settleMs = 0, retryDelays = [], accept = null } = {}) {
-  const tab = await chrome.tabs.create({ url, active: false });
-  try {
-    await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
-    const waits = [settleMs, ...(accept ? retryDelays : [])];
-    let result;
-    for (let i = 0; i < waits.length; i++) {
-      if (waits[i]) await new Promise(r => setTimeout(r, waits[i]));
-      [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args });
-      if (!result) throw new Error('Page script returned nothing');
-      if (result.error) throw new Error(result.error);
-      if (!accept || accept(result)) break;
-    }
-    return result;
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
-function runSearch(engine, query, limit = 8) {
-  return serialized(() => doSearch(engine, query, limit));
-}
-
-async function doSearch(engine, query, limit) {
-  const def = ENGINES[engine];
-  if (!def) throw new Error(`Unknown engine "${engine}" (have: ${Object.keys(ENGINES).join(', ')})`);
-  if (!query || !query.trim()) throw new Error('Empty query');
-  const started = Date.now();
-  const result = await inHiddenTab(def.url(query), def.parse, [limit]);
-  return { engine: def.label, results: result.results, ms: Date.now() - started };
-}
-
-// Runs inside the fetched page. Returns the live DOM (after scripts ran), which is what
-// the server's Readability + Turndown pipeline expects, plus `textChars` and a `wall` flag
-// so the caller can tell a bot-challenge shell ("Please enable JS…") from a real page.
+// Runs INSIDE the loaded page (chrome.scripting.executeScript), so it must be self-contained.
+// Returns the live DOM after scripts ran, plus generic hints so the caller can tell a
+// bot-challenge shell ("Please enable JS…", "Just a moment…") from a real page.
 function extractPage(maxChars) {
   const html = document.documentElement ? document.documentElement.outerHTML : '';
   if (!html) return { error: 'Page has no document' };
@@ -248,23 +72,38 @@ function extractPage(maxChars) {
     html: html.length > maxChars ? html.slice(0, maxChars) : html,
     truncated: html.length > maxChars,
     textChars: text.length,
+    textSnippet: head.slice(0, 300),
     wall,
     wallText: wall ? head.slice(0, 160) : undefined,
   };
 }
 
-function runFetch(url, maxChars = FETCH_MAX_CHARS_DEFAULT) {
+/**
+ * Open `url` in an inactive tab, wait for load + settleMs, read the page; while the read is a
+ * bot wall or has under FETCH_MIN_TEXT_CHARS of text, wait each delay in retryDelays and read
+ * again (same tab — no second load). Returns the last read even if never accepted.
+ */
+function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SETTLE_MS, retryDelays = FETCH_RETRY_DELAYS_MS } = {}) {
   return serialized(async () => {
     if (!/^https?:\/\//i.test(url || '')) throw new Error(`Invalid URL: ${url}`);
     const started = Date.now();
-    const page = await inHiddenTab(url, extractPage, [maxChars], {
-      settleMs: FETCH_SETTLE_MS,
-      retryDelays: FETCH_RETRY_DELAYS_MS,
-      // Keep waiting while the page is a challenge wall or has almost no text yet.
-      accept: (p) => !p.wall && p.textChars >= FETCH_MIN_TEXT_CHARS,
-    });
-    page.waitedMs = Date.now() - started;
-    return { page, ms: Date.now() - started };
+    const tab = await chrome.tabs.create({ url, active: false });
+    try {
+      await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
+      const waits = [settleMs, ...retryDelays];
+      let page;
+      for (let i = 0; i < waits.length; i++) {
+        if (waits[i]) await new Promise(r => setTimeout(r, waits[i]));
+        const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPage, args: [maxChars] });
+        if (!result) throw new Error('Page script returned nothing');
+        if (result.error) throw new Error(result.error);
+        page = result;
+        if (!page.wall && page.textChars >= FETCH_MIN_TEXT_CHARS) break;
+      }
+      return { page, ms: Date.now() - started };
+    } finally {
+      chrome.tabs.remove(tab.id).catch(() => {});
+    }
   });
 }
 
@@ -298,10 +137,8 @@ async function connect() {
   if (connecting) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   // connect() is triggered from several places at once on a worker start (top-level call,
-  // onInstalled / onStartup, the keepalive alarm). Without this flag two callers both pass the
-  // readyState check during the settings await and open two sockets; the server keeps the
-  // newer one, the older one's onclose then nulled `ws` and scheduled a reconnect, and the
-  // extension churned connections forever — killing any search in flight ("Extension reconnected").
+  // onInstalled / onStartup, the keepalive alarm). The flag keeps two callers from both
+  // passing the readyState check during the settings await and opening two sockets.
   connecting = true;
   let sock;
   try {
@@ -339,8 +176,7 @@ async function connect() {
     send({
       type: 'hello',
       version: chrome.runtime.getManifest().version,
-      engines: Object.keys(ENGINES),
-      capabilities: ['search', 'fetch'],
+      capabilities: ['fetch'],
       ua: navigator.userAgent,
     });
   };
@@ -374,18 +210,13 @@ async function handleServerMessage(raw) {
     case 'ping':
       send({ type: 'pong', id: msg.id });
       return;
-    case 'search': {
-      try {
-        const { results, engine, ms } = await runSearch(msg.engine, msg.query, msg.limit);
-        send({ type: 'result', id: msg.id, engine, results, ms });
-      } catch (e) {
-        send({ type: 'error', id: msg.id, message: e.message });
-      }
-      return;
-    }
     case 'fetch': {
       try {
-        const { page, ms } = await runFetch(msg.url, msg.maxChars);
+        const opts = {};
+        if (Number.isFinite(msg.maxChars)) opts.maxChars = msg.maxChars;
+        if (Number.isFinite(msg.settleMs)) opts.settleMs = msg.settleMs;
+        if (Array.isArray(msg.retryDelays)) opts.retryDelays = msg.retryDelays;
+        const { page, ms } = await runFetch(msg.url, opts);
         send({ type: 'result', id: msg.id, page, ms });
       } catch (e) {
         send({ type: 'error', id: msg.id, message: e.message });
@@ -404,7 +235,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     switch (msg.type) {
       case 'status': {
         const settings = await getSettings();
-        reply({ state: wsState, lastError, settings, engines: Object.keys(ENGINES) });
+        reply({ state: wsState, lastError, settings, version: chrome.runtime.getManifest().version });
         return;
       }
       case 'saveSettings':
@@ -421,7 +252,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
         return;
       case 'test':
         try {
-          reply(await runSearch(msg.engine, msg.query, msg.limit || 8));
+          const { page, ms } = await runFetch(msg.url);
+          // Popup only needs the hints, not a megabyte of HTML
+          reply({ ok: true, ms, title: page.title, url: page.url, textChars: page.textChars, wall: page.wall, wallText: page.wallText, textSnippet: page.textSnippet, htmlChars: page.html.length });
         } catch (e) {
           reply({ error: e.message });
         }
@@ -434,9 +267,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 // ── Lifecycle ───────────────────────────────────────
-// MV3 workers are suspended when idle. An open WebSocket keeps the worker alive
-// on Chrome 116+; the alarm is the safety net that re-establishes the socket
-// after the worker has been killed and restarted.
+// MV3 workers are suspended when idle. An open WebSocket keeps the worker alive on
+// Chrome 116+; the alarm is the safety net that re-establishes the socket after the worker
+// has been killed and restarted.
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });

@@ -7,11 +7,13 @@
 // endpoint is live whenever the server runs — the extension can connect before the
 // Browser Search plugin is even enabled, and the status dot goes green as soon as it does.
 //
+// The extension is engine-agnostic: it only loads a URL in a hidden tab and returns the
+// rendered HTML. Search-engine URLs and result parsing live in tools/plugin-browser.js.
+//
 // Protocol (JSON text frames):
-//   ext → srv  { type: 'hello', version, engines: [...], capabilities: [...], ua }
-//   srv → ext  { type: 'search', id, engine, query, limit }
-//   srv → ext  { type: 'fetch',  id, url, maxChars }
-//   ext → srv  { type: 'result', id, engine?, results?, page?, ms }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch'], ua }
+//   srv → ext  { type: 'fetch',  id, url, maxChars?, settleMs?, retryDelays? }
+//   ext → srv  { type: 'result', id, page: { title, url, html, textChars, wall, wallText?, truncated }, ms }
 //   ext → srv  { type: 'error',  id, message }
 // Liveness uses WebSocket protocol-level ping/pong (browsers answer automatically).
 
@@ -43,7 +45,7 @@ class BrowserBridge {
       everConnected: this.everConnected,
       lastSeen: this.lastSeen?.toISOString() || null,
       lastConnected: this.lastConnected?.toISOString() || null,
-      extension: this.#hello ? { version: this.#hello.version, engines: this.#hello.engines, capabilities: this.#hello.capabilities } : null,
+      extension: this.#hello ? { version: this.#hello.version, capabilities: this.#hello.capabilities || [] } : null,
       pending: this.#pending.size,
       path: PATH,
     };
@@ -115,7 +117,7 @@ class BrowserBridge {
     switch (msg.type) {
       case 'hello':
         this.#hello = msg;
-        console.log(`[browser-bridge] extension v${msg.version} — engines: ${(msg.engines || []).join(', ')}`);
+        console.log(`[browser-bridge] extension v${msg.version} — capabilities: ${(msg.capabilities || []).join(', ') || 'none advertised'}`);
         return;
       case 'pong':
         return;
@@ -170,15 +172,16 @@ class BrowserBridge {
     });
   }
 
-  /** @returns {Promise<{ engine: string, results: Array<{title:string,url:string,description:string}>, ms: number }>} */
-  async search(engine, query, limit = 8) {
-    const msg = await this.#request({ type: 'search', engine, query, limit }, config.browserSearch.timeoutMs);
-    return { engine: msg.engine || engine, results: Array.isArray(msg.results) ? msg.results : [], ms: msg.ms };
-  }
-
-  /** @returns {Promise<{ title: string, url: string, html: string, ms: number }>} */
-  async fetchPage(url, maxChars = 2_000_000) {
-    const msg = await this.#request({ type: 'fetch', url, maxChars }, config.browserSearch.timeoutMs);
+  /**
+   * Load a URL in a hidden tab and return the rendered page.
+   * @param {string} url
+   * @param {{ maxChars?: number, settleMs?: number, retryDelays?: number[] }} [opts]
+   *   settleMs: wait after load before the first read (client-rendered pages);
+   *   retryDelays: extra waits while the page is still a bot wall / thin ([] = read once).
+   * @returns {Promise<{ title: string, url: string, html: string, textChars: number, wall: boolean, wallText?: string, ms: number }>}
+   */
+  async fetchPage(url, opts = {}) {
+    const msg = await this.#request({ type: 'fetch', url, ...opts }, config.browserSearch.timeoutMs);
     if (!msg.page || typeof msg.page.html !== 'string') throw new Error('Extension returned no page content');
     return { ...msg.page, ms: msg.ms };
   }

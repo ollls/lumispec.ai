@@ -19,9 +19,8 @@
   hr { border: 0; border-top: 1px solid #8884; margin: 10px 0; }
   #out { font-size: 12px; max-height: 260px; overflow: auto; }
   #out .r { margin: 6px 0; }
-  #out .r a { font-weight: 600; text-decoration: none; }
-  #out .r .u { color: #888; font-size: 11px; word-break: break-all; }
-  #out .r .d { margin-top: 2px; }
+  #out .r { word-break: break-word; }
+  #out .r b { color: #888; font-weight: 500; }
 </style>
 </head>
 <body>
@@ -35,8 +34,7 @@
 
   <hr>
   <div class="row"><label>Test</label>
-    <select id="engine"></select>
-    <input type="text" id="query" placeholder="search query">
+    <input type="text" id="url" placeholder="URL to load in a hidden tab, e.g. https://example.com">
     <button id="run">Run</button></div>
   <div id="out"></div>
 

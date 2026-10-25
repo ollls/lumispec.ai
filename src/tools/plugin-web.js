@@ -156,7 +156,12 @@ async function ddgScrape(query) {
     timeout: { request: 15000 },
     followRedirect: true,
   });
-  const { document } = parseHTML(res.body);
+  return parseDdgHtml(res.body, 5);
+}
+
+/** Parse DuckDuckGo's HTML endpoint (html.duckduckgo.com/html). Shared with plugin-browser.js. */
+export function parseDdgHtml(html, limit = 8) {
+  const { document } = parseHTML(html);
   const results = [];
   for (const el of document.querySelectorAll('.result')) {
     const anchor = el.querySelector('.result__a');
@@ -164,14 +169,15 @@ async function ddgScrape(query) {
     if (!anchor) continue;
     const href = anchor.getAttribute('href') || '';
     const match = href.match(/uddg=([^&]+)/);
-    const finalUrl = match ? decodeURIComponent(match[1]) : href;
-    if (!finalUrl || finalUrl.startsWith('/')) continue;
+    let finalUrl = match ? decodeURIComponent(match[1]) : href;
+    if (finalUrl.startsWith('//')) finalUrl = 'https:' + finalUrl;
+    if (!/^https?:\/\//.test(finalUrl)) continue;
     results.push({
       title: anchor.textContent?.trim() || '',
       url: finalUrl,
       description: snippet?.textContent?.trim() || '',
     });
-    if (results.length >= 5) break;
+    if (results.length >= limit) break;
   }
   return results;
 }

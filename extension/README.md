@@ -1,9 +1,13 @@
 # Lumispec Browser Search — Chrome extension
 
-Runs `web_search` queries and `web_fetch` page loads in a hidden tab of **your own Chrome**
-and hands the parsed results back to the Lumispec server over a WebSocket. Because the
-request comes from a real, logged-in browser, Google and DuckDuckGo answer normally — no
-faked headers, no headless Puppeteer.
+Loads pages for `web_search` and `web_fetch` in a hidden tab of **your own Chrome** and
+hands the rendered HTML back to the Lumispec server over a WebSocket. Because the request
+comes from a real, logged-in browser, Google, Bing, Brave and DuckDuckGo answer normally —
+no faked headers, no headless Puppeteer.
+
+The extension knows nothing about search engines. Which URL to open and how to read the
+results page lives on the server (`src/tools/plugin-browser.js`), so new engines and parser
+fixes never require reloading the extension. You reload it only when this folder changes.
 
 The extension is loaded "unpacked" straight from this folder. Nothing is uploaded to the
 Chrome Web Store and nothing is installed system-wide; removing it is one click.
@@ -12,15 +16,13 @@ Chrome Web Store and nothing is installed system-wide; removing it is one click.
 
 | Piece | Role |
 |---|---|
-| `manifest.json` | Manifest V3. Permissions: `tabs`, `scripting`, `storage`, `alarms`; host access `<all_urls>` (needed so `web_fetch` can read any page the assistant asks for). |
-| `background.js` | Service worker. Keeps a WebSocket to the server, opens an **inactive** tab per request, runs a script inside the page, closes the tab. `search` returns `[{title, url, description}]`; `fetch` returns the live DOM HTML. One hidden tab at a time. |
-| `popup.html` / `popup.js` | Toolbar popup: connection state, server URL + token, enable toggle, and a **Test search** box that works without the server. |
+| `manifest.json` | Manifest V3. Permissions: `tabs`, `scripting`, `storage`, `alarms`; host access `<all_urls>` (any page the assistant asks for, including search result pages). |
+| `background.js` | Service worker. Keeps a WebSocket to the server; on a `fetch` request opens the URL in an **inactive** tab, waits for it to render (re-reading while the page is still a bot wall or nearly empty), returns the live DOM HTML plus text length and wall hints, closes the tab. One hidden tab at a time. |
+| `popup.html` / `popup.js` | Toolbar popup: connection state and version, server URL + token, enable toggle, and a **Test** box that loads any URL in a hidden tab and reports title, size, and wall status — works without the server. |
 
-Engines, in the order they are tried when several are checked: `duckduckgo` (HTML
-endpoint, stable selectors), `brave` (independent index, rarely walls), `bing` (decodes its
-`/ck/a?u=a1…` redirect links), `google` (organic results only; detects CAPTCHA and consent
-interstitials). The first engine with results answers; the rest are backups. DuckDuckGo
-serves Bing's index, so Brave is the one that adds real diversity.
+Search engines (DuckDuckGo, Brave, Bing, Google) are chosen on the Browser Search card in
+the Lumispec Plugins panel. When several are checked they are tried in card order and the
+first with results answers.
 
 ## Install (Chrome, Brave, Edge, or any Chromium browser)
 
@@ -37,11 +39,12 @@ unpacked extensions, so there is no permission prompt.
 ### Verify it works (no server needed)
 
 1. Click the extension icon to open the popup.
-2. In the **Test** row pick `duckduckgo`, type a query, press **Run**.
-3. A tab flickers open in the background and closes; results appear in the popup within a
-   few seconds.
-4. Repeat with `google`. If you see "consent interstitial", open google.com once in a
-   normal tab, accept the dialog, and run again.
+2. In the **Test** row type a URL such as `https://example.com`, press **Run**.
+3. A tab flickers open in the background and closes; the popup shows the page title, how
+   long it took, text and HTML size, whether a bot wall was detected, and a text snippet.
+4. Try `https://www.google.com/search?q=test`. "Bot wall: no" and a real snippet means
+   Google is happy with this profile. A consent page means: open google.com once in a normal
+   tab, accept the dialog, run again.
 
 With the Lumispec server running on the default port, the status line should read
 **Connected to Lumispec** and the toolbar badge should be clear within a few seconds. If it
@@ -55,11 +58,12 @@ In the Lumispec UI open **Plugins** and turn on **Browser Search**. The regular
 call now routes to this extension. Turn Browser Search off to get the regular module back
 exactly as it was.
 
-Pick the engines on the Browser Search card. They are tried in order and the first one
-with results wins, so leaving both DuckDuckGo and Google on means a Google CAPTCHA just
-costs a few seconds. If the extension is offline, a request times out, or every engine
-fails, Lumispec falls back to the regular HTTP search and says so in the tool result.
-The **Browser** dot in the status bar is green while the extension is connected.
+Pick the engines on the Browser Search card (DuckDuckGo, Brave, Bing, Google). They are
+tried in that order and the first one with results wins, so checking several just adds
+backups. If the extension is offline, a request times out, or every engine fails, Lumispec
+falls back to the regular HTTP search and says so in the tool result. The **Browser** dot in
+the status bar is green while the extension is connected, and the card shows the connected
+extension's version (amber if it is older than the one in this folder).
 
 ### Settings
 
@@ -103,7 +107,7 @@ uninstall on the server side.
 | Badge shows `!` | Not connected to the server. Check the Lumispec server is running, the Server URL port matches `PORT`, and the Token matches `BROWSER_SEARCH_TOKEN`. |
 | "Result page did not finish loading within 20s" | Slow network or the engine hung. Retry; if persistent, open the URL manually to see what the engine shows. |
 | "Google showed a CAPTCHA" | Google rate-limited this browser. Wait a few minutes, or solve the CAPTCHA once in a normal tab. |
-| "No organic results found" | Google changed its result markup. Update the selectors in `parseGoogle` in `background.js`. |
+| Search falls back with "<engine>: no results" | That engine changed its result markup. Fix the selectors in the `ENGINES` table in `src/tools/plugin-browser.js` — server-side, no extension reload. |
 | Tabs stay open | The worker was killed mid-search. Close them by hand; the next search is unaffected. |
 | `web_fetch` falls back with "bot/JS challenge wall" | The site (Reuters, Cloudflare-fronted pages) showed a challenge that did not clear within about 8 s of waiting. Open the site once in a normal tab so the challenge cookie is set, then retry. |
 | Service worker shows "inactive" on the card | Normal. Chrome suspends idle workers; the alarm and the socket wake it. Click **service worker** on the card to open its console. |

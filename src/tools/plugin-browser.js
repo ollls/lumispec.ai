@@ -1,6 +1,11 @@
 // Browser Search — routes web_search / web_fetch through the Lumispec Browser Search
-// Chrome extension (extension/), which runs the query in a hidden tab of the user's own
-// browser and talks to us over the WebSocket bridge (services/browserBridge.js).
+// Chrome extension (extension/), which loads a URL in a hidden tab of the user's own browser
+// and returns the rendered HTML over the WebSocket bridge (services/browserBridge.js).
+//
+// ALL search-engine knowledge lives here, server-side: which URL to open for a query, how to
+// parse the result page (linkedom), how to recognise that engine's CAPTCHA / consent pages,
+// and how long to let it render. The extension is engine-agnostic, so adding or fixing an
+// engine is an edit to the ENGINES table below — no extension reload.
 //
 // While this plugin is enabled it SUPERSEDES the "web" plugin: the regular Web Search &
 // Fetch group is hot-unloaded and its slider is grayed out, so every web_search / web_fetch
@@ -14,9 +19,10 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parseHTML } from 'linkedom';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
-import { runWebSearch, runWebFetch, htmlToMarkdown } from './plugin-web.js';
+import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml } from './plugin-web.js';
 
 // Version of the extension source shipped in this checkout. Compared with the version the
 // connected extension announces in `hello`, so an un-reloaded extension is called out.
@@ -32,36 +38,143 @@ function extensionOutdated() {
 }
 
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
-// Card order = try order when several are checked (first with results answers). Ordered by
-// how rarely each walls a real browser: Google is last because it is the one that CAPTCHAs.
-const ENGINES = {
-  duckduckgo: { label: 'DuckDuckGo' },
-  brave: { label: 'Brave' },
-  bing: { label: 'Bing' },
-  google: { label: 'Google' },
-};
+const RESULT_LIMIT = 8;
 const MIN_USEFUL_CHARS = 200;
+
+// ── Parser helpers (linkedom) ───────────────────────
+
+const text = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+const absolute = (href, base) => { try { return new URL(href, base).href; } catch { return ''; } };
+const isHttp = (u) => /^https?:\/\//i.test(u);
+const hostIs = (u, suffix) => { try { const h = new URL(u).hostname; return h === suffix || h.endsWith('.' + suffix); } catch { return false; } };
+
+/**
+ * Engine table. Each entry:
+ *   url(query)            → results page URL to load in the hidden tab
+ *   settleMs / retryDelays → render waits passed to the extension (JS-rendered pages need more)
+ *   block(page)           → string reason if the page is a CAPTCHA / consent / block page, else null
+ *   parse(page, limit)    → [{ title, url, description }]
+ * Card order = try order when several engines are checked (first with results answers),
+ * ordered by how rarely each walls a real browser: Google last because it is the one that CAPTCHAs.
+ */
+const ENGINES = {
+  duckduckgo: {
+    label: 'DuckDuckGo',
+    url: (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
+    settleMs: 200, retryDelays: [],
+    block: (page) => {
+      const { document } = parseHTML(page.html);
+      return document.querySelector('.anomaly-modal, #challenge-form') ? 'DuckDuckGo showed a bot challenge page' : null;
+    },
+    parse: (page, limit) => parseDdgHtml(page.html, limit),
+  },
+
+  brave: {
+    label: 'Brave',
+    url: (q) => `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
+    // Results render client-side; give the first paint a moment, then one more read.
+    settleMs: 1200, retryDelays: [1500],
+    block: (page) => (/are you a robot|verify you are human|unusual traffic/i.test(page.wallText || '') ? 'Brave Search showed a bot challenge page' : null),
+    parse: (page, limit) => {
+      const { document } = parseHTML(page.html);
+      const out = [];
+      const seen = new Set();
+      const blocks = document.querySelectorAll('#results .snippet[data-type="web"], #results .snippet:not([data-type])');
+      for (const el of blocks) {
+        const a = el.querySelector('a[href^="http"]');
+        if (!a) continue;
+        const url = absolute(a.getAttribute('href'), page.url);
+        if (!isHttp(url) || hostIs(url, 'brave.com') || seen.has(url)) continue;
+        seen.add(url);
+        const titleEl = el.querySelector('.title, .snippet-title, [class*="title"]');
+        const descEl = el.querySelector('.snippet-description, .snippet-content, .description, [class*="description"]');
+        out.push({ title: text(titleEl) || text(a), url, description: text(descEl) });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+  },
+
+  bing: {
+    label: 'Bing',
+    url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en&count=10`,
+    settleMs: 300, retryDelays: [],
+    block: (page) => {
+      if (/\/turing\//.test(page.url || '')) return 'Bing showed a CAPTCHA page';
+      const { document } = parseHTML(page.html);
+      return document.querySelector('#b_captcha, form[action*="captcha"]') ? 'Bing showed a CAPTCHA page' : null;
+    },
+    parse: (page, limit) => {
+      const { document } = parseHTML(page.html);
+      // Bing wraps result links as /ck/a?...&u=a1<base64url(url)>; decode back to the real URL.
+      const unwrap = (href) => {
+        try {
+          const u = new URL(href, page.url);
+          if (u.hostname.endsWith('bing.com') && u.pathname.startsWith('/ck/')) {
+            const p = u.searchParams.get('u') || '';
+            if (p.startsWith('a1')) return Buffer.from(p.slice(2), 'base64url').toString('utf8');
+          }
+          return u.href;
+        } catch { return ''; }
+      };
+      const out = [];
+      const seen = new Set();
+      for (const li of document.querySelectorAll('#b_results > li.b_algo')) {
+        const a = li.querySelector('h2 a[href]');
+        if (!a) continue;
+        const url = unwrap(a.getAttribute('href'));
+        if (!isHttp(url) || hostIs(url, 'bing.com') || seen.has(url)) continue;
+        seen.add(url);
+        const descEl = li.querySelector('.b_caption p, p[class*="b_lineclamp"], .b_algoSlug, .b_paractl');
+        out.push({ title: text(a), url, description: text(descEl).replace(/^WEB\s*/i, '') });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+  },
+
+  google: {
+    label: 'Google',
+    url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&hl=en&num=10`,
+    settleMs: 300, retryDelays: [],
+    block: (page) => {
+      let u; try { u = new URL(page.url || ''); } catch { u = null; }
+      if (u && u.pathname.startsWith('/sorry')) return 'Google showed a CAPTCHA / unusual-traffic page';
+      if (u && u.hostname.startsWith('consent.')) return 'Google consent interstitial — open google.com once in this browser and accept it';
+      if (/before you continue/i.test(page.title || '')) return 'Google consent interstitial — open google.com once in this browser and accept it';
+      const { document } = parseHTML(page.html);
+      return document.querySelector('form#captcha-form, #recaptcha') ? 'Google showed a CAPTCHA / unusual-traffic page' : null;
+    },
+    parse: (page, limit) => {
+      const { document } = parseHTML(page.html);
+      const out = [];
+      const seen = new Set();
+      // Organic results: an <h3> inside an anchor. Ads and "People also ask" don't match.
+      for (const h3 of document.querySelectorAll('#search a h3, #rso a h3')) {
+        const a = h3.closest('a');
+        if (!a) continue;
+        let url = absolute(a.getAttribute('href'), page.url);
+        try {
+          const u = new URL(url);
+          if (u.pathname === '/url' && u.searchParams.get('q')) url = u.searchParams.get('q');
+        } catch { continue; }
+        if (!isHttp(url) || hostIs(url, 'google.com') || seen.has(url)) continue;
+        seen.add(url);
+        const block = a.closest('[data-hveid], .g, [jscontroller]') || a.parentElement;
+        const descEl = block?.querySelector('[data-sncf], .VwiC3b, div[style*="-webkit-line-clamp"]');
+        out.push({ title: text(h3), url, description: text(descEl) });
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+  },
+};
 
 async function getEngines() {
   const cfg = await readPluginConfig();
   const saved = cfg.browser?.engines;
   const list = Array.isArray(saved) && saved.length ? saved : DEFAULTS.engines;
   return list.filter(e => ENGINES[e]);
-}
-
-/** Split the checked engines into those the connected extension advertised and those it did not. */
-function partitionBySupport(engines) {
-  const advertised = bridge.info.extension?.engines;
-  if (!Array.isArray(advertised) || advertised.length === 0) return { supported: engines, unsupported: [] };
-  return {
-    supported: engines.filter(e => advertised.includes(e)),
-    unsupported: engines.filter(e => !advertised.includes(e)),
-  };
-}
-
-function reloadHint() {
-  const v = bridge.info.extension?.version;
-  return `extension v${v || '?'} is loaded, this checkout ships v${SHIPPED_EXTENSION_VERSION} — reload it at chrome://extensions`;
 }
 
 function offlineReason() {
@@ -73,16 +186,27 @@ function offlineReason() {
 // A request in flight when the extension reconnects (worker restart, extension reload) is
 // rejected with "Extension reconnected". The new connection is usually up within a second,
 // so retry that one case once instead of falling back to HTTP.
-async function searchWithRetry(engine, query) {
+async function fetchWithRetry(url, opts) {
   try {
-    return await bridge.search(engine, query, 8);
+    return await bridge.fetchPage(url, opts);
   } catch (err) {
     if (!/Extension reconnected/.test(err.message)) throw err;
     await new Promise(r => setTimeout(r, 1000));
     if (!bridge.connected) throw err;
-    console.warn(`[browser_search] extension reconnected mid-search, retrying ${engine} once`);
-    return bridge.search(engine, query, 8);
+    console.warn(`[browser] extension reconnected mid-request, retrying ${url} once`);
+    return bridge.fetchPage(url, opts);
   }
+}
+
+/** Run one engine end to end: load, block check, parse. Throws with a reason on failure. */
+async function searchEngine(id, query) {
+  const def = ENGINES[id];
+  const page = await fetchWithRetry(def.url(query), { settleMs: def.settleMs, retryDelays: def.retryDelays });
+  const blocked = def.block(page);
+  if (blocked) throw new Error(blocked);
+  if (page.wall) throw new Error(`${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")`);
+  const results = def.parse(page, RESULT_LIMIT);
+  return { results, ms: page.ms };
 }
 
 async function fallbackSearch(query, reason) {
@@ -123,12 +247,12 @@ export default {
   cardStatus: () => {
     const info = bridge.info;
     if (info.connected) {
-      const ext = info.extension;
-      const detail = ext ? ` v${ext.version}, engines: ${(ext.engines || []).join(', ')}` : '';
+      const v = info.extension?.version;
+      const detail = v ? ` v${v}` : '';
       if (extensionOutdated()) {
-        return { ok: false, text: `Extension connected${detail} — outdated, this checkout ships v${SHIPPED_EXTENSION_VERSION}. Reload it at chrome://extensions to get the new engines/fixes.` };
+        return { ok: false, text: `Extension connected${detail} — outdated, this checkout ships v${SHIPPED_EXTENSION_VERSION}. Reload it at chrome://extensions.` };
       }
-      return { ok: true, text: `Extension connected${detail}` };
+      return { ok: true, text: `Extension connected${detail} · engines: ${Object.values(ENGINES).map(e => e.label).join(', ')}` };
     }
     if (info.everConnected) {
       const seen = info.lastSeen ? new Date(info.lastSeen).toLocaleTimeString() : 'unknown';
@@ -150,36 +274,30 @@ export default {
 - Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
   tools: {
     web_search: {
-      description: 'Search the web through the user\'s browser (DuckDuckGo / Google in a hidden tab). Requires a "query" argument.',
+      description: 'Search the web through the user\'s browser (results page loaded in a hidden tab). Requires a "query" argument.',
       parameters: { query: 'string' },
       execute: async ({ query }) => {
         if (!query || !String(query).trim()) return { error: 'Empty query', results: [] };
         const offline = offlineReason();
         if (offline) return fallbackSearch(query, offline);
 
-        // Engines run in the saved order, one at a time (the extension serializes anyway):
-        // first engine with results wins, so a Google CAPTCHA just means DuckDuckGo answers.
-        // Engines the connected extension did not advertise (older build) are skipped up
-        // front with a reason that says how to fix it, instead of a round trip per engine.
-        const { supported: engines, unsupported } = partitionBySupport(await getEngines());
+        // Engines run in card order, one at a time (the extension serializes tabs anyway):
+        // first engine with results answers, so a Google CAPTCHA just means the next one answers.
+        const engines = await getEngines();
         const errors = [];
-        if (unsupported.length) {
-          const names = unsupported.map(e => ENGINES[e].label).join(', ');
-          errors.push(`${names} not supported by the connected extension (${reloadHint()})`);
-          console.warn(`[browser_search] skipping ${names}: ${reloadHint()}`);
-        }
-        for (const engine of engines) {
+        for (const id of engines) {
+          const label = ENGINES[id].label;
           try {
-            const { results, ms } = await searchWithRetry(engine, query);
+            const { results, ms } = await searchEngine(id, query);
             if (results.length > 0) {
-              if (errors.length) console.warn(`[browser_search] ${ENGINES[engine].label} answered after: ${errors.join('; ')}`);
-              return { results, sources: `Browser (${ENGINES[engine].label}, ${ms} ms)` };
+              if (errors.length) console.warn(`[browser_search] ${label} answered after: ${errors.join('; ')}`);
+              return { results, sources: `Browser (${label}, ${ms} ms)` };
             }
-            errors.push(`${ENGINES[engine].label}: no results`);
-            console.warn(`[browser_search] ${ENGINES[engine].label} returned no results for "${query}" (parser drift or blocked)`);
+            errors.push(`${label}: no results`);
+            console.warn(`[browser_search] ${label} returned no results for "${query}" (parser drift or blocked)`);
           } catch (err) {
-            errors.push(`${ENGINES[engine].label}: ${err.message}`);
-            console.warn(`[browser_search] ${ENGINES[engine].label} failed: ${err.message}`);
+            errors.push(`${label}: ${err.message}`);
+            console.warn(`[browser_search] ${label} failed: ${err.message}`);
             // Extension dropped or stopped answering: the next engine would only burn another
             // timeout, so go straight to the HTTP fallback.
             if (!bridge.connected || /did not answer within/.test(err.message)) break;
@@ -192,14 +310,12 @@ export default {
       description: 'Fetch a web page through the user\'s browser and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
       parameters: { url: 'string' },
       execute: async ({ url }) => {
-        if (!/^https?:\/\//i.test(url || '')) return { error: `Invalid URL: ${url}` };
+        if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
         const offline = offlineReason();
         if (offline) return fallbackFetch(url, offline);
 
         try {
-          const page = await bridge.fetchPage(url);
-          // The extension already waited through its retry schedule (~8 s) for a challenge
-          // wall to clear or a client render to finish; if it is still a wall, say so.
+          const page = await fetchWithRetry(url, {}); // extension defaults: 0.8 s settle, +3 s, +4 s while walled/thin
           if (page.wall) {
             const snippet = (page.wallText || '').slice(0, 80);
             return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${Math.round((page.ms || 0) / 1000)}s ("${snippet}")`);
