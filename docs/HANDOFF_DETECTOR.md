@@ -114,6 +114,30 @@ its toast names the rule. When a fetch is refused by a `never` rule, the tool re
 in plain words — `host rule "never": <host> is always read without your cookies; change the rule on
 the Browser Search card to allow it` — never a generic fetch failure.
 
+### Managing the host-rules list
+
+- **Storage:** `data/plugins.json` → `browser.hostRules: [{ pattern, rule }]`. Per machine,
+  gitignored, survives restarts. Never included in the system prompt or any tool result listing;
+  the LLM only learns about a rule when a fetch is refused by it.
+- **Pattern semantics:** hosts, not URLs. A bare domain (`bankofamerica.com`) matches itself and
+  all subdomains; a full host (`secure.bankofamerica.com`) matches exactly; `*.chase.com` matches
+  subdomains only. When several rows match, the **most specific host wins**, so row order never
+  matters.
+- **Adding rows:** by hand on the Browser Search card (pattern field + rule dropdown
+  `never | handoff | auto` + Add; each row has a delete control). `never` rows are **only** ever
+  added by the user. `handoff` rows are also added automatically after a successful handoff
+  (Decision 1) with an undo toast.
+- **Starter suggestion, not a default:** when the list is empty the card shows one line offering to
+  add a suggested set of banking/payment hosts as `never` in one click. Nothing is blocked until
+  the user clicks; the suggested list lives in `plugin-browser.js` and is easy to edit.
+- **Visibility of enforcement:** a refused fetch says `host rule "never": …` in the tool result and
+  the Think stream; the card shows a count of refusals since server start so a forgotten rule is
+  noticed.
+- **Deliberately not built:** import/export (the JSON is hand-copyable) and per-conversation
+  bypasses (change the rule, fetch, change it back — a temporary bypass is what gets left on).
+- **API:** `POST /api/plugins/browser/toggle` accepts `hostRules` (validated: pattern is a host
+  glob, rule is one of the three); the route already passes plugin-specific config through.
+
 ## Flow
 
 ### Extension (`extension/background.js`, bump to 0.5.0)
