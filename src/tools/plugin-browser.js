@@ -54,8 +54,9 @@ const hostIs = (u, suffix) => { try { const h = new URL(u).hostname; return h ==
  *   settleMs / retryDelays → render waits passed to the extension (JS-rendered pages need more)
  *   block(page)           → string reason if the page is a CAPTCHA / consent / block page, else null
  *   parse(page, limit)    → [{ title, url, description }]
- * Card order = try order when several engines are checked (first with results answers),
- * ordered by how rarely each walls a real browser: Google last because it is the one that CAPTCHAs.
+ * Exactly one engine is active (radio on the card). If it fails or returns nothing, the call
+ * falls back to the HTTP search — there is no chaining between browser engines, since results
+ * are never merged and the fallback already provides the backup.
  */
 const ENGINES = {
   duckduckgo: {
@@ -170,11 +171,12 @@ const ENGINES = {
   },
 };
 
-async function getEngines() {
+/** The single active engine id (first valid saved entry; default duckduckgo). */
+async function getEngine() {
   const cfg = await readPluginConfig();
   const saved = cfg.browser?.engines;
-  const list = Array.isArray(saved) && saved.length ? saved : DEFAULTS.engines;
-  return list.filter(e => ENGINES[e]);
+  const list = (Array.isArray(saved) ? saved : []).filter(e => ENGINES[e]);
+  return list[0] || DEFAULTS.engines[0];
 }
 
 function offlineReason() {
@@ -235,6 +237,7 @@ export default {
   supersedes: ['web'],
   defaults: DEFAULTS,
   configUi: () => ({
+    engineMode: 'single', // radio: one engine at a time
     availableEngines: Object.entries(ENGINES).map(([id, e]) => ({ id, label: e.label, available: true })),
   }),
   status: {
@@ -252,7 +255,7 @@ export default {
       if (extensionOutdated()) {
         return { ok: false, text: `Extension connected${detail} — outdated, this checkout ships v${SHIPPED_EXTENSION_VERSION}. Reload it at chrome://extensions.` };
       }
-      return { ok: true, text: `Extension connected${detail} · engines: ${Object.values(ENGINES).map(e => e.label).join(', ')}` };
+      return { ok: true, text: `Extension connected${detail}` };
     }
     if (info.everConnected) {
       const seen = info.lastSeen ? new Date(info.lastSeen).toLocaleTimeString() : 'unknown';
@@ -281,29 +284,18 @@ export default {
         const offline = offlineReason();
         if (offline) return fallbackSearch(query, offline);
 
-        // Engines run in card order, one at a time (the extension serializes tabs anyway):
-        // first engine with results answers, so a Google CAPTCHA just means the next one answers.
-        const engines = await getEngines();
-        const errors = [];
-        for (const id of engines) {
-          const label = ENGINES[id].label;
-          try {
-            const { results, ms } = await searchEngine(id, query);
-            if (results.length > 0) {
-              if (errors.length) console.warn(`[browser_search] ${label} answered after: ${errors.join('; ')}`);
-              return { results, sources: `Browser (${label}, ${ms} ms)` };
-            }
-            errors.push(`${label}: no results`);
-            console.warn(`[browser_search] ${label} returned no results for "${query}" (parser drift or blocked)`);
-          } catch (err) {
-            errors.push(`${label}: ${err.message}`);
-            console.warn(`[browser_search] ${label} failed: ${err.message}`);
-            // Extension dropped or stopped answering: the next engine would only burn another
-            // timeout, so go straight to the HTTP fallback.
-            if (!bridge.connected || /did not answer within/.test(err.message)) break;
-          }
+        // One engine. If it fails or returns nothing, the HTTP fallback is the backup.
+        const id = await getEngine();
+        const label = ENGINES[id].label;
+        try {
+          const { results, ms } = await searchEngine(id, query);
+          if (results.length > 0) return { results, sources: `Browser (${label}, ${ms} ms)` };
+          console.warn(`[browser_search] ${label} returned no results for "${query}" (parser drift or blocked)`);
+          return fallbackSearch(query, `${label}: no results`);
+        } catch (err) {
+          console.warn(`[browser_search] ${label} failed: ${err.message}`);
+          return fallbackSearch(query, `${label}: ${err.message}`);
         }
-        return fallbackSearch(query, errors.join('; ') || 'no browser engines enabled');
       },
     },
     web_fetch: {

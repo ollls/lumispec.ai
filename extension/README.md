@@ -20,9 +20,8 @@ Chrome Web Store and nothing is installed system-wide; removing it is one click.
 | `background.js` | Service worker. Keeps a WebSocket to the server; on a `fetch` request opens the URL in an **inactive** tab, waits for it to render (re-reading while the page is still a bot wall or nearly empty), returns the live DOM HTML plus text length and wall hints, closes the tab. One hidden tab at a time. |
 | `popup.html` / `popup.js` | Toolbar popup: connection state and version, server URL + token, enable toggle, and a **Test** box that loads any URL in a hidden tab and reports title, size, and wall status — works without the server. |
 
-Search engines (DuckDuckGo, Brave, Bing, Google) are chosen on the Browser Search card in
-the Lumispec Plugins panel. When several are checked they are tried in card order and the
-first with results answers.
+The search engine (DuckDuckGo, Brave, Bing or Google) is chosen on the Browser Search card
+in the Lumispec Plugins panel — one at a time.
 
 ## Install (Chrome, Brave, Edge, or any Chromium browser)
 
@@ -58,12 +57,12 @@ In the Lumispec UI open **Plugins** and turn on **Browser Search**. The regular
 call now routes to this extension. Turn Browser Search off to get the regular module back
 exactly as it was.
 
-Pick the engines on the Browser Search card (DuckDuckGo, Brave, Bing, Google). They are
-tried in that order and the first one with results wins, so checking several just adds
-backups. If the extension is offline, a request times out, or every engine fails, Lumispec
-falls back to the regular HTTP search and says so in the tool result. The **Browser** dot in
-the status bar is green while the extension is connected, and the card shows the connected
-extension's version (amber if it is older than the one in this folder).
+Pick one engine on the Browser Search card (DuckDuckGo, Brave, Bing or Google). If the
+extension is offline, the request times out, or the engine returns nothing (CAPTCHA, consent
+page, layout change), Lumispec falls back to the regular HTTP search and says so in the
+tool result. The **Browser** dot in the status bar is green while the extension is
+connected, and the card shows the connected extension's version (amber if it is older than
+the one in this folder).
 
 ### Settings
 

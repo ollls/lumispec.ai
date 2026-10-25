@@ -3502,7 +3502,10 @@ function renderPluginConfig(plugins) {
         const wrapper = document.createElement('label');
         wrapper.className = 'flex items-center gap-1.5 cursor-pointer';
         const cb = document.createElement('input');
-        cb.type = 'checkbox';
+        // engineMode 'single' (Browser Search) renders radios: one engine, no merging/chaining.
+        const single = p.config.engineMode === 'single';
+        cb.type = single ? 'radio' : 'checkbox';
+        if (single) cb.name = `engine-${p.group}`;
         cb.checked = (p.config.engines || []).includes(eng.id);
         Object.assign(cb.style, { accentColor: '#6366f1', cursor: 'pointer' });
 
@@ -3512,7 +3515,7 @@ function renderPluginConfig(plugins) {
 
         cb.addEventListener('change', async () => {
           const engines = [];
-          for (const box of checkboxRow.querySelectorAll('input[type="checkbox"]')) {
+          for (const box of checkboxRow.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
             if (box.checked) engines.push(box.dataset.engine);
           }
           await fetch(`/api/plugins/${p.group}/toggle`, {
