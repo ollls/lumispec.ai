@@ -1555,7 +1555,8 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.usage) {
-              const total = data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
+              // context_tokens = measured prompt + last completion (what the slot holds); total_tokens is a fallback
+              const total = data.usage.context_tokens || data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
               updateContextBar(total);
             }
             if (data.error) {
@@ -1940,7 +1941,7 @@ async function sendTasks(tasks, displayText) {
             }
 
             if (data.usage) {
-              const total = data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
+              const total = data.usage.context_tokens || data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
               updateContextBar(total);
             }
 

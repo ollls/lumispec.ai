@@ -761,8 +761,15 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     }
 
     if (lastUsage) {
-      conversations.setTokenCount(conv.id, lastUsage.total_tokens);
-      res.write(`data: ${JSON.stringify({ usage: lastUsage })}\n\n`);
+      // Context bar = what the slot actually holds after this turn: the last round's measured
+      // prompt (countPromptTokens, via /tokenize) plus the tokens generated in that round.
+      // NOT timings.total_tokens — prompt_n is tokens *processed*, which with KV-cache reuse reads
+      // ~80 for a 40K conversation, so the bar used to under-report after every cached turn.
+      const contextTokens = promptTokens > 0
+        ? promptTokens + (lastUsage.completion_tokens || 0)
+        : lastUsage.total_tokens;
+      conversations.setTokenCount(conv.id, contextTokens);
+      res.write(`data: ${JSON.stringify({ usage: { ...lastUsage, context_tokens: contextTokens } })}\n\n`);
     }
   } catch (err) {
     if (err.name !== 'AbortError') {

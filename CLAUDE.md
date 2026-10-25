@@ -309,6 +309,14 @@ The limit comes from the live slot (`slots.getSlotContextSize()`), so raising `-
 the budget with no code change. `LLAMA_MAX_CONTEXT` is only the fallback when slots are unreachable.
 `countPromptTokens()` also counts `reasoning_content` on assistant messages (see **Retain Toggle**).
 
+**Context bar shows measured context, not timings totals.** `tokenCount` (and the `usage` SSE event's
+`context_tokens`) is the last round's `countPromptTokens()` result plus that round's
+`completion_tokens` — what the slot holds after the turn. It is **not** `timings.total_tokens`:
+`prompt_n` counts tokens *processed*, so with KV-cache reuse the bar read ~80 after a cached turn.
+The task pipeline reports the **last step's** context (steps are isolated) and `peak_context_tokens`
+alongside; `total_tokens` there is still the sum of all steps and rounds — a measure of work, which
+is why the bar used to show 84K on a 64K slot.
+
 **Empty / truncated answers are never silent:**
 - `finish_reason: "length"` with content → a "⚠ Answer cut off at the context limit" marker is appended
 - empty final content in chat → stored as `[Error: Empty response after N tool call(s)…]` and sent as
