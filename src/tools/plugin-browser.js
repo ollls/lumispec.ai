@@ -17,8 +17,9 @@
 // which supersession deliberately leaves untouched. Every fallback is disclosed in the tool
 // result (`fallback` + `sources`), so the Think stream shows exactly what happened.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { parseHTML } from 'linkedom';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
@@ -40,6 +41,37 @@ function extensionOutdated() {
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
 const RESULT_LIMIT = 8;
 const MIN_USEFUL_CHARS = 200;
+const DEBUG_DIR = resolve(fileURLToPath(new URL('../../logs/browser-debug', import.meta.url)));
+const RECENT_FAILURE_TTL_MS = 90_000;
+
+/**
+ * When a parser finds nothing on a page the extension returned, save that page so the
+ * selectors can be fixed against the real markup (the server itself cannot load these
+ * engines — Brave answers it with HTTP 429). Returns the saved path or null.
+ */
+function dumpPage(tag, page) {
+  try {
+    mkdirSync(DEBUG_DIR, { recursive: true });
+    const file = resolve(DEBUG_DIR, `${tag}-${new Date().toISOString().replace(/[:.]/g, '-')}.html`);
+    const head = `<!-- url: ${page.url}\n     title: ${page.title}\n     textChars: ${page.textChars} wall: ${page.wall} -->\n`;
+    writeFileSync(file, head + (page.html || '').slice(0, 3_000_000));
+    return file.replace(resolve(DEBUG_DIR, '../..') + '/', '');
+  } catch (err) {
+    console.warn(`[browser] could not save debug page: ${err.message}`);
+    return null;
+  }
+}
+
+// URLs whose fetch just failed. The LLM tends to retry the same URL straight away, which
+// used to cost another 20 s extension wait plus a 15 s HTTP fallback; now the second attempt
+// gets the cached reason immediately.
+const recentFetchFailures = new Map(); // url → { reason, at }
+function recentFailure(url) {
+  const e = recentFetchFailures.get(url);
+  if (!e) return null;
+  if (Date.now() - e.at > RECENT_FAILURE_TTL_MS) { recentFetchFailures.delete(url); return null; }
+  return e;
+}
 
 // ── Parser helpers (linkedom) ───────────────────────
 
@@ -208,6 +240,10 @@ async function searchEngine(id, query) {
   if (blocked) throw new Error(blocked);
   if (page.wall) throw new Error(`${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")`);
   const results = def.parse(page, RESULT_LIMIT);
+  if (results.length === 0) {
+    const saved = dumpPage(id, page);
+    throw new Error(`no results${saved ? ` (page saved to ${saved} for selector repair)` : ''}`);
+  }
   return { results, ms: page.ms };
 }
 
@@ -289,9 +325,7 @@ export default {
         const label = ENGINES[id].label;
         try {
           const { results, ms } = await searchEngine(id, query);
-          if (results.length > 0) return { results, sources: `Browser (${label}, ${ms} ms)` };
-          console.warn(`[browser_search] ${label} returned no results for "${query}" (parser drift or blocked)`);
-          return fallbackSearch(query, `${label}: no results`);
+          return { results, sources: `Browser (${label}, ${ms} ms)` };
         } catch (err) {
           console.warn(`[browser_search] ${label} failed: ${err.message}`);
           return fallbackSearch(query, `${label}: ${err.message}`);
@@ -306,6 +340,12 @@ export default {
         const offline = offlineReason();
         if (offline) return fallbackFetch(url, offline);
 
+        const recent = recentFailure(url);
+        if (recent) {
+          const ago = Math.round((Date.now() - recent.at) / 1000);
+          return { url, error: `This URL already failed ${ago}s ago (${recent.reason}). Not retried — use another source or the search snippets.`, fallback: recent.reason, notRetried: true };
+        }
+
         try {
           const page = await fetchWithRetry(url, {}); // extension defaults: 0.8 s settle, +3 s, +4 s while walled/thin
           if (page.wall) {
@@ -318,7 +358,9 @@ export default {
           }
           return { url: page.url || url, title: title || page.title, content: markdown, _tier: `extension (${page.ms} ms)` };
         } catch (err) {
-          return fallbackFetch(url, err.message);
+          const res = await fallbackFetch(url, err.message);
+          if (res.error) recentFetchFailures.set(url, { reason: err.message, at: Date.now() });
+          return res;
         }
       },
     },

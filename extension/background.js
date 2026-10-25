@@ -20,7 +20,9 @@ const DEFAULTS = {
   enabled: true,
 };
 
-const PAGE_LOAD_TIMEOUT_MS = 20000;
+const PAGE_LOAD_TIMEOUT_MS = 20000;         // hard cap on waiting for the tab
+const LOAD_PROBE_AFTER_MS = 4000;           // after this, accept an "interactive" page with real text
+const LOAD_PROBE_EVERY_MS = 1500;
 const FETCH_SETTLE_MS = 800;                // let client-rendered pages paint after "complete"
 const FETCH_RETRY_DELAYS_MS = [3000, 4000]; // extra waits while the first read is thin or a bot wall
 const FETCH_MIN_TEXT_CHARS = 200;           // below this the page is "thin" and worth waiting for
@@ -30,20 +32,43 @@ const RECONNECT_MAX_MS = 30000;
 
 // ── Hidden-tab page loading ─────────────────────────
 
-function waitForTabLoad(tabId, timeoutMs) {
+// Runs inside the page: is the document usable even if the load event never fires?
+function probeReady(minChars) {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  return { readyState: document.readyState, textChars: text.length, usable: document.readyState !== 'loading' && text.length >= minChars };
+}
+
+/**
+ * Resolve when the tab reports status "complete" — or, after LOAD_PROBE_AFTER_MS, as soon as the
+ * document is past "loading" and has real text. Pages with never-ending trackers, video or
+ * long-polling never reach "complete" (newsroom.amd.com sat for 20 s with the article fully
+ * rendered). Rejects only if the hard cap passes with nothing usable.
+ */
+function waitForTabLoad(tabId, timeoutMs, minChars) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error(`Page did not finish loading within ${timeoutMs / 1000}s`));
+    let done = false;
+    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); clearInterval(prober); chrome.tabs.onUpdated.removeListener(onUpdated); fn(v); };
+    const timer = setTimeout(async () => {
+      // Last chance: take whatever the DOM holds now if it is usable.
+      try {
+        const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId }, func: probeReady, args: [minChars] });
+        if (result?.usable) return finish(resolve, 'timeout-usable');
+      } catch {}
+      finish(reject, new Error(`Page did not finish loading within ${timeoutMs / 1000}s`));
     }, timeoutMs);
     function onUpdated(id, info) {
-      if (id === tabId && info.status === 'complete') {
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
-      }
+      if (id === tabId && info.status === 'complete') finish(resolve, 'complete');
     }
     chrome.tabs.onUpdated.addListener(onUpdated);
+    let elapsed = 0;
+    const prober = setInterval(async () => {
+      elapsed += LOAD_PROBE_EVERY_MS;
+      if (elapsed < LOAD_PROBE_AFTER_MS || done) return;
+      try {
+        const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId }, func: probeReady, args: [minChars] });
+        if (result?.usable) finish(resolve, 'interactive');
+      } catch { /* page not scriptable yet (still navigating) — keep waiting */ }
+    }, LOAD_PROBE_EVERY_MS);
   });
 }
 
@@ -89,8 +114,9 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
     const started = Date.now();
     const tab = await chrome.tabs.create({ url, active: false });
     try {
-      await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS);
-      const waits = [settleMs, ...retryDelays];
+      const how = await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS, FETCH_MIN_TEXT_CHARS);
+      // A page accepted before "complete" is still rendering; keep the settle wait in that case.
+      const waits = [how === 'complete' ? settleMs : Math.max(settleMs, 500), ...retryDelays];
       let page;
       for (let i = 0; i < waits.length; i++) {
         if (waits[i]) await new Promise(r => setTimeout(r, waits[i]));
