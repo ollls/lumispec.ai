@@ -43,6 +43,14 @@ unpacked extensions, so there is no permission prompt.
 The status line will say **Not connected** until the Lumispec server side ships (part 2).
 That is expected and does not affect the test search.
 
+### Switch Lumispec over to the extension
+
+In the Lumispec UI open **Plugins** and turn on **Browser Search**. The regular
+**Web Search & Fetch** card grays out while it is on; every `web_search` / `web_fetch`
+call now routes to this extension. Turn Browser Search off to get the regular module back
+exactly as it was. (Until part 3 lands, the routed calls return a "not implemented yet"
+message to the assistant.)
+
 ### Settings
 
 | Field | Default | Meaning |

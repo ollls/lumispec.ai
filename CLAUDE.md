@@ -69,6 +69,7 @@ src/
     plugin-source.js       # source_read/write/edit/delete/git/run/test/project, template_save + file locks, diff helpers
     plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
+    plugin-browser.js      # web_search/web_fetch via the Chrome extension; supersedes 'web' while enabled (stub until part 3)
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     tasks.js               # Task pipeline CRUD + reorder
@@ -95,6 +96,7 @@ src/
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
+extension/                 # Lumispec Browser Search Chrome extension (MV3, load unpacked) — see extension/README.md
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json, tasks.json (served at /files/)
   plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
@@ -188,6 +190,10 @@ Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin
 
 **Cascade asymmetry on recovery**: cascade-enable walks UP the dep graph (toward dependencies), cascade-disable walks DOWN (toward dependents). They are NOT inverses. If you disable `source` (which cascade-disables `wiki`) and then re-enable `source`, `wiki` does NOT auto-restore — you'd have to enable `wiki` manually (which would in turn cascade `source` back on if it were off). The recovery path is "enable the dependent, not the dependency."
 
+**Plugin Supersession**: a plugin can declare `supersedes: ['web']`. While it is enabled the listed groups are hot-unloaded (so it can re-register their tool names, e.g. `web_search`), `GET /api/plugins` reports them with `supersededBy: [...]`, and the panel grays their slider out at its *saved* position with a "Replaced by …" note. Toggling a superseded group via the API returns an error. The superseded groups' entries in `plugins.json` are never modified: disabling the superseder re-registers every superseded group whose saved config is still enabled. Toggle responses carry `superseded: [...]` / `restored: [...]` for the toast. At startup, superseded groups are dropped from the enabled closure after cfg is written. `browser` (`supersedes: ['web']`) is the only consumer.
+
+**`defaults.enabled`**: with no entry in `plugins.json`, a plugin with `defaults: { enabled: false }` stays off until the user turns it on. Plugins without `defaults` are on by default (backward compatible).
+
 Load-time validation runs DFS three-coloring to detect circular dependencies and warns on missing deps. Always-on groups can be listed as deps but are no-ops. The `wiki` plugin is currently the only consumer (`dependencies: ['source']`) — `source_read` is required for the wiki retrieval pattern.
 
 #### Plugin Interface
@@ -199,6 +205,8 @@ export default {
   label: 'My Plugin',                            // human-readable name for Plugins config UI (optional)
   description: 'What this plugin does.',         // short description for Plugins config UI (optional)
   dependencies: ['source'],                       // optional: group names this plugin requires; cascades on enable, blocks disable
+  supersedes: ['web'],                            // optional: groups hot-unloaded (slider grayed) while this plugin is enabled
+  defaults: { enabled: false },                   // optional: per-plugin config defaults; enabled:false = off until the user turns it on
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
   routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
   prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
@@ -252,6 +260,7 @@ export default {
 | `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — | — |
 | `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` | — |
 | `wiki` | plugin-wiki.js | `wiki_scan`, `wiki_index` | `config.sourceDir` set | `source` |
+| `browser` | plugin-browser.js | `web_search`, `web_fetch` (stubs until part 3) | off by default; supersedes `web` | — |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
 

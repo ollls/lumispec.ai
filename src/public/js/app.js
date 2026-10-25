@@ -3327,6 +3327,24 @@ function renderPluginConfig(plugins) {
       info.appendChild(dependents);
     }
 
+    // Supersession lines: what this plugin replaces, or what is currently replacing it
+    const superseded = Array.isArray(p.supersededBy) && p.supersededBy.length > 0;
+    if (p.supersedes && p.supersedes.length > 0) {
+      const sup = document.createElement('span');
+      sup.className = 'text-xs';
+      sup.style.color = '#71717a';
+      sup.textContent = 'Replaces while enabled: ' + p.supersedes.map(d => labelByGroup[d] || d).join(', ');
+      info.appendChild(sup);
+    }
+    if (superseded) {
+      const by = document.createElement('span');
+      by.className = 'text-xs';
+      by.style.color = '#d97706';
+      const names = p.supersededBy.map(d => labelByGroup[d] || d).join(', ');
+      by.textContent = `Replaced by ${names} — disable it to use this plugin again`;
+      info.appendChild(by);
+    }
+
     // Tool list
     const toolList = document.createElement('div');
     Object.assign(toolList.style, { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' });
@@ -3344,22 +3362,32 @@ function renderPluginConfig(plugins) {
     }
     info.appendChild(toolList);
 
-    // Slider switch
+    // Slider switch. A superseded plugin shows its SAVED position grayed out and inert:
+    // it comes back in that state when the superseder is disabled.
+    const sliderOn = superseded ? !!p.configEnabled : p.enabled;
     const toggle = document.createElement('button');
     Object.assign(toggle.style, {
       width: '44px', height: '24px', borderRadius: '9999px', position: 'relative',
       flexShrink: '0', transition: 'background 0.2s', cursor: 'pointer', border: 'none',
-      background: p.enabled ? '#6366f1' : '#3f3f46', marginLeft: '16px',
+      background: sliderOn ? '#6366f1' : '#3f3f46', marginLeft: '16px',
     });
     const knob = document.createElement('span');
     Object.assign(knob.style, {
       position: 'absolute', top: '3px', width: '18px', height: '18px',
       borderRadius: '9999px', background: 'white', transition: 'left 0.2s',
-      left: p.enabled ? '22px' : '3px',
+      left: sliderOn ? '22px' : '3px',
     });
     toggle.appendChild(knob);
+    if (superseded) {
+      toggle.disabled = true;
+      toggle.style.opacity = '0.35';
+      toggle.style.cursor = 'not-allowed';
+      toggle.title = `Disable ${p.supersededBy.map(d => labelByGroup[d] || d).join(', ')} first`;
+      card.style.opacity = '0.6';
+    }
 
     toggle.addEventListener('click', async () => {
+      if (superseded) return;
       toggle.style.opacity = '0.5';
       toggle.style.pointerEvents = 'none';
       try {
@@ -3376,6 +3404,12 @@ function renderPluginConfig(plugins) {
           } else if (result.cascadedOff && result.cascadedOff.length > 0) {
             const names = result.cascadedOff.map(g => labelByGroup[g] || g).join(', ');
             showPluginToast(`Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`);
+          } else if (result.superseded && result.superseded.length > 0) {
+            const names = result.superseded.map(g => labelByGroup[g] || g).join(', ');
+            showPluginToast(`Enabled ${p.label}. ${names} is paused while it is on — all web searches now go through the browser extension.`);
+          } else if (result.restored && result.restored.length > 0) {
+            const names = result.restored.map(g => labelByGroup[g] || g).join(', ');
+            showPluginToast(`Disabled ${p.label}. ${names} is active again.`);
           }
           await refreshPluginConfig();
           pollPluginStatuses();
