@@ -106,6 +106,14 @@ A small table on the Browser Search card, persisted in `plugins.json` under `bro
 `never` is the privacy control for accounts the user does not want the assistant to see. Patterns
 are host globs; first match wins; default `auto`.
 
+The two rules are opposites and must not be confused in the UI: `handoff` makes a site *easier*
+to read (tab surfaces at once, user clicks Sign in); `never` makes it *unreadable* through the
+browser even when the user asks (HTTP without cookies → public login page). Only the user adds
+`never` rows; the automatic entry after a successful handoff (Decision 1) is always `handoff`, and
+its toast names the rule. When a fetch is refused by a `never` rule, the tool result must say so
+in plain words — `host rule "never": <host> is always read without your cookies; change the rule on
+the Browser Search card to allow it` — never a generic fetch failure.
+
 ## Flow
 
 ### Extension (`extension/background.js`, bump to 0.5.0)
