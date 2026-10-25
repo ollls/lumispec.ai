@@ -10,7 +10,7 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ## ✨ v1.4.0 highlights
 
-- 🌐 **Browser Search** *(new)* — `web_search` and `web_fetch` run in a hidden tab of **your own Chrome** via a small extension: real cookies, real TLS fingerprint, so Google, Bing, Brave and bot-walled sites like Reuters answer like they do for a person. One engine at a time, bot walls outwaited, every fallback to HTTP disclosed. **Requires installing the extension from [`extension/README.md`](extension/README.md)** (Chrome/Edge/Brave, load unpacked). Off by default.
+- 🌐 **Browser Search** *(new)* — `web_search` and `web_fetch` run in a hidden tab of **your own Chrome** via a small extension: real cookies, real TLS fingerprint, so Google, Bing, Brave and bot-walled sites like Reuters answer like they do for a person. One engine at a time, bot walls outwaited, pages read as soon as they are interactive, every fallback to HTTP disclosed and a failed URL not re-fetched for 90 s. Result pages a parser cannot read are saved to `logs/browser-debug/` for selector repair — see "Keeping the search engines current". **Requires installing the extension from [`extension/README.md`](extension/README.md)** (Chrome/Edge/Brave, load unpacked). Off by default.
 - 🔌 **Plugin supersession & live card status** *(new)* — a plugin can replace another while enabled (the replaced slider grays out at its saved position and comes back exactly); cards can show a live status line and warn on enable. Browser Search uses all three.
 - 🧮 **Token-bounded tool loops** — both loops measure the real prompt via `/tokenize` every round and wind down at 80% of the live slot's `n_ctx`. Truncated answers are marked, empty ones keep their tool results, and an empty pipeline step halts the run instead of poisoning the next one.
 - ⚡ **Stable prompt prefix** — the clock lives on the user message, not the system prompt, so llama-server's KV cache prefix survives across turns: ~6,400 processed prompt tokens per turn → ~80.
@@ -311,6 +311,25 @@ BROWSER_SEARCH_TIMEOUT_MS=25000         # wait for the extension before falling 
 
 Without the extension (or with Chrome closed) Browser Search falls back to the HTTP search above
 and says so in every result.
+
+### Keeping the search engines current
+
+Browser Search reads real search-result pages, so it depends on each engine's HTML. When an engine
+redesigns its results page, its parser stops finding results. This is expected maintenance, not a
+bug in your setup, and it is designed to be cheap:
+
+- **Nothing breaks for users.** A parser that finds nothing triggers the HTTP fallback, and the
+  tool result says so: `fallback: "Brave: no results (page saved to logs/browser-debug/…)"`.
+- **The broken page is saved** to `logs/browser-debug/<engine>-<timestamp>.html` so the selectors
+  can be fixed against the real markup. The server cannot load these engines itself (Brave answers
+  it with HTTP 429), so this file is the only reliable view of what the browser saw.
+- **The fix is one server-side table entry** in `src/tools/plugin-browser.js` (`ENGINES`), picked
+  up by `npm run dev`'s watch restart. No extension change, no reload on the user's side.
+
+After pulling a new version, or whenever a search comes back with `fallback: "<engine>: no results"`,
+run one search per engine you use (DuckDuckGo, Brave, Bing, Google) and check that `sources` reads
+`Browser (<engine>, … ms)` with no `fallback` key. DuckDuckGo's HTML endpoint, Google's organic
+results and Bing's result list have been stable for years; Brave changes most often.
 
 ### Add E\*TRADE (optional)
 
