@@ -175,6 +175,7 @@ let wsState = 'disconnected'; // disconnected | connecting | connected
 let lastError = '';
 let reconnectDelay = RECONNECT_MIN_MS;
 let reconnectTimer = null;
+let connecting = false; // guards the async gap in connect() against concurrent callers
 
 async function getSettings() {
   const stored = await chrome.storage.local.get(Object.keys(DEFAULTS));
@@ -194,30 +195,45 @@ function send(obj) {
 
 async function connect() {
   clearTimeout(reconnectTimer);
+  if (connecting) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-
-  const { serverUrl, token, enabled } = await getSettings();
-  if (!enabled) { setState('disconnected', 'Disabled in popup'); return; }
-
-  let url;
+  // connect() is triggered from several places at once on a worker start (top-level call,
+  // onInstalled / onStartup, the keepalive alarm). Without this flag two callers both pass the
+  // readyState check during the settings await and open two sockets; the server keeps the
+  // newer one, the older one's onclose then nulled `ws` and scheduled a reconnect, and the
+  // extension churned connections forever — killing any search in flight ("Extension reconnected").
+  connecting = true;
+  let sock;
   try {
-    url = new URL(serverUrl);
-    if (token) url.searchParams.set('token', token);
-  } catch {
-    setState('disconnected', `Invalid server URL: ${serverUrl}`);
-    return;
+    const { serverUrl, token, enabled } = await getSettings();
+    if (!enabled) { setState('disconnected', 'Disabled in popup'); return; }
+
+    let url;
+    try {
+      url = new URL(serverUrl);
+      if (token) url.searchParams.set('token', token);
+    } catch {
+      setState('disconnected', `Invalid server URL: ${serverUrl}`);
+      return;
+    }
+
+    setState('connecting');
+    try {
+      sock = new WebSocket(url.toString());
+    } catch (e) {
+      setState('disconnected', e.message);
+      scheduleReconnect();
+      return;
+    }
+    ws = sock;
+  } finally {
+    connecting = false;
   }
 
-  setState('connecting');
-  try {
-    ws = new WebSocket(url.toString());
-  } catch (e) {
-    setState('disconnected', e.message);
-    scheduleReconnect();
-    return;
-  }
-
-  ws.onopen = () => {
+  // Every handler checks it still owns the live socket: a stale socket's close must not
+  // clobber `ws` or trigger a reconnect.
+  sock.onopen = () => {
+    if (ws !== sock) return;
     reconnectDelay = RECONNECT_MIN_MS;
     setState('connected');
     send({
@@ -228,9 +244,10 @@ async function connect() {
       ua: navigator.userAgent,
     });
   };
-  ws.onmessage = (ev) => handleServerMessage(ev.data);
-  ws.onerror = () => { lastError = 'Connection failed'; };
-  ws.onclose = (ev) => {
+  sock.onmessage = (ev) => { if (ws === sock) handleServerMessage(ev.data); };
+  sock.onerror = () => { if (ws === sock) lastError = 'Connection failed'; };
+  sock.onclose = (ev) => {
+    if (ws !== sock) return; // superseded socket — ignore
     ws = null;
     setState('disconnected', lastError || `Closed (${ev.code})`);
     scheduleReconnect();

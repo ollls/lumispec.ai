@@ -36,6 +36,21 @@ function offlineReason() {
   return `browser extension disconnected (last seen ${bridge.lastSeen?.toLocaleTimeString() || 'unknown'})`;
 }
 
+// A request in flight when the extension reconnects (worker restart, extension reload) is
+// rejected with "Extension reconnected". The new connection is usually up within a second,
+// so retry that one case once instead of falling back to HTTP.
+async function searchWithRetry(engine, query) {
+  try {
+    return await bridge.search(engine, query, 8);
+  } catch (err) {
+    if (!/Extension reconnected/.test(err.message)) throw err;
+    await new Promise(r => setTimeout(r, 1000));
+    if (!bridge.connected) throw err;
+    console.warn(`[browser_search] extension reconnected mid-search, retrying ${engine} once`);
+    return bridge.search(engine, query, 8);
+  }
+}
+
 async function fallbackSearch(query, reason) {
   console.warn(`[browser_search] falling back to HTTP search: ${reason}`);
   logToolCall('web_search', 'browser_fallback', { args: { query }, rawResult: reason });
@@ -88,7 +103,7 @@ export default {
         const errors = [];
         for (const engine of engines) {
           try {
-            const { results, ms } = await bridge.search(engine, query, 8);
+            const { results, ms } = await searchWithRetry(engine, query);
             if (results.length > 0) {
               return { results, sources: `Browser (${ENGINES[engine].label}, ${ms} ms)` };
             }
