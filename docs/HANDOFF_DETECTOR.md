@@ -209,10 +209,22 @@ are host globs; first match wins; default `auto`.
 5. Docs: `extension/README.md` (what the ✋ badge means, "if Chrome is minimised"), `HELP.md`,
    `CLAUDE.md`, release notes.
 
-## Open questions
+## Decisions (2026-10-25)
 
-- Should a successful handoff on a host automatically add it to the host rules as `handoff`, so
-  the next visit skips detection? (Probably yes, with a toast.)
-- Default for the pipeline: `interactive: false` always, or only when Review is off?
-- Do we want `never` to also block **search** results from being fetched on that host, or only
-  direct `web_fetch` calls? (Blocking both is simpler to explain.)
+1. **Remember handoff hosts automatically — YES.** After a successful handoff on a host, the
+   plugin adds `<host pattern>` with rule `handoff` to `browser.hostRules` and shows a toast
+   ("Added *.bankofamerica.com to handoff hosts — undo"). The next visit surfaces the tab
+   immediately, skipping detection. The toast's undo removes the row; the card table remains the
+   place to edit it later.
+2. **Pipeline: hand off only when the Review toggle is on.** Review already means "the user is
+   present to approve each step", so it is the signal that someone can click. With Review off,
+   pipeline steps pass `interactive: false` and login/CAPTCHA pages fall back as today. Chat turns
+   are always interactive when the Handoff toggle is on.
+
+## Open question
+
+- Does `never` also remove that host from **search results**, or only force direct `web_fetch`
+  calls to the cookie-less HTTP path? Recommendation: enforce at fetch only. Every page read goes
+  through `web_fetch`, so a `never` host is always read without cookies regardless of how its URL
+  was found, and public pages on that host (a bank's rates page) stay usable. One-sentence rule for
+  the docs: "never-listed hosts are always read without your cookies."
