@@ -48,9 +48,8 @@ be asked to call ("save this conversation to Obsidian") — a nice extra anyway.
 
 ## What a conversation becomes
 
-One note per conversation: `<Folder>/<session-color>/<slug>-<id8>.md` (colour subfolders make
-the vault's file explorer mirror the sidebar filter; a flat folder with a `session` property is
-the alternative — **decide**). `slug` = title sanitised (`[^a-z0-9]+` → `-`, max 60 chars);
+One note per conversation: `<Folder>/<session-colour>/<slug>-<id8>.md` (Decision 1: colour
+subfolders, so the vault's file explorer mirrors the sidebar filter). `slug` = title sanitised (`[^a-z0-9]+` → `-`, max 60 chars);
 `id8` = first 8 chars of the conversation id, so renames and duplicate titles never collide and
 Obsidian's links to the note survive a title change.
 
@@ -126,8 +125,8 @@ the detail in Obsidian even though it does in Lumispec.
   compact, token count) → regenerate. Hook: `savePinned()` in `services/conversations.js` is the
   single choke point for "pinned conversation changed" — call the exporter from there
   (debounced ~1 s, since a tool-heavy turn saves many times).
-- **Unpin** → leave the note in place (do not delete user-visible notes); write
-  `pinned: false` in frontmatter on the next explicit export only. **Decide:** or remove it.
+- **Unpin** → leave the note in place (Decision 2); write `pinned: false` in frontmatter on the
+  next explicit export only.
 - **Save to Obsidian** button in the sidebar row (next to pin/compact) → export this conversation
   now, pinned or not. `POST /api/conversations/:id/obsidian`.
 - **Delete conversation** → leave the note (same reasoning as unpin). Optional "also delete note"
@@ -176,10 +175,17 @@ It never deletes files. `.obsidian/` is read, never written.
 3. Applet sidecars, attachment copying, vault attachment-folder setting.
 4. Transcript-preserving compact; `wiki/` export; deep link back into the app.
 
-## Decisions needed
+## Decisions (2026-10-25)
 
-- Colour subfolders vs. flat folder + `session` property (recommendation: subfolders — matches
-  the sidebar and file-explorer browsing; the tag is there either way).
-- On unpin / delete: keep the note (recommendation) or remove it.
-- Reasoning export default off (recommendation) — it is the bulk of a tool-heavy conversation
-  and rarely what one wants in a knowledge base.
+1. **Colour subfolders.** Notes live at `<Folder>/<session-colour>/<slug>-<id8>.md`, so the
+   vault's file explorer mirrors the sidebar filter. The `lumispec/<colour>` tag is written too.
+   Changing a conversation's colour moves its note; Obsidian updates links on move.
+2. **Keep the note when a conversation is unpinned or deleted.** Unpin means "stop updating";
+   the next explicit export writes `pinned: false`. The exporter never deletes from the vault.
+   A later "also remove the note" checkbox on the delete confirmation is the only sanctioned way
+   to remove one from the app.
+3. **Reasoning export off by default**, with the toggle on the card. Flipping it on and
+   re-exporting adds the trace retroactively, since every export regenerates the note from the
+   stored conversation.
+
+All decisions are made; the plan is ready to implement in the rollout order above.
