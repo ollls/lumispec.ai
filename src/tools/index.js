@@ -181,6 +181,24 @@ const pluginDependencies = {}; // groupName → string[] of declared dependency 
 // Groups that are always loaded and not shown in the config UI
 const ALWAYS_ON_GROUPS = new Set(['core', 'execution']);
 
+// ── Plugin supersession ─────────────────────────────
+// A plugin may declare `supersedes: ['web']`. While it is enabled, the listed groups are
+// hot-unloaded (it typically re-registers their tool names) and their slider is grayed out
+// in the Plugins panel. The superseded groups' saved config is never modified, so disabling
+// the superseder restores them exactly as they were. Populated in loadPlugins() pass 1.
+const pluginSupersedes = {};
+
+/** Enabled (registered) groups that currently supersede `group`. */
+function getActiveSuperseders(group) {
+  return Object.keys(toolGroups).filter(g => (pluginSupersedes[g] || []).includes(group));
+}
+
+/** Whether a group is on according to saved config, falling back to the plugin's own defaults. */
+function isConfigEnabled(group, cfg) {
+  if (cfg[group]) return cfg[group].enabled !== false;
+  return getPluginDefaults(group).enabled !== false;
+}
+
 // ── Plugin dependency graph ─────────────────────────
 
 // Validate the dependency graph after all plugin modules are imported.
@@ -318,9 +336,13 @@ function registerPlugin(plugin) {
 function unregisterPlugin(groupName) {
   const group = toolGroups[groupName];
   if (!group) return;
+  const own = pluginModules[groupName]?.plugin.tools || {};
   for (const name of group.tools) {
-    delete tools[name];
-    disabledTools.delete(name);
+    // A superseder re-registers the same tool names; only drop entries this group owns.
+    if (tools[name] === own[name]) {
+      delete tools[name];
+      disabledTools.delete(name);
+    }
   }
   delete toolGroups[groupName];
   console.log(`[tools] Unloaded plugin "${groupName}"`);
@@ -340,18 +362,26 @@ export async function loadPlugins() {
       continue;
     }
     pluginModules[plugin.group] = { file, plugin };
+    pluginSupersedes[plugin.group] = Array.isArray(plugin.supersedes) ? plugin.supersedes : [];
   }
 
   // Pass 2: validate the dependency graph (warn on missing, error on cycles)
   validateDependencyGraph();
+  for (const [group, list] of Object.entries(pluginSupersedes)) {
+    for (const s of list) {
+      if (!pluginModules[s]) console.warn(`[plugins] "${group}" supersedes unknown plugin "${s}"`);
+      else if (ALWAYS_ON_GROUPS.has(s)) console.warn(`[plugins] "${group}" cannot supersede always-on plugin "${s}" — ignored`);
+    }
+  }
 
   // Pass 3: compute the closure of enabled groups by cascading dependencies,
   // persist any cascade-induced changes, then register everything in the closure.
   const enabledClosure = new Set();
   for (const group of Object.keys(pluginModules)) {
     if (ALWAYS_ON_GROUPS.has(group)) continue;
-    // Default-enabled unless cfg explicitly disables
-    if (cfg[group]?.enabled !== false) {
+    // Enabled unless cfg disables it; with no cfg entry the plugin's own defaults decide
+    // (a plugin with `defaults: { enabled: false }` stays off until the user turns it on).
+    if (isConfigEnabled(group, cfg)) {
       for (const g of getCascadeEnableSet(group)) {
         if (!ALWAYS_ON_GROUPS.has(g) && pluginModules[g]) enabledClosure.add(g);
       }
@@ -372,6 +402,19 @@ export async function loadPlugins() {
   }
   if (cfgChanged) await writePluginConfig(cfg);
 
+  // Supersession: a group replaced by an enabled superseder is not registered. Its cfg entry
+  // was left as-is above, so it comes back the moment the superseder is turned off.
+  const superseded = new Set();
+  for (const g of enabledClosure) {
+    for (const s of pluginSupersedes[g] || []) {
+      if (pluginModules[s] && !ALWAYS_ON_GROUPS.has(s) && enabledClosure.has(s)) {
+        superseded.add(s);
+        console.log(`[plugins] "${s}" superseded by "${g}" — not loaded`);
+      }
+    }
+  }
+  for (const s of superseded) enabledClosure.delete(s);
+
   // Now register: always-on first, then everything in the enabled closure
   for (const group of Object.keys(pluginModules)) {
     if (ALWAYS_ON_GROUPS.has(group)) {
@@ -389,7 +432,7 @@ export async function loadPlugins() {
 // ── Plugin config API ──────────────────────────────
 export async function listPluginGroups() {
   const cfg = await readPluginConfig();
-  return Object.entries(pluginModules)
+  const entries = Object.entries(pluginModules)
     .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
     .map(([group, { plugin }]) => {
       // Filter dependency lists to user-visible groups (skip always-on and missing)
@@ -406,6 +449,11 @@ export async function listPluginGroups() {
         enabled: !!toolGroups[group],
         dependencies: visibleDeps,
         dependents: visibleDependents,
+        // Saved on/off state, independent of whether the group is actually registered
+        configEnabled: isConfigEnabled(group, cfg),
+        // Groups this plugin replaces while enabled / enabled groups currently replacing this one
+        supersedes: (pluginSupersedes[group] || []).filter(s => pluginModules[s] && !ALWAYS_ON_GROUPS.has(s)),
+        supersededBy: getActiveSuperseders(group),
         tools: Object.entries(plugin.tools).map(([name, def]) => ({
           name,
           description: def.description.split('\n')[0],
@@ -417,18 +465,33 @@ export async function listPluginGroups() {
         const saved = cfg[group] || {};
         entry.config = { ...defaults, ...saved };
         delete entry.config.enabled; // enabled is already top-level
-        // For web plugin, include available engines info
-        if (group === 'web') {
-          entry.config.modes = ['auto', 'regular', 'stealth', 'browser'];
-          entry.config.availableEngines = [
-            { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
-            { id: 'keiro', label: 'Keiro', available: !!config.keiro.apiKey },
-            { id: 'duckduckgo', label: 'DuckDuckGo', available: true },
-          ];
-        }
+        // Optional UI descriptor: { modes?: string[], availableEngines?: [{id,label,available}] }
+        if (typeof plugin.configUi === 'function') Object.assign(entry.config, plugin.configUi());
+      }
+      // Optional live status line for the card: { ok: boolean, text: string }
+      if (typeof plugin.cardStatus === 'function') {
+        try { entry.cardStatus = plugin.cardStatus() || null; } catch { entry.cardStatus = null; }
+      }
+      // Optional helper block under the status line (e.g. the extension install guide):
+      // { title, steps: string[], buttons: [{ id, label, title?, copy? }] } or null to hide.
+      // Buttons without `copy` POST /api/plugins/:group/action/:id → plugin.cardAction(id).
+      if (typeof plugin.cardActions === 'function') {
+        try { entry.cardActions = plugin.cardActions() || null; } catch { entry.cardActions = null; }
       }
       return entry;
     });
+
+  // Order: plugin-file scan order (alphabetical), except a superseding plugin is moved to sit
+  // directly after the last group it supersedes, so e.g. "Browser Search" follows "Web Search".
+  for (const entry of [...entries]) {
+    if (!entry.supersedes.length) continue;
+    const from = entries.indexOf(entry);
+    const anchor = Math.max(...entry.supersedes.map(s => entries.findIndex(e => e.group === s)));
+    if (anchor < 0 || anchor === from - 1) continue;
+    entries.splice(from, 1);
+    entries.splice(anchor < from ? anchor + 1 : anchor, 0, entry);
+  }
+  return entries;
 }
 
 export async function updatePluginConfig(groupName, updates) {
@@ -437,6 +500,17 @@ export async function updatePluginConfig(groupName, updates) {
   if (!cached) return { error: `Unknown plugin: ${groupName}` };
 
   const cfg = await readPluginConfig();
+
+  // A superseded group cannot be toggled while its superseder is on — the UI grays the
+  // slider out, and this guards the API. Config-only updates (mode/engines) are still allowed.
+  if (updates.enabled !== undefined) {
+    const activeSuperseders = getActiveSuperseders(groupName);
+    if (activeSuperseders.length > 0) {
+      const names = activeSuperseders.map(g => pluginModules[g]?.plugin.label || g).join(', ');
+      const label = cached.plugin.label || groupName;
+      return { error: `${label} is replaced by ${names} while it is enabled. Disable ${names} first.` };
+    }
+  }
 
   // Cascade enable: ensure all transitive dependencies are enabled before this plugin
   const cascadedOn = [];
@@ -485,19 +559,57 @@ export async function updatePluginConfig(groupName, updates) {
   if (updates.mode !== undefined) current.mode = updates.mode;
   if (updates.engines !== undefined) current.engines = updates.engines;
 
-  // Hot-load / hot-unload based on enabled state
-  if (current.enabled && !toolGroups[groupName]) {
+  // Supersession, step 1: enabling this plugin unloads the groups it replaces BEFORE it
+  // registers, since it typically reuses their tool names. Their cfg entries are not touched.
+  const superseded = [];
+  const restored = [];
+  const supersedable = (pluginSupersedes[groupName] || []).filter(s => pluginModules[s] && !ALWAYS_ON_GROUPS.has(s));
+  if (current.enabled) {
+    for (const s of supersedable) {
+      if (toolGroups[s]) {
+        unregisterPlugin(s);
+        superseded.push(s);
+        console.log(`[plugins] "${s}" superseded by "${groupName}" — unloaded`);
+      }
+    }
+  }
+
+  // Hot-load / hot-unload based on enabled state. A group that is itself superseded stays
+  // unloaded even on a config-only update (mode/engines); its saved config still changes.
+  if (current.enabled && !toolGroups[groupName] && getActiveSuperseders(groupName).length === 0) {
     registerPlugin(cached.plugin);
   } else if (!current.enabled && toolGroups[groupName]) {
     unregisterPlugin(groupName);
+  }
+
+  // Supersession, step 2: disabling this plugin restores the groups it replaced whose saved
+  // config is still on and that no other enabled plugin supersedes.
+  if (!current.enabled) {
+    for (const s of supersedable) {
+      if (isConfigEnabled(s, cfg) && !toolGroups[s] && getActiveSuperseders(s).length === 0) {
+        registerPlugin(pluginModules[s].plugin);
+        restored.push(s);
+        console.log(`[plugins] "${s}" restored — "${groupName}" no longer supersedes it`);
+      }
+    }
   }
 
   cfg[groupName] = current;
   await writePluginConfig(cfg);
 
   const result = { group: groupName, enabled: !!toolGroups[groupName], config: current };
+  // Optional plugin hook: a string to surface as a warning toast right after enabling
+  // (e.g. "enabled, but the browser extension is not connected").
+  if (updates.enabled === true && typeof cached.plugin.enableWarning === 'function') {
+    try {
+      const warning = cached.plugin.enableWarning();
+      if (warning) result.warning = warning;
+    } catch {}
+  }
   if (cascadedOn.length > 0) result.cascadedOn = cascadedOn;
   if (cascadedOff.length > 0) result.cascadedOff = cascadedOff;
+  if (superseded.length > 0) result.superseded = superseded;
+  if (restored.length > 0) result.restored = restored;
   return result;
 }
 
@@ -613,6 +725,17 @@ export async function getPluginStatuses() {
 
 export function getPluginAuth(groupName) {
   return toolGroups[groupName]?.status?.auth || null;
+}
+
+// Run a card helper button (see cardActions in listPluginGroups). Looked up in pluginModules,
+// not toolGroups, so the helper works while the plugin is still disabled — the user installs
+// the extension first and enables Browser Search after.
+export async function runPluginCardAction(groupName, actionId) {
+  const plugin = pluginModules[groupName]?.plugin;
+  if (!plugin || typeof plugin.cardAction !== 'function') return { error: 'No actions for this plugin' };
+  const known = (plugin.cardActions?.() || {}).buttons || [];
+  if (!known.some(b => b.id === actionId && !b.copy)) return { error: `Unknown action: ${actionId}` };
+  return plugin.cardAction(actionId);
 }
 
 // ── Taskmaster prompt (read from data/TASKMASTER.md) ──

@@ -61,6 +61,30 @@ Backend request body (sent by `searchKeiro`, not by the user):
 
 ---
 
+## Browser Search (Chrome extension) — the alternative path
+
+Everything above is the **HTTP path**: the server fetches engines and pages itself. v1.4.0 adds a
+second path, **Browser Search** (`src/tools/plugin-browser.js`), which is a separate plugin that
+*supersedes* Web Search & Fetch while enabled: the `web` group is paused (slider grayed out, settings
+kept) and `web_search` / `web_fetch` are served through a Chrome extension instead.
+
+- The extension (`extension/`, Manifest V3, loaded unpacked — install guide in
+  [`extension/README.md`](../extension/README.md)) opens a URL in an inactive tab of the user's real
+  browser, waits for it to render, returns the live DOM's HTML over a WebSocket
+  (`src/services/browserBridge.js`, `/ws/browser` on the main port), and closes the tab.
+- The extension is engine-agnostic. The server owns the engine table: URL builder, render waits,
+  CAPTCHA/consent detection, and a linkedom parser per engine — DuckDuckGo, Brave, Bing, Google. One
+  engine is active at a time (radio on the Plugins card).
+- `web_fetch` reuses the HTML→Markdown pipeline below. Bot-challenge shells ("enable JS", "just a
+  moment") are re-read in the same tab after 0.8 s, +3 s, +4 s before giving up.
+- **The HTTP path is the fallback.** No extension connected, timeout (`BROWSER_SEARCH_TIMEOUT_MS`,
+  default 25 s), engine failure or empty results, or a persisting wall → `runWebSearch()` /
+  `runWebFetch()` from `plugin-web.js` run with the saved Web Search & Fetch settings, and the
+  result carries `fallback: "<reason>"` plus a suffix on `sources` / `_tier`.
+
+Why: a real Chrome carries the attestation headers, TLS fingerprint and cookies that `docs/google.md`
+shows no HTTP client can fake, and Puppeteer's headless Chrome is detectable and heavy.
+
 ## Fetch Modes
 
 ### 1. Regular Mode

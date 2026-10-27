@@ -69,6 +69,7 @@ src/
     plugin-source.js       # source_read/write/edit/delete/git/run/test/project, template_save + file locks, diff helpers
     plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
+    plugin-browser.js      # web_search/web_fetch via the Chrome extension bridge; owns the engine table (URLs + linkedom parsers); supersedes 'web'
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     tasks.js               # Task pipeline CRUD + reorder
@@ -85,6 +86,7 @@ src/
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser), prompt sizing + tool-result trimming
     tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
     slots.js               # Slot monitor (polling, assignment, pin/unpin, per-slot n_ctx lookup)
+    browserBridge.js       # WebSocket endpoint /ws/browser for the Chrome extension (search/fetch requests, heartbeat, token)
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
@@ -95,6 +97,7 @@ src/
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
+extension/                 # Lumispec Browser Search Chrome extension (MV3, load unpacked) — see extension/README.md
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json, tasks.json (served at /files/)
   plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
@@ -141,6 +144,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/config` | GET | Public config (location) |
 | `/api/plugins` | GET | List configurable plugin groups |
 | `/api/plugins/:group/toggle` | POST | Hot-load/unload a plugin group |
+| `/api/plugins/:group/action/:id` | POST | Run a plugin card helper button (e.g. `browser` → `open-extensions`, `open-folder`) |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
 | `/api/tasks` | GET/POST | List/create tasks (saved task lists) |
@@ -172,6 +176,9 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `LOCATION` — default user location for weather/travel queries and `{$location}` macro
 - `SOURCE_DIR` — project root path for source tools (self-awareness + code editing)
 - `SOURCE_TEST` — test command for `source_test` tool (e.g. `npm test`, `pytest -x`, `cargo test`)
+- `BROWSER_SEARCH_TOKEN` — optional shared secret the Browser Search Chrome extension must send as `?token=` on `/ws/browser`
+- `BROWSER_SEARCH_TIMEOUT_MS` — how long `web_search`/`web_fetch` wait for the extension before falling back (default: 25000)
+- `BROWSER_SEARCH_BROWSER` — optional executable the Browser Search card's "Open chrome://extensions" button launches (default: first of google-chrome, chromium, brave-browser, microsoft-edge on PATH)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -188,6 +195,10 @@ Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin
 
 **Cascade asymmetry on recovery**: cascade-enable walks UP the dep graph (toward dependencies), cascade-disable walks DOWN (toward dependents). They are NOT inverses. If you disable `source` (which cascade-disables `wiki`) and then re-enable `source`, `wiki` does NOT auto-restore — you'd have to enable `wiki` manually (which would in turn cascade `source` back on if it were off). The recovery path is "enable the dependent, not the dependency."
 
+**Plugin Supersession**: a plugin can declare `supersedes: ['web']`. In the Plugins panel it is listed directly after the last group it supersedes (otherwise cards follow plugin-file scan order). While it is enabled the listed groups are hot-unloaded (so it can re-register their tool names, e.g. `web_search`), `GET /api/plugins` reports them with `supersededBy: [...]`, and the panel grays their slider out at its *saved* position with a "Replaced by …" note. Toggling a superseded group via the API returns an error. The superseded groups' entries in `plugins.json` are never modified: disabling the superseder re-registers every superseded group whose saved config is still enabled. Toggle responses carry `superseded: [...]` / `restored: [...]` for the toast. At startup, superseded groups are dropped from the enabled closure after cfg is written. `browser` (`supersedes: ['web']`) is the only consumer.
+
+**`defaults.enabled`**: with no entry in `plugins.json`, a plugin with `defaults: { enabled: false }` stays off until the user turns it on. Plugins without `defaults` are on by default (backward compatible).
+
 Load-time validation runs DFS three-coloring to detect circular dependencies and warns on missing deps. Always-on groups can be listed as deps but are no-ops. The `wiki` plugin is currently the only consumer (`dependencies: ['source']`) — `source_read` is required for the wiki retrieval pattern.
 
 #### Plugin Interface
@@ -199,6 +210,12 @@ export default {
   label: 'My Plugin',                            // human-readable name for Plugins config UI (optional)
   description: 'What this plugin does.',         // short description for Plugins config UI (optional)
   dependencies: ['source'],                       // optional: group names this plugin requires; cascades on enable, blocks disable
+  supersedes: ['web'],                            // optional: groups hot-unloaded (slider grayed) while this plugin is enabled
+  cardStatus: () => ({ ok: true, text: '…' }),    // optional: live status line on the Plugins card (green when ok, amber otherwise)
+  cardActions: () => null | { title, steps: ['…'], path?, buttons: [{ id, label, title?, copy? }] }, // optional: helper box under the status line; a button with `copy` copies that text client-side, any other POSTs /api/plugins/:group/action/:id
+  cardAction: async (id) => ({ ok, message }),    // optional: runs a cardActions button server-side; works while the plugin is disabled
+  enableWarning: () => null | 'string',           // optional: warning toast shown right after the user enables the plugin
+  defaults: { enabled: false },                   // optional: per-plugin config defaults; enabled:false = off until the user turns it on
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
   routing: ['- Question type → use "my_tool"'],   // LLM routing hints (array of strings, optional)
   prompt: '## My Section\n- Rule 1\n- Rule 2',   // system prompt section injected when group active (optional)
@@ -252,8 +269,14 @@ export default {
 | `travel` | plugin-travel.js | `hotel`, `travel`, `booking` | — | — |
 | `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` | — |
 | `wiki` | plugin-wiki.js | `wiki_scan`, `wiki_index` | `config.sourceDir` set | `source` |
+| `browser` | plugin-browser.js | `web_search`, `web_fetch` (via Chrome extension) | off by default; supersedes `web` | — |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
+
+#### Browser Search (Chrome extension bridge)
+`extension/` is a Manifest V3 extension loaded unpacked (install/remove guide in `extension/README.md`). It keeps a WebSocket to `ws://localhost:PORT/ws/browser`, served by `src/services/browserBridge.js` on the main Express server (attached in `server.js`, live whenever the server runs, loopback only, optional `BROWSER_SEARCH_TOKEN`). **The extension is engine-agnostic**: its only request type is `fetch { url, settleMs?, retryDelays? }` — it opens the URL in an **inactive** tab of the user's real Chrome, waits `settleMs` (default 0.8 s), reads the live DOM, and re-reads after each `retryDelays` entry (default +3 s, +4 s) while the page is still a bot-challenge shell ("enable JS", "just a moment", …) or has under 200 chars of text, then returns `{ title, url, html, textChars, wall, wallText }` and closes the tab. One hidden tab at a time; a newer extension connection replaces the old one; liveness via protocol-level ping/pong every 30 s. It needs reloading only when `extension/` itself changes; the card flags a connected extension whose version differs from `extension/manifest.json`.
+
+**All engine knowledge is server-side** in the `ENGINES` table of `plugin-browser.js`: per engine a `url(query)`, render waits (`settleMs`/`retryDelays` — Brave is client-rendered and gets more), a `block(page)` check for that engine's CAPTCHA/consent pages, and a linkedom `parse(page, limit)`. DuckDuckGo's parser is `parseDdgHtml()` shared with `plugin-web.js`. Adding an engine = one table entry; it appears on the card via `configUi()` automatically. `configUi()` sets `engineMode: 'single'`, so the panel renders the engines (`duckduckgo`, `brave`, `bing`, `google`) as radios: exactly one is active, saved as a one-element `engines` array. There is no chaining between browser engines (results are never merged); if the engine fails or returns nothing — CAPTCHA/consent detected server-side, parser drift — the call goes straight to the HTTP fallback. `plugin-browser.js` supersedes `web`. **Fallback with disclosure**: if no extension is connected, the request times out, every engine fails, or a fetched page yields under 200 chars, the call runs `runWebSearch()` / `runWebFetch()` exported from `plugin-web.js` (the saved Web Search & Fetch settings, untouched by supersession) and the result carries `fallback: "<reason>"` plus a `sources`/`_tier` suffix, so the Think stream shows what happened. The status dot "Browser" is green when the extension is connected, amber otherwise; the Plugins card shows a live `cardStatus` line (connected + version / disconnected + last seen / never connected + install pointer) and enabling with no extension connected raises an `enableWarning` toast. The viewer's own browser is never checked: the UI may run in Firefox while the extension runs in Chrome on the same machine. **Install helper**: while no extension is connected (or the connected one is outdated) the card shows a `cardActions` box — numbered steps, the absolute `extension/` path, and buttons **Open chrome://extensions** (server spawns the first Chromium-family binary on PATH, or `BROWSER_SEARCH_BROWSER`, detached with the URL; a running Chrome opens it as a new tab), **Open extension folder** (`xdg-open`/`open`/`explorer`, for drag-and-drop onto the extensions page) and **Copy path** (client-side clipboard). Fully automatic install is impossible: web pages cannot navigate to `chrome://`, and branded Chrome 137+ ignores `--load-extension`, so Developer mode + Load unpacked remain the user's two clicks. While the Plugins panel is open the frontend re-fetches `/api/plugins` every 4 s and re-renders only when a live field (`cardStatus`, `cardActions`, enabled, `supersededBy`) changed, so the card turns green and drops the guide the moment the extension connects, with a toast. Plugins declare their panel controls via `configUi()` → `{ modes?, availableEngines? }`; the `web` plugin uses both, `browser` only engines.
 
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
@@ -289,6 +312,14 @@ reuse reads 37 for a 64K prompt and would never see the wall coming.
 The limit comes from the live slot (`slots.getSlotContextSize()`), so raising `--ctx-size` raises
 the budget with no code change. `LLAMA_MAX_CONTEXT` is only the fallback when slots are unreachable.
 `countPromptTokens()` also counts `reasoning_content` on assistant messages (see **Retain Toggle**).
+
+**Context bar shows measured context, not timings totals.** `tokenCount` (and the `usage` SSE event's
+`context_tokens`) is the last round's `countPromptTokens()` result plus that round's
+`completion_tokens` — what the slot holds after the turn. It is **not** `timings.total_tokens`:
+`prompt_n` counts tokens *processed*, so with KV-cache reuse the bar read ~80 after a cached turn.
+The task pipeline reports the **last step's** context (steps are isolated) and `peak_context_tokens`
+alongside; `total_tokens` there is still the sum of all steps and rounds — a measure of work, which
+is why the bar used to show 84K on a 64K slot.
 
 **Empty / truncated answers are never silent:**
 - `finish_reason: "length"` with content → a "⚠ Answer cut off at the context limit" marker is appended

@@ -17,6 +17,7 @@ import taskRoutes from './routes/tasks.js';
 import taskProcessorRoutes from './routes/taskProcessor.js';
 import pluginRoutes from './routes/plugins.js';
 import slots from './services/slots.js';
+import browserBridge from './services/browserBridge.js';
 import { loadPlugins } from './services/tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -154,7 +155,21 @@ const server = app.listen(config.port, () => {
   slots.startPolling();
 });
 
+// WebSocket endpoint for the Browser Search Chrome extension (same port, path /ws/browser)
+browserBridge.attach(server);
+
+// Graceful shutdown (also what `node --watch` sends on a file change). Stop accepting new
+// connections but keep the browser bridge alive until the in-flight SSE turns have finished:
+// closing it first rejected every pending browser search with "Bridge closed" and left the rest
+// of the turn without an extension while the new process took over. Hard cap so a client that
+// never closes its stream cannot keep the old process alive forever.
 process.on('SIGTERM', () => {
   slots.stopPolling();
-  server.close();
+  const forceExit = setTimeout(() => { browserBridge.close(); process.exit(0); }, 90_000);
+  forceExit.unref();
+  server.close(() => {
+    clearTimeout(forceExit);
+    browserBridge.close();
+    process.exit(0);
+  });
 });

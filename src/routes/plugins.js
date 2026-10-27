@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPluginStatuses, getPluginAuth, listPluginGroups, setPluginEnabled, updatePluginConfig } from '../services/tools.js';
+import { getPluginStatuses, getPluginAuth, listPluginGroups, runPluginCardAction, setPluginEnabled, updatePluginConfig } from '../services/tools.js';
 
 const router = Router();
 
@@ -22,10 +22,11 @@ router.post('/:group/toggle', async (req, res) => {
   if (mode !== undefined && !VALID_MODES.includes(mode)) {
     return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(', ')}` });
   }
-  const VALID_ENGINES = ['tavily', 'keiro', 'duckduckgo'];
+  // Engine ids are plugin-specific (web: tavily/keiro/duckduckgo, browser: duckduckgo/google);
+  // each plugin ignores ids it does not know, so only the shape is validated here.
   if (engines !== undefined) {
-    if (!Array.isArray(engines) || !engines.every(e => VALID_ENGINES.includes(e))) {
-      return res.status(400).json({ error: `engines must be array of: ${VALID_ENGINES.join(', ')}` });
+    if (!Array.isArray(engines) || !engines.every(e => typeof e === 'string' && /^[a-z0-9_-]{1,32}$/.test(e))) {
+      return res.status(400).json({ error: 'engines must be an array of engine ids' });
     }
   }
   const updates = {};
@@ -41,6 +42,19 @@ router.post('/:group/toggle', async (req, res) => {
 router.get('/status', async (_req, res) => {
   const statuses = await getPluginStatuses();
   res.json(statuses);
+});
+
+// Card helper button (e.g. Browser Search → open chrome://extensions). Action ids are
+// plugin-defined constants; nothing from the request body reaches the plugin.
+router.post('/:group/action/:id', async (req, res) => {
+  if (!/^[a-z0-9-]{1,32}$/.test(req.params.id)) return res.status(400).json({ error: 'Bad action id' });
+  try {
+    const result = await runPluginCardAction(req.params.group, req.params.id);
+    if (result?.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Generic auth: start

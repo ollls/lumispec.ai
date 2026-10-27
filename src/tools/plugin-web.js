@@ -156,7 +156,12 @@ async function ddgScrape(query) {
     timeout: { request: 15000 },
     followRedirect: true,
   });
-  const { document } = parseHTML(res.body);
+  return parseDdgHtml(res.body, 5);
+}
+
+/** Parse DuckDuckGo's HTML endpoint (html.duckduckgo.com/html). Shared with plugin-browser.js. */
+export function parseDdgHtml(html, limit = 8) {
+  const { document } = parseHTML(html);
   const results = [];
   for (const el of document.querySelectorAll('.result')) {
     const anchor = el.querySelector('.result__a');
@@ -164,14 +169,15 @@ async function ddgScrape(query) {
     if (!anchor) continue;
     const href = anchor.getAttribute('href') || '';
     const match = href.match(/uddg=([^&]+)/);
-    const finalUrl = match ? decodeURIComponent(match[1]) : href;
-    if (!finalUrl || finalUrl.startsWith('/')) continue;
+    let finalUrl = match ? decodeURIComponent(match[1]) : href;
+    if (finalUrl.startsWith('//')) finalUrl = 'https:' + finalUrl;
+    if (!/^https?:\/\//.test(finalUrl)) continue;
     results.push({
       title: anchor.textContent?.trim() || '',
       url: finalUrl,
       description: snippet?.textContent?.trim() || '',
     });
-    if (results.length >= 5) break;
+    if (results.length >= limit) break;
   }
   return results;
 }
@@ -272,7 +278,7 @@ async function fetchBrowser(url) {
   }
 }
 
-function htmlToMarkdown(html) {
+export function htmlToMarkdown(html) {
   const { document } = parseHTML(html);
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   turndown.remove(['script', 'style', 'noscript']);
@@ -299,11 +305,100 @@ function htmlToMarkdown(html) {
   return { markdown, title };
 }
 
+// ── Reusable entry points ────────────────────────────
+// The Browser Search plugin (plugin-browser.js) calls these as its fallback when the
+// extension is offline, so they must not depend on this group being registered.
+
+/** Search with the saved engine selection; merges and dedupes when several are on. */
+export async function runWebSearch(query) {
+  const { engines } = await getWebConfig();
+  const active = engines.filter(e => !!SEARCH_BACKENDS[e]);
+
+  if (active.length === 0) {
+    return { error: 'No search engines configured or available', results: [] };
+  }
+
+  if (active.length === 1) {
+    const backend = SEARCH_BACKENDS[active[0]];
+    const res = await backend.fn(query).catch(e => {
+      console.warn(`[web_search] ${backend.label} error: ${e.message}`);
+      return { error: e.message, results: [] };
+    });
+    return { ...res, sources: backend.label };
+  }
+
+  // Multiple engines — run in parallel, merge and deduplicate
+  const results = await Promise.all(
+    active.map(e => {
+      const backend = SEARCH_BACKENDS[e];
+      return backend.fn(query)
+        .then(r => ({ ...r, engine: backend.label }))
+        .catch(err => {
+          console.warn(`[web_search] ${backend.label} error: ${err.message}`);
+          return { error: err.message, results: [], engine: backend.label };
+        });
+    })
+  );
+
+  const succeeded = results.filter(r => r.results.length > 0);
+  const sources = succeeded.length > 0
+    ? succeeded.map(r => r.engine).join(' + ')
+    : results.map(r => `${r.engine} failed`).join(', ');
+
+  const seen = new Set();
+  const merged = [];
+  for (const r of results.flatMap(r => r.results)) {
+    if (!seen.has(r.url)) {
+      seen.add(r.url);
+      merged.push(r);
+    }
+  }
+  return { results: merged.slice(0, 8), sources };
+}
+
+/** Fetch a page with the saved fetch mode (auto = stealth, then browser if blocked). */
+export async function runWebFetch(url) {
+  const { mode } = await getWebConfig();
+  if (mode !== 'auto') return fetchTier(mode, url);
+
+  // Tier A — one HTTP request, no JS. Serves the large majority of pages.
+  let cheap = null;
+  try {
+    cheap = await fetchTier('stealth', url);
+    if (!looksBlocked(cheap)) return cheap;
+  } catch (err) {
+    console.warn(`[web_fetch] stealth tier failed for ${url}: ${err.message}`);
+  }
+
+  // Tier B — real browser. Only for pages that need JS or refused tier A.
+  let rich;
+  try {
+    rich = await fetchTier('browser', url);
+  } catch (err) {
+    console.warn(`[web_fetch] browser tier failed for ${url}: ${err.message}`);
+    if (cheap) return cheap;
+    throw err;
+  }
+  // Hard-blocked sites answer Chrome with an empty shell, which is worse than
+  // the challenge page tier A got — keep whichever actually carries content.
+  if (cheap && rich.content.length < cheap.content.length) return cheap;
+  return rich;
+}
+
 export default {
   group: 'web',
   label: 'Web Search & Fetch',
   description: 'Web search and page fetching with configurable engines and fetch modes.',
   defaults: { enabled: true, mode: 'stealth', engines: ['keiro'] },
+  // Rendered by the Plugins panel as a mode dropdown + engine checkboxes
+  configUi: () => ({
+    modes: ['auto', 'regular', 'stealth', 'browser'],
+    availableEngines: [
+      { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
+      { id: 'keiro', label: 'Keiro', available: !!config.keiro.apiKey },
+      { id: 'duckduckgo', label: 'DuckDuckGo', available: true },
+    ],
+  }),
   routing: [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
   ],
@@ -316,82 +411,12 @@ export default {
     web_search: {
       description: 'Search the web. Requires a "query" argument.',
       parameters: { query: 'string' },
-      execute: async ({ query }) => {
-        const { engines } = await getWebConfig();
-        const active = engines.filter(e => !!SEARCH_BACKENDS[e]);
-
-        if (active.length === 0) {
-          return { error: 'No search engines configured or available', results: [] };
-        }
-
-        if (active.length === 1) {
-          const backend = SEARCH_BACKENDS[active[0]];
-          const res = await backend.fn(query).catch(e => {
-            console.warn(`[web_search] ${backend.label} error: ${e.message}`);
-            return { error: e.message, results: [] };
-          });
-          return { ...res, sources: backend.label };
-        }
-
-        // Multiple engines — run in parallel, merge and deduplicate
-        const results = await Promise.all(
-          active.map(e => {
-            const backend = SEARCH_BACKENDS[e];
-            return backend.fn(query)
-              .then(r => ({ ...r, engine: backend.label }))
-              .catch(err => {
-                console.warn(`[web_search] ${backend.label} error: ${err.message}`);
-                return { error: err.message, results: [], engine: backend.label };
-              });
-          })
-        );
-
-        const succeeded = results.filter(r => r.results.length > 0);
-        const sources = succeeded.length > 0
-          ? succeeded.map(r => r.engine).join(' + ')
-          : results.map(r => `${r.engine} failed`).join(', ');
-
-        const seen = new Set();
-        const merged = [];
-        for (const r of results.flatMap(r => r.results)) {
-          if (!seen.has(r.url)) {
-            seen.add(r.url);
-            merged.push(r);
-          }
-        }
-        return { results: merged.slice(0, 8), sources };
-      },
+      execute: async ({ query }) => runWebSearch(query),
     },
     web_fetch: {
       description: 'Fetch a web page and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
       parameters: { url: 'string' },
-      execute: async ({ url }) => {
-        const { mode } = await getWebConfig();
-        if (mode !== 'auto') return fetchTier(mode, url);
-
-        // Tier A — one HTTP request, no JS. Serves the large majority of pages.
-        let cheap = null;
-        try {
-          cheap = await fetchTier('stealth', url);
-          if (!looksBlocked(cheap)) return cheap;
-        } catch (err) {
-          console.warn(`[web_fetch] stealth tier failed for ${url}: ${err.message}`);
-        }
-
-        // Tier B — real browser. Only for pages that need JS or refused tier A.
-        let rich;
-        try {
-          rich = await fetchTier('browser', url);
-        } catch (err) {
-          console.warn(`[web_fetch] browser tier failed for ${url}: ${err.message}`);
-          if (cheap) return cheap;
-          throw err;
-        }
-        // Hard-blocked sites answer Chrome with an empty shell, which is worse than
-        // the challenge page tier A got — keep whichever actually carries content.
-        if (cheap && rich.content.length < cheap.content.length) return cheap;
-        return rich;
-      },
+      execute: async ({ url }) => runWebFetch(url),
     },
   },
 };

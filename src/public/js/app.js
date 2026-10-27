@@ -1555,7 +1555,8 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.usage) {
-              const total = data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
+              // context_tokens = measured prompt + last completion (what the slot holds); total_tokens is a fallback
+              const total = data.usage.context_tokens || data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
               updateContextBar(total);
             }
             if (data.error) {
@@ -1940,7 +1941,7 @@ async function sendTasks(tasks, displayText) {
             }
 
             if (data.usage) {
-              const total = data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
+              const total = data.usage.context_tokens || data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
               updateContextBar(total);
             }
 
@@ -3239,14 +3240,17 @@ pluginsToggle.addEventListener('click', (e) => {
   templatesDropdown.classList.add('hidden');
   if (showing) {
     pluginConfigPanel.classList.add('hidden');
+    if (pluginLiveTimer) { clearInterval(pluginLiveTimer); pluginLiveTimer = null; }
   } else {
     pluginConfigPanel.classList.remove('hidden');
     refreshPluginConfig();
+    if (!pluginLiveTimer) pluginLiveTimer = setInterval(pollPluginCards, 4000);
   }
 });
 
 pluginConfigClose.addEventListener('click', () => {
   pluginConfigPanel.classList.add('hidden');
+  if (pluginLiveTimer) { clearInterval(pluginLiveTimer); pluginLiveTimer = null; }
 });
 
 async function refreshPluginConfig() {
@@ -3276,7 +3280,106 @@ function showPluginToast(message, isError = false) {
   setTimeout(() => { if (toast.parentElement) toast.remove(); }, 6000);
 }
 
+function renderPluginHelper(p, help) {
+  const box = document.createElement('div');
+  Object.assign(box.style, {
+    marginTop: '8px', padding: '10px 12px', borderRadius: '8px',
+    background: '#1c1c1e', border: '1px solid #3f3f46', fontSize: '12px', color: '#a1a1aa',
+  });
+  if (help.title) {
+    const h = document.createElement('div');
+    Object.assign(h.style, { color: '#e4e4e7', fontWeight: '500', marginBottom: '6px' });
+    h.textContent = help.title;
+    box.appendChild(h);
+  }
+  if (Array.isArray(help.steps) && help.steps.length) {
+    const ol = document.createElement('ol');
+    Object.assign(ol.style, { margin: '0 0 8px 0', paddingLeft: '18px', listStyle: 'decimal', lineHeight: '1.5' });
+    for (const step of help.steps) {
+      const li = document.createElement('li');
+      li.textContent = step;
+      ol.appendChild(li);
+    }
+    box.appendChild(ol);
+  }
+  if (help.path) {
+    const code = document.createElement('code');
+    Object.assign(code.style, {
+      display: 'block', marginBottom: '8px', padding: '4px 8px', borderRadius: '4px',
+      background: '#27272a', color: '#d4d4d8', fontSize: '11px', wordBreak: 'break-all', userSelect: 'all',
+    });
+    code.textContent = help.path;
+    box.appendChild(code);
+  }
+  if (Array.isArray(help.buttons) && help.buttons.length) {
+    const row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', flexWrap: 'wrap', gap: '6px' });
+    for (const b of help.buttons) {
+      const btn = document.createElement('button');
+      Object.assign(btn.style, {
+        fontSize: '12px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
+        background: '#3730a3', color: '#e0e7ff', border: '1px solid #4f46e5',
+      });
+      btn.textContent = b.label;
+      if (b.title) btn.title = b.title;
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        try {
+          if (b.copy !== undefined) {
+            try {
+              await navigator.clipboard.writeText(b.copy);
+              showPluginToast(`Copied ${b.copy}`);
+            } catch {
+              showPluginToast(`Clipboard blocked — select the path shown on the card and copy it by hand`, true);
+            }
+            return;
+          }
+          const res = await fetch(`/api/plugins/${p.group}/action/${b.id}`, { method: 'POST' });
+          const result = await res.json().catch(() => ({}));
+          if (res.ok && result.ok !== false) showPluginToast(result.message || 'Done');
+          else showPluginToast(result.message || result.error || `${b.label} failed`, true);
+        } finally {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+        }
+      });
+      row.appendChild(btn);
+    }
+    box.appendChild(row);
+  }
+  return box;
+}
+
+// While the panel is open, re-fetch the card list every few seconds and re-render only when
+// a live field changed (status line, helper block, enabled state). This is what turns the
+// Browser Search card green — and drops its install guide — the moment the extension
+// connects, without the user reloading anything. Config controls are left alone otherwise.
+let pluginLiveKey = '';
+let pluginLiveTimer = null;
+function pluginLiveSnapshot(plugins) {
+  return JSON.stringify(plugins.map(pl => [pl.group, pl.enabled, pl.supersededBy, pl.cardStatus, pl.cardActions]));
+}
+async function pollPluginCards() {
+  if (pluginConfigPanel.classList.contains('hidden')) return;
+  try {
+    const plugins = await (await fetch('/api/plugins')).json();
+    const key = pluginLiveSnapshot(plugins);
+    if (key === pluginLiveKey) return;
+    const before = JSON.parse(pluginLiveKey || '[]');
+    pluginLiveKey = key;
+    renderPluginConfig(plugins);
+    // Toast when a card's status line flips to ok (e.g. "Extension connected")
+    for (const pl of plugins) {
+      const prev = before.find(x => x[0] === pl.group);
+      if (prev && prev[3] && !prev[3].ok && pl.cardStatus?.ok) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`);
+    }
+  } catch {}
+}
+
 function renderPluginConfig(plugins) {
+  pluginLiveKey = pluginLiveSnapshot(plugins);
   pluginConfigList.innerHTML = '';
   if (plugins.length === 0) {
     const empty = document.createElement('div');
@@ -3327,6 +3430,40 @@ function renderPluginConfig(plugins) {
       info.appendChild(dependents);
     }
 
+    // Supersession lines: what this plugin replaces, or what is currently replacing it
+    const superseded = Array.isArray(p.supersededBy) && p.supersededBy.length > 0;
+    if (p.supersedes && p.supersedes.length > 0) {
+      const sup = document.createElement('span');
+      sup.className = 'text-xs';
+      sup.style.color = '#71717a';
+      sup.textContent = 'Replaces while enabled: ' + p.supersedes.map(d => labelByGroup[d] || d).join(', ');
+      info.appendChild(sup);
+    }
+    if (superseded) {
+      const by = document.createElement('span');
+      by.className = 'text-xs';
+      by.style.color = '#d97706';
+      const names = p.supersededBy.map(d => labelByGroup[d] || d).join(', ');
+      by.textContent = `Replaced by ${names} — disable it to use this plugin again`;
+      info.appendChild(by);
+    }
+
+    // Live status line supplied by the plugin (e.g. "Extension connected v0.2.1")
+    if (p.cardStatus && p.cardStatus.text) {
+      const st = document.createElement('span');
+      st.className = 'text-xs';
+      st.style.color = p.cardStatus.ok ? '#22c55e' : '#d97706';
+      st.textContent = (p.cardStatus.ok ? '● ' : '○ ') + p.cardStatus.text;
+      info.appendChild(st);
+    }
+
+    // Plugin-supplied helper block (e.g. the Browser Search extension install guide):
+    // numbered steps, the folder path, and buttons that either copy text or call
+    // POST /api/plugins/:group/action/:id on the server.
+    if (p.cardActions && (p.cardActions.steps?.length || p.cardActions.buttons?.length)) {
+      info.appendChild(renderPluginHelper(p, p.cardActions));
+    }
+
     // Tool list
     const toolList = document.createElement('div');
     Object.assign(toolList.style, { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' });
@@ -3344,22 +3481,32 @@ function renderPluginConfig(plugins) {
     }
     info.appendChild(toolList);
 
-    // Slider switch
+    // Slider switch. A superseded plugin shows its SAVED position grayed out and inert:
+    // it comes back in that state when the superseder is disabled.
+    const sliderOn = superseded ? !!p.configEnabled : p.enabled;
     const toggle = document.createElement('button');
     Object.assign(toggle.style, {
       width: '44px', height: '24px', borderRadius: '9999px', position: 'relative',
       flexShrink: '0', transition: 'background 0.2s', cursor: 'pointer', border: 'none',
-      background: p.enabled ? '#6366f1' : '#3f3f46', marginLeft: '16px',
+      background: sliderOn ? '#6366f1' : '#3f3f46', marginLeft: '16px',
     });
     const knob = document.createElement('span');
     Object.assign(knob.style, {
       position: 'absolute', top: '3px', width: '18px', height: '18px',
       borderRadius: '9999px', background: 'white', transition: 'left 0.2s',
-      left: p.enabled ? '22px' : '3px',
+      left: sliderOn ? '22px' : '3px',
     });
     toggle.appendChild(knob);
+    if (superseded) {
+      toggle.disabled = true;
+      toggle.style.opacity = '0.35';
+      toggle.style.cursor = 'not-allowed';
+      toggle.title = `Disable ${p.supersededBy.map(d => labelByGroup[d] || d).join(', ')} first`;
+      card.style.opacity = '0.6';
+    }
 
     toggle.addEventListener('click', async () => {
+      if (superseded) return;
       toggle.style.opacity = '0.5';
       toggle.style.pointerEvents = 'none';
       try {
@@ -3370,12 +3517,25 @@ function renderPluginConfig(plugins) {
         });
         const result = await res.json().catch(() => ({}));
         if (res.ok) {
+          let msg = '';
           if (result.cascadedOn && result.cascadedOn.length > 0) {
             const names = result.cascadedOn.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Enabled ${p.label}. Also enabled (dependency): ${names}.`);
+            msg = `Enabled ${p.label}. Also enabled (dependency): ${names}.`;
           } else if (result.cascadedOff && result.cascadedOff.length > 0) {
             const names = result.cascadedOff.map(g => labelByGroup[g] || g).join(', ');
-            showPluginToast(`Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`);
+            msg = `Disabled ${p.label}. Also disabled (depended on it): ${names}. Re-enable ${names} to restore both.`;
+          } else if (result.superseded && result.superseded.length > 0) {
+            const names = result.superseded.map(g => labelByGroup[g] || g).join(', ');
+            msg = `Enabled ${p.label}. ${names} is paused while it is on — all web searches now go through the browser extension.`;
+          } else if (result.restored && result.restored.length > 0) {
+            const names = result.restored.map(g => labelByGroup[g] || g).join(', ');
+            msg = `Disabled ${p.label}. ${names} is active again.`;
+          }
+          // Plugin-supplied warning (e.g. enabled with no extension connected) takes the error style
+          if (result.warning) {
+            showPluginToast(msg ? `${msg} ⚠ ${result.warning}` : `⚠ ${result.warning}`, true);
+          } else if (msg) {
+            showPluginToast(msg);
           }
           await refreshPluginConfig();
           pollPluginStatuses();
@@ -3392,12 +3552,16 @@ function renderPluginConfig(plugins) {
     topRow.appendChild(toggle);
     card.appendChild(topRow);
 
-    // Web plugin config: mode dropdown + engine checkboxes
-    if (p.group === 'web' && p.config && p.enabled) {
+    // Per-plugin config: optional mode dropdown + optional engine checkboxes, driven by the
+    // plugin's configUi() descriptor (web: both; browser: engines only).
+    const hasModes = Array.isArray(p.config?.modes) && p.config.modes.length > 0;
+    const hasEngines = Array.isArray(p.config?.availableEngines) && p.config.availableEngines.length > 0;
+    if (p.config && p.enabled && (hasModes || hasEngines)) {
       const configSection = document.createElement('div');
       Object.assign(configSection.style, { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #3f3f46' });
 
       // Mode dropdown
+      if (hasModes) {
       const modeRow = document.createElement('div');
       modeRow.className = 'flex items-center gap-3';
       const modeLabel = document.createElement('span');
@@ -3429,10 +3593,12 @@ function renderPluginConfig(plugins) {
       modeRow.appendChild(modeLabel);
       modeRow.appendChild(modeSelect);
       configSection.appendChild(modeRow);
+      }
 
       // Engine checkboxes
+      if (hasEngines) {
       const engRow = document.createElement('div');
-      Object.assign(engRow.style, { marginTop: '10px' });
+      Object.assign(engRow.style, { marginTop: hasModes ? '10px' : '0' });
       const engLabel = document.createElement('span');
       Object.assign(engLabel.style, { fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' });
       engLabel.textContent = 'Search engines';
@@ -3442,11 +3608,14 @@ function renderPluginConfig(plugins) {
       checkboxRow.className = 'flex items-center gap-4';
 
       for (const eng of p.config.availableEngines) {
-        if (!eng.available && eng.id !== 'duckduckgo') continue; // Hide unavailable API engines
+        if (eng.available === false) continue; // Hide engines whose API key is missing
         const wrapper = document.createElement('label');
         wrapper.className = 'flex items-center gap-1.5 cursor-pointer';
         const cb = document.createElement('input');
-        cb.type = 'checkbox';
+        // engineMode 'single' (Browser Search) renders radios: one engine, no merging/chaining.
+        const single = p.config.engineMode === 'single';
+        cb.type = single ? 'radio' : 'checkbox';
+        if (single) cb.name = `engine-${p.group}`;
         cb.checked = (p.config.engines || []).includes(eng.id);
         Object.assign(cb.style, { accentColor: '#6366f1', cursor: 'pointer' });
 
@@ -3456,7 +3625,7 @@ function renderPluginConfig(plugins) {
 
         cb.addEventListener('change', async () => {
           const engines = [];
-          for (const box of checkboxRow.querySelectorAll('input[type="checkbox"]')) {
+          for (const box of checkboxRow.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
             if (box.checked) engines.push(box.dataset.engine);
           }
           await fetch(`/api/plugins/${p.group}/toggle`, {
@@ -3475,6 +3644,7 @@ function renderPluginConfig(plugins) {
 
       engRow.appendChild(checkboxRow);
       configSection.appendChild(engRow);
+      }
       card.appendChild(configSection);
     }
 

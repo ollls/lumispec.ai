@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumispec Browser Search</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px system-ui, sans-serif; margin: 0; padding: 12px; width: 360px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  .row label { width: 64px; color: #888; }
+  input[type=text], input[type=password], select { flex: 1; padding: 4px 6px; font: inherit; }
+  button { padding: 4px 10px; font: inherit; cursor: pointer; }
+  #dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #999; margin-right: 6px; vertical-align: middle; }
+  #dot.connected { background: #16a34a; }
+  #dot.connecting { background: #ca8a04; }
+  #dot.disconnected { background: #dc2626; }
+  #err { color: #b45309; font-size: 12px; min-height: 1em; }
+  hr { border: 0; border-top: 1px solid #8884; margin: 10px 0; }
+  #out { font-size: 12px; max-height: 260px; overflow: auto; }
+  #out .r { margin: 6px 0; }
+  #out .r { word-break: break-word; }
+  #out .r b { color: #888; font-weight: 500; }
+</style>
+</head>
+<body>
+  <h1><span id="dot"></span><span id="stateText">…</span></h1>
+  <div id="err"></div>
+
+  <div class="row"><label>Server</label><input type="text" id="serverUrl" placeholder="ws://localhost:3000/ws/browser"></div>
+  <div class="row"><label>Token</label><input type="password" id="token" placeholder="optional shared secret"></div>
+  <div class="row"><label>Enabled</label><input type="checkbox" id="enabled"> <span style="flex:1"></span>
+    <button id="save">Save</button><button id="reconnect">Reconnect</button></div>
+
+  <hr>
+  <div class="row"><label>Test</label>
+    <input type="text" id="url" placeholder="URL to load in a hidden tab, e.g. https://example.com">
+    <button id="run">Run</button></div>
+  <div id="out"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

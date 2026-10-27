@@ -105,6 +105,17 @@ router.post('/:id/tasks', async (req, res) => {
   const taskRunResults = [];
   let prev = { result: null, files: [] }; // output from immediately preceding step
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  // totalUsage sums every step and round — a measure of work, not of context. Each step runs in
+  // its own isolated context, so the bar shows the LAST step's measured context (what the slot
+  // holds now) and the peak is reported alongside. Summing used to show 84K on a 64K slot.
+  let lastContextTokens = 0;
+  let peakContextTokens = 0;
+  const trackContext = (result) => {
+    if (result?.contextTokens > 0) {
+      lastContextTokens = result.contextTokens;
+      peakContextTokens = Math.max(peakContextTokens, result.contextTokens);
+    }
+  };
 
   // Count total steps (tasks + subtasks) for progress
   let totalSteps = 0;
@@ -149,6 +160,7 @@ router.post('/:id/tasks', async (req, res) => {
 
           subtaskResults.push({ text: task.subtasks[si], result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
           addUsage(totalUsage, result.usage);
+          trackContext(result);
           if (result.savedFiles) subtaskFiles.push(...result.savedFiles);
 
           res.write(`data: ${JSON.stringify({ subtask_complete: { taskIndex: ti, subtaskIndex: si } })}\n\n`);
@@ -199,6 +211,7 @@ router.post('/:id/tasks', async (req, res) => {
 
         taskRunResults.push({ text: task.text, result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
         addUsage(totalUsage, result.usage);
+        trackContext(result);
         prev = { result: result.content, files: result.savedFiles || [] };
 
         res.write(`data: ${JSON.stringify({ task_complete: { index: ti } })}\n\n`);
@@ -222,8 +235,9 @@ router.post('/:id/tasks', async (req, res) => {
     }
 
     if (totalUsage.total_tokens > 0) {
-      conversations.setTokenCount(conv.id, totalUsage.total_tokens);
-      res.write(`data: ${JSON.stringify({ usage: totalUsage })}\n\n`);
+      const contextTokens = lastContextTokens || totalUsage.total_tokens;
+      conversations.setTokenCount(conv.id, contextTokens);
+      res.write(`data: ${JSON.stringify({ usage: { ...totalUsage, context_tokens: contextTokens, peak_context_tokens: peakContextTokens } })}\n\n`);
     }
 
   } catch (err) {
@@ -601,18 +615,24 @@ CRITICAL RULES:
         : 'the model returned no content';
       const errMsg = `Step produced no output after ${toolUses.length} tool call(s): ${detail}. The next step would have received nothing, so the pipeline stopped here.${stepFiles.length ? ` Files saved by this step are still on disk: ${stepFiles.map(f => f.filename).join(', ')}.` : ''}`;
       console.warn(`[task-processor] ${stepLabel}: ${errMsg}`);
-      return { error: errMsg, content: '', usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+      return { error: errMsg, content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
     }
 
     // Stream final content for this step
     console.log(`[task-processor] step done: "${taskText.slice(0, 40)}" → ${finalContent.length} chars`);
     res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
 
-    return { content: finalContent, usage: lastUsage, toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+    return { content: finalContent, usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
 
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    return { error: err.message || 'LLM request failed', content: '', usage: lastUsage, toolUses, savedFiles: [] };
+    return { error: err.message || 'LLM request failed', content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: [] };
+  }
+
+  // Context this step ended with: last measured prompt + tokens generated in that round.
+  function stepContext() {
+    if (promptTokens > 0) return promptTokens + (lastUsage?.completion_tokens || 0);
+    return lastUsage?.total_tokens || 0;
   }
 }
 
