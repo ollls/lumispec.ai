@@ -46,7 +46,7 @@ export default {
   },
   claude: {
     apiKey: process.env.CLAUDE_API_KEY || '',
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-5-5',
     maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '8192', 10),
   },
   llm: {
