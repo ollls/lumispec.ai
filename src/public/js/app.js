@@ -3240,14 +3240,17 @@ pluginsToggle.addEventListener('click', (e) => {
   templatesDropdown.classList.add('hidden');
   if (showing) {
     pluginConfigPanel.classList.add('hidden');
+    if (pluginLiveTimer) { clearInterval(pluginLiveTimer); pluginLiveTimer = null; }
   } else {
     pluginConfigPanel.classList.remove('hidden');
     refreshPluginConfig();
+    if (!pluginLiveTimer) pluginLiveTimer = setInterval(pollPluginCards, 4000);
   }
 });
 
 pluginConfigClose.addEventListener('click', () => {
   pluginConfigPanel.classList.add('hidden');
+  if (pluginLiveTimer) { clearInterval(pluginLiveTimer); pluginLiveTimer = null; }
 });
 
 async function refreshPluginConfig() {
@@ -3277,7 +3280,106 @@ function showPluginToast(message, isError = false) {
   setTimeout(() => { if (toast.parentElement) toast.remove(); }, 6000);
 }
 
+function renderPluginHelper(p, help) {
+  const box = document.createElement('div');
+  Object.assign(box.style, {
+    marginTop: '8px', padding: '10px 12px', borderRadius: '8px',
+    background: '#1c1c1e', border: '1px solid #3f3f46', fontSize: '12px', color: '#a1a1aa',
+  });
+  if (help.title) {
+    const h = document.createElement('div');
+    Object.assign(h.style, { color: '#e4e4e7', fontWeight: '500', marginBottom: '6px' });
+    h.textContent = help.title;
+    box.appendChild(h);
+  }
+  if (Array.isArray(help.steps) && help.steps.length) {
+    const ol = document.createElement('ol');
+    Object.assign(ol.style, { margin: '0 0 8px 0', paddingLeft: '18px', listStyle: 'decimal', lineHeight: '1.5' });
+    for (const step of help.steps) {
+      const li = document.createElement('li');
+      li.textContent = step;
+      ol.appendChild(li);
+    }
+    box.appendChild(ol);
+  }
+  if (help.path) {
+    const code = document.createElement('code');
+    Object.assign(code.style, {
+      display: 'block', marginBottom: '8px', padding: '4px 8px', borderRadius: '4px',
+      background: '#27272a', color: '#d4d4d8', fontSize: '11px', wordBreak: 'break-all', userSelect: 'all',
+    });
+    code.textContent = help.path;
+    box.appendChild(code);
+  }
+  if (Array.isArray(help.buttons) && help.buttons.length) {
+    const row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', flexWrap: 'wrap', gap: '6px' });
+    for (const b of help.buttons) {
+      const btn = document.createElement('button');
+      Object.assign(btn.style, {
+        fontSize: '12px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
+        background: '#3730a3', color: '#e0e7ff', border: '1px solid #4f46e5',
+      });
+      btn.textContent = b.label;
+      if (b.title) btn.title = b.title;
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        try {
+          if (b.copy !== undefined) {
+            try {
+              await navigator.clipboard.writeText(b.copy);
+              showPluginToast(`Copied ${b.copy}`);
+            } catch {
+              showPluginToast(`Clipboard blocked — select the path shown on the card and copy it by hand`, true);
+            }
+            return;
+          }
+          const res = await fetch(`/api/plugins/${p.group}/action/${b.id}`, { method: 'POST' });
+          const result = await res.json().catch(() => ({}));
+          if (res.ok && result.ok !== false) showPluginToast(result.message || 'Done');
+          else showPluginToast(result.message || result.error || `${b.label} failed`, true);
+        } finally {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+        }
+      });
+      row.appendChild(btn);
+    }
+    box.appendChild(row);
+  }
+  return box;
+}
+
+// While the panel is open, re-fetch the card list every few seconds and re-render only when
+// a live field changed (status line, helper block, enabled state). This is what turns the
+// Browser Search card green — and drops its install guide — the moment the extension
+// connects, without the user reloading anything. Config controls are left alone otherwise.
+let pluginLiveKey = '';
+let pluginLiveTimer = null;
+function pluginLiveSnapshot(plugins) {
+  return JSON.stringify(plugins.map(pl => [pl.group, pl.enabled, pl.supersededBy, pl.cardStatus, pl.cardActions]));
+}
+async function pollPluginCards() {
+  if (pluginConfigPanel.classList.contains('hidden')) return;
+  try {
+    const plugins = await (await fetch('/api/plugins')).json();
+    const key = pluginLiveSnapshot(plugins);
+    if (key === pluginLiveKey) return;
+    const before = JSON.parse(pluginLiveKey || '[]');
+    pluginLiveKey = key;
+    renderPluginConfig(plugins);
+    // Toast when a card's status line flips to ok (e.g. "Extension connected")
+    for (const pl of plugins) {
+      const prev = before.find(x => x[0] === pl.group);
+      if (prev && prev[3] && !prev[3].ok && pl.cardStatus?.ok) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`);
+    }
+  } catch {}
+}
+
 function renderPluginConfig(plugins) {
+  pluginLiveKey = pluginLiveSnapshot(plugins);
   pluginConfigList.innerHTML = '';
   if (plugins.length === 0) {
     const empty = document.createElement('div');
@@ -3353,6 +3455,13 @@ function renderPluginConfig(plugins) {
       st.style.color = p.cardStatus.ok ? '#22c55e' : '#d97706';
       st.textContent = (p.cardStatus.ok ? '● ' : '○ ') + p.cardStatus.text;
       info.appendChild(st);
+    }
+
+    // Plugin-supplied helper block (e.g. the Browser Search extension install guide):
+    // numbered steps, the folder path, and buttons that either copy text or call
+    // POST /api/plugins/:group/action/:id on the server.
+    if (p.cardActions && (p.cardActions.steps?.length || p.cardActions.buttons?.length)) {
+      info.appendChild(renderPluginHelper(p, p.cardActions));
     }
 
     // Tool list

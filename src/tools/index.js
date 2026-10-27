@@ -472,6 +472,12 @@ export async function listPluginGroups() {
       if (typeof plugin.cardStatus === 'function') {
         try { entry.cardStatus = plugin.cardStatus() || null; } catch { entry.cardStatus = null; }
       }
+      // Optional helper block under the status line (e.g. the extension install guide):
+      // { title, steps: string[], buttons: [{ id, label, title?, copy? }] } or null to hide.
+      // Buttons without `copy` POST /api/plugins/:group/action/:id → plugin.cardAction(id).
+      if (typeof plugin.cardActions === 'function') {
+        try { entry.cardActions = plugin.cardActions() || null; } catch { entry.cardActions = null; }
+      }
       return entry;
     });
 
@@ -719,6 +725,17 @@ export async function getPluginStatuses() {
 
 export function getPluginAuth(groupName) {
   return toolGroups[groupName]?.status?.auth || null;
+}
+
+// Run a card helper button (see cardActions in listPluginGroups). Looked up in pluginModules,
+// not toolGroups, so the helper works while the plugin is still disabled — the user installs
+// the extension first and enables Browser Search after.
+export async function runPluginCardAction(groupName, actionId) {
+  const plugin = pluginModules[groupName]?.plugin;
+  if (!plugin || typeof plugin.cardAction !== 'function') return { error: 'No actions for this plugin' };
+  const known = (plugin.cardActions?.() || {}).buttons || [];
+  if (!known.some(b => b.id === actionId && !b.copy)) return { error: `Unknown action: ${actionId}` };
+  return plugin.cardAction(actionId);
 }
 
 // ── Taskmaster prompt (read from data/TASKMASTER.md) ──

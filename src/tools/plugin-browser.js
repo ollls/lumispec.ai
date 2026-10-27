@@ -17,10 +17,12 @@
 // which supersession deliberately leaves untouched. Every fallback is disclosed in the tool
 // result (`fallback` + `sources`), so the Think stream shows exactly what happened.
 
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, accessSync, constants as fsConstants } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { resolve, join, delimiter as pathDelimiter } from 'node:path';
 import { parseHTML } from 'linkedom';
+import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
 import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml } from './plugin-web.js';
@@ -36,6 +38,108 @@ try {
 function extensionOutdated() {
   const v = bridge.info.extension?.version;
   return !!(v && SHIPPED_EXTENSION_VERSION && v !== SHIPPED_EXTENSION_VERSION);
+}
+
+// ── Install helper ──────────────────────────────────────────────────────────────────────
+// Chrome cannot install an unpacked extension from a web page, and branded Chrome 137+
+// ignores --load-extension, so "fully automatic" is off the table. The next best thing: the
+// server runs on the same machine as the browser, so a card button can open
+// chrome://extensions in the user's Chrome and the file manager on extension/, leaving the
+// user two clicks (Developer mode, Load unpacked → pick the folder, or drag the folder in).
+const EXTENSION_DIR = fileURLToPath(new URL('../../extension/', import.meta.url)).replace(/[\\/]$/, '');
+
+// Chromium-family executables, in preference order, when BROWSER_SEARCH_BROWSER is unset.
+const BROWSER_CANDIDATES = [
+  'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser',
+  'brave-browser', 'microsoft-edge', 'microsoft-edge-stable',
+];
+
+function findOnPath(cmd) {
+  if (cmd.includes('/') || cmd.includes('\\')) {
+    try { accessSync(cmd, fsConstants.X_OK); return cmd; } catch { return null; }
+  }
+  for (const dir of (process.env.PATH || '').split(pathDelimiter)) {
+    if (!dir) continue;
+    const full = join(dir, cmd);
+    try { accessSync(full, fsConstants.X_OK); return full; } catch {}
+  }
+  return null;
+}
+
+function detectBrowser() {
+  const override = config.browserSearch.browserCommand;
+  if (override) return { cmd: findOnPath(override), name: override };
+  for (const c of BROWSER_CANDIDATES) {
+    const found = findOnPath(c);
+    if (found) return { cmd: found, name: c };
+  }
+  return { cmd: null, name: null };
+}
+
+// Fire-and-forget launch: a running Chrome instance takes the URL as a new tab; a closed one
+// starts up. Edge rewrites chrome:// to edge://, Brave accepts chrome:// as is.
+function spawnDetached(cmd, args) {
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+  child.on('error', () => {});
+  child.unref();
+}
+
+function openInBrowser(url) {
+  if (process.platform === 'win32') {
+    spawnDetached('cmd', ['/c', 'start', '', config.browserSearch.browserCommand || 'chrome', url]);
+    return { ok: true, message: `Opened ${url} in Chrome` };
+  }
+  if (process.platform === 'darwin') {
+    spawnDetached('open', ['-a', config.browserSearch.browserCommand || 'Google Chrome', url]);
+    return { ok: true, message: `Opened ${url} in Chrome` };
+  }
+  const { cmd, name } = detectBrowser();
+  if (!cmd) {
+    return { ok: false, message: `No Chromium-family browser found on PATH (tried ${BROWSER_CANDIDATES.join(', ')}). Set BROWSER_SEARCH_BROWSER in .env, or open ${url} by hand.` };
+  }
+  spawnDetached(cmd, [url]);
+  return { ok: true, message: `Opened ${url} in ${name}` };
+}
+
+function openFolder(dir) {
+  if (process.platform === 'win32') spawnDetached('explorer', [dir]);
+  else if (process.platform === 'darwin') spawnDetached('open', [dir]);
+  else {
+    const xdg = findOnPath('xdg-open');
+    if (!xdg) return { ok: false, message: `xdg-open not found — the folder is ${dir}` };
+    spawnDetached(xdg, [dir]);
+  }
+  return { ok: true, message: `Opened ${dir} in the file manager — drag the folder onto the chrome://extensions page, or use Load unpacked` };
+}
+
+function installHelp() {
+  const info = bridge.info;
+  if (info.connected && !extensionOutdated()) return null;
+  const reloading = info.connected; // connected but outdated
+  return {
+    title: reloading ? 'Reload the extension' : 'Install the extension',
+    steps: reloading
+      ? ['Open chrome://extensions and find "Lumispec Browser Search".', 'Click its ↻ Reload button.']
+      : [
+          'Open chrome://extensions (button below) and turn on Developer mode, top right.',
+          `Click Load unpacked and pick the folder below — or drag the folder from the file manager onto the page.`,
+          'Keep that browser open. This card turns green as soon as the extension connects.',
+        ],
+    path: EXTENSION_DIR,
+    buttons: [
+      { id: 'open-extensions', label: 'Open chrome://extensions', title: 'Opens the extensions page in your Chrome (new tab if Chrome is already running)' },
+      ...(reloading ? [] : [
+        { id: 'open-folder', label: 'Open extension folder', title: 'Opens the extension folder in your file manager so you can drag it onto the extensions page' },
+        { id: 'copy-path', label: 'Copy path', title: 'Copies the extension folder path for the Load unpacked dialog', copy: EXTENSION_DIR },
+      ]),
+    ],
+  };
+}
+
+async function runInstallAction(id) {
+  if (id === 'open-extensions') return openInBrowser('chrome://extensions/');
+  if (id === 'open-folder') return openFolder(EXTENSION_DIR);
+  return { error: `Unknown action: ${id}` };
 }
 
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
@@ -355,11 +459,15 @@ export default {
       const seen = info.lastSeen ? new Date(info.lastSeen).toLocaleTimeString() : 'unknown';
       return { ok: false, text: `Extension disconnected (last seen ${seen}) — searches fall back to HTTP until it reconnects` };
     }
-    return { ok: false, text: 'No browser extension connected — searches fall back to HTTP. Install it from extension/README.md (Chrome, Edge, Brave; load unpacked)' };
+    return { ok: false, text: 'No browser extension connected — searches fall back to HTTP. Install it with the steps below (Chrome, Edge, Brave; load unpacked)' };
   },
+  // Install / reload guide with buttons, shown under the status line until the extension
+  // connects. Buttons run through POST /api/plugins/browser/action/:id → cardAction().
+  cardActions: installHelp,
+  cardAction: runInstallAction,
   enableWarning: () => bridge.connected
     ? null
-    : 'Browser Search is on, but no browser extension is connected. Install it from extension/README.md and keep that browser open. Until it connects, searches fall back to Web Search & Fetch.',
+    : 'Browser Search is on, but no browser extension is connected. Install it with the buttons on this card and keep that browser open. Until it connects, searches fall back to Web Search & Fetch.',
   routing: [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
   ],

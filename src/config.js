@@ -27,6 +27,9 @@ export default {
     token: process.env.BROWSER_SEARCH_TOKEN || '',
     // How long a search / fetch waits for the extension before falling back (ms)
     timeoutMs: parseInt(process.env.BROWSER_SEARCH_TIMEOUT_MS || '25000', 10),
+    // Optional browser executable the Install helper launches for chrome://extensions
+    // (default: first of google-chrome, chromium, brave-browser, microsoft-edge found on PATH)
+    browserCommand: process.env.BROWSER_SEARCH_BROWSER || '',
   },
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',

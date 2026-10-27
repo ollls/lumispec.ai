@@ -13,6 +13,7 @@ export {
   isToolGroupEnabled,
   getPluginStatuses,
   getPluginAuth,
+  runPluginCardAction,
   listPluginGroups,
   setPluginEnabled,
   updatePluginConfig,

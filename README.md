@@ -297,16 +297,20 @@ Browser Search runs `web_search` / `web_fetch` in a hidden tab of **your own Chr
 Brave, any Chromium browser), so Google, Bing, Brave and bot-walled sites answer like they do for a
 person. It needs a small extension that you load yourself — there is no store listing:
 
-1. Follow **[`extension/README.md`](extension/README.md)**: `chrome://extensions` → Developer mode →
-   Load unpacked → select the `extension/` folder. Install, verify, update and remove are all covered.
-2. In the workbench, open **Plugins**, turn on **Browser Search**, pick one engine. The **Browser**
-   dot in the top bar turns green once the extension is connected.
+1. In the workbench, open **Plugins**: the Browser Search card shows an **Install the extension** box
+   with buttons that open `chrome://extensions` in your Chrome, open the `extension/` folder, and
+   copy its path. Turn on Developer mode → Load unpacked → pick that folder (or drag it onto the
+   page). The card turns green a few seconds after the extension connects. The manual version,
+   plus verify, update and remove, is in **[`extension/README.md`](extension/README.md)**.
+2. Turn on **Browser Search** on the same card and pick one engine. The **Browser** dot in the top
+   bar is green while the extension is connected.
 
-No `.env` change is required. Two optional variables:
+No `.env` change is required. Three optional variables:
 
 ```bash
 BROWSER_SEARCH_TOKEN=change-me          # shared secret; set the same value in the extension popup
 BROWSER_SEARCH_TIMEOUT_MS=25000         # wait for the extension before falling back to HTTP
+BROWSER_SEARCH_BROWSER=google-chrome    # browser the "Open chrome://extensions" button launches
 ```
 
 Without the extension (or with Chrome closed) Browser Search falls back to the HTTP search above

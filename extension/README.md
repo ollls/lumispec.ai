@@ -25,6 +25,18 @@ in the Lumispec Plugins panel — one at a time.
 
 ## Install (Chrome, Brave, Edge, or any Chromium browser)
 
+The quickest route is the **Install the extension** box on the Browser Search card in the
+Lumispec **Plugins** panel (shown whenever no extension is connected): **Open
+chrome://extensions** opens the page in your Chrome, **Open extension folder** opens this
+folder in the file manager so you can drag it onto that page, **Copy path** copies the
+folder path for the Load unpacked dialog. The card turns green by itself once the
+extension connects. Chrome does not allow a web page or the server to install an unpacked
+extension, so the Developer-mode toggle and the folder pick stay with you. Set
+`BROWSER_SEARCH_BROWSER` in `.env` if the button should launch a browser other than the
+first of google-chrome / chromium / brave-browser / microsoft-edge found on PATH.
+
+By hand:
+
 1. Open `chrome://extensions` (Edge: `edge://extensions`).
 2. Turn on **Developer mode** (toggle, top right).
 3. Click **Load unpacked**.
