@@ -104,6 +104,11 @@ Search for hotels, check rates, read reviews, and book rooms. Example: "Find hot
 ### E*TRADE
 If connected, check your portfolio, get stock quotes, view option chains, and analyze positions. Connect via the E*TRADE status indicator in the top bar.
 
+### Obsidian Notes
+Turn on **Obsidian Export** in the Plugins panel and a small vault icon appears on each chat in the sidebar. Click it to save that chat as a note in your Obsidian vault, under a `Lumispec` folder sorted by session colour. The note keeps the whole exchange, with tool calls and (optionally) the AI's reasoning folded away, charts saved as files next to it, and properties you can search in Obsidian.
+
+Saving is manual: nothing is written until you click, and the note never changes on its own. Saving the same chat again replaces the note with the chat as it is now, so keep your own remarks in a separate note that links to the saved one. Unpinning or deleting a chat does not remove its note. If Obsidian is not installed, the card tells you; set `OBSIDIAN_VAULT` in `.env` to save into any folder anyway.
+
 ### Logs
 The app maintains detailed logs of all tool interactions in `./logs/` folder with daily files (e.g., `tools_2026-03-26.log`). These logs include:
 - Web searches and fetched content

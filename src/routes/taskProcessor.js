@@ -638,6 +638,7 @@ CRITICAL RULES:
 
 function buildToolContext(autorun, cite, conv, res) {
   return {
+    conversationId: conv.id,
     autorun,
     cite,
     confirmFn: (command) => {

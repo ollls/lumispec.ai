@@ -46,13 +46,18 @@ export default {
   },
   claude: {
     apiKey: process.env.CLAUDE_API_KEY || '',
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-5-5',
     maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '8192', 10),
   },
   llm: {
     backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
   },
   routeLog: process.env.ROUTE_LOG === '1',
+  obsidian: {
+    // Optional vault path; overrides the vault picked on the Obsidian plugin card and the
+    // registry lookup (for a vault on a share, or a server without Obsidian installed)
+    vault: process.env.OBSIDIAN_VAULT || '',
+  },
   location: process.env.LOCATION || '',
   sourceDir: process.env.SOURCE_DIR || '',
   sourceTest: process.env.SOURCE_TEST || '',

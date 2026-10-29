@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "css:build": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css",
     "css:watch": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css --watch",
-    "build": "npm run css:build"
+    "build": "npm run css:build",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "keywords": [
     "llm",

@@ -432,6 +432,10 @@ export async function loadPlugins() {
 // ── Plugin config API ──────────────────────────────
 export async function listPluginGroups() {
   const cfg = await readPluginConfig();
+  // Optional async hook so a plugin's synchronous cardStatus()/configUi() can see fresh config.
+  for (const { plugin } of Object.values(pluginModules)) {
+    if (typeof plugin.beforeCard === 'function') { try { await plugin.beforeCard(); } catch {} }
+  }
   const entries = Object.entries(pluginModules)
     .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
     .map(([group, { plugin }]) => {
@@ -465,8 +469,8 @@ export async function listPluginGroups() {
         const saved = cfg[group] || {};
         entry.config = { ...defaults, ...saved };
         delete entry.config.enabled; // enabled is already top-level
-        // Optional UI descriptor: { modes?: string[], availableEngines?: [{id,label,available}] }
-        if (typeof plugin.configUi === 'function') Object.assign(entry.config, plugin.configUi());
+        // Optional UI descriptor: { modes?, availableEngines?, fields?: [{key,label,type:'select'|'text'|'boolean',…}] }
+        if (typeof plugin.configUi === 'function') { try { Object.assign(entry.config, plugin.configUi()); } catch {} }
       }
       // Optional live status line for the card: { ok: boolean, text: string }
       if (typeof plugin.cardStatus === 'function') {
@@ -558,6 +562,17 @@ export async function updatePluginConfig(groupName, updates) {
   if (updates.enabled !== undefined) current.enabled = updates.enabled;
   if (updates.mode !== undefined) current.mode = updates.mode;
   if (updates.engines !== undefined) current.engines = updates.engines;
+  // Generic fields: only keys the plugin declares in `defaults` (besides enabled/mode/engines),
+  // coerced to the declared type so a text field cannot overwrite a boolean.
+  if (updates.config && typeof updates.config === 'object') {
+    for (const [k, v] of Object.entries(updates.config)) {
+      if (['enabled', 'mode', 'engines'].includes(k) || !(k in defaults)) continue;
+      const want = typeof defaults[k];
+      if (want === 'boolean') current[k] = !!v;
+      else if (want === 'number') { const n = Number(v); if (Number.isFinite(n)) current[k] = n; }
+      else if (want === 'string') current[k] = String(v);
+    }
+  }
 
   // Supersession, step 1: enabling this plugin unloads the groups it replaces BEFORE it
   // registers, since it typically reuses their tool names. Their cfg entries are not touched.
@@ -611,6 +626,12 @@ export async function updatePluginConfig(groupName, updates) {
   if (superseded.length > 0) result.superseded = superseded;
   if (restored.length > 0) result.restored = restored;
   return result;
+}
+
+/** Saved config for one group merged over its defaults (enabled reflects the saved/default state). */
+export async function getPluginConfig(groupName) {
+  const cfg = await readPluginConfig();
+  return { ...getPluginDefaults(groupName), ...(cfg[groupName] || {}) };
 }
 
 // Backward compat wrapper

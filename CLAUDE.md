@@ -70,6 +70,7 @@ src/
     plugin-travel.js       # hotel, travel, booking + rate map cache, guest profile persistence
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
     plugin-browser.js      # web_search/web_fetch via the Chrome extension bridge; owns the engine table (URLs + linkedom parsers); supersedes 'web'
+    plugin-obsidian.js     # Obsidian export card + obsidian_export tool; manual Save to Obsidian only (off by default)
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     tasks.js               # Task pipeline CRUD + reorder
@@ -87,6 +88,7 @@ src/
     tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
     slots.js               # Slot monitor (polling, assignment, pin/unpin, per-slot n_ctx lookup)
     browserBridge.js       # WebSocket endpoint /ws/browser for the Chrome extension (search/fetch requests, heartbeat, token)
+    obsidian.js            # Obsidian export: vault registry lookup, pure renderNote(), atomic exportConversation()
     prompts.js             # Prompt library persistence (data/prompts.json)
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
@@ -102,6 +104,7 @@ data/                      # Runtime data dir: saved files, prompts.json, sessio
   plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
+test/                      # node --test suites (npm test); obsidian.test.js covers the exporter
 ```
 
 ## API Routes
@@ -116,6 +119,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id/pin` | POST | Pin conversation (persist to disk) |
 | `/api/conversations/:id/unpin` | POST | Unpin conversation (remove from disk) |
 | `/api/conversations/:id/compact` | POST | LLM summarizes conversation, replaces messages with summary |
+| `/api/conversations/:id/obsidian` | POST | Save conversation to the Obsidian vault (manual, pinned or not); body `{ color? }`; 400 plugin off, 409 no vault |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
 | `/api/conversations/:id/refine` | POST | LLM-powered prompt refinement from reasoning trace |
 | `/api/conversations/:id/decompose` | POST | Taskmaster: LLM decomposes prompt into task list |
@@ -154,6 +158,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ## Commands
 - `npm run dev` — start dev server with --watch
 - `npm start` — start production server
+- `npm test` — run `node --test` suites under `test/` (no server, no llama needed)
 - `npm run css:build` — build Tailwind CSS
 - `npm run css:watch` — watch & rebuild Tailwind CSS
 
@@ -179,6 +184,7 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `BROWSER_SEARCH_TOKEN` — optional shared secret the Browser Search Chrome extension must send as `?token=` on `/ws/browser`
 - `BROWSER_SEARCH_TIMEOUT_MS` — how long `web_search`/`web_fetch` wait for the extension before falling back (default: 25000)
 - `BROWSER_SEARCH_BROWSER` — optional executable the Browser Search card's "Open chrome://extensions" button launches (default: first of google-chrome, chromium, brave-browser, microsoft-edge on PATH)
+- `OBSIDIAN_VAULT` — optional vault path for Obsidian export; overrides the card's vault pick and the registry lookup (vault on a share, or a machine without Obsidian)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -199,6 +205,8 @@ Tools are organized as per-group plugins in `src/tools/plugin-*.js`. Each plugin
 
 **`defaults.enabled`**: with no entry in `plugins.json`, a plugin with `defaults: { enabled: false }` stays off until the user turns it on. Plugins without `defaults` are on by default (backward compatible).
 
+**Generic card fields**: besides `modes`/`availableEngines`, `configUi()` may return `fields: [{ key, label, type: 'select'|'text'|'boolean', options?: [{value,label}], placeholder?, note?, disabled? }]`. The panel renders them under the slider; each change POSTs `/api/plugins/:group/toggle` with `{ config: { [key]: value } }`. `updatePluginConfig()` accepts only keys declared in the plugin's `defaults` (never `enabled`/`mode`/`engines`) and coerces each to the declared type. `getPluginConfig(group)` returns saved config merged over defaults. `obsidian` is the first consumer (vault select, folder text, two booleans).
+
 Load-time validation runs DFS three-coloring to detect circular dependencies and warns on missing deps. Always-on groups can be listed as deps but are no-ops. The `wiki` plugin is currently the only consumer (`dependencies: ['source']`) — `source_read` is required for the wiki retrieval pattern.
 
 #### Plugin Interface
@@ -214,6 +222,7 @@ export default {
   cardStatus: () => ({ ok: true, text: '…' }),    // optional: live status line on the Plugins card (green when ok, amber otherwise)
   cardActions: () => null | { title, steps: ['…'], path?, buttons: [{ id, label, title?, copy? }] }, // optional: helper box under the status line; a button with `copy` copies that text client-side, any other POSTs /api/plugins/:group/action/:id
   cardAction: async (id) => ({ ok, message }),    // optional: runs a cardActions button server-side; works while the plugin is disabled
+  beforeCard: async () => {},                     // optional: awaited by listPluginGroups() before cardStatus/configUi so sync hooks can see fresh config
   enableWarning: () => null | 'string',           // optional: warning toast shown right after the user enables the plugin
   defaults: { enabled: false },                   // optional: per-plugin config defaults; enabled:false = off until the user turns it on
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
@@ -270,6 +279,7 @@ export default {
 | `finance` | plugin-etrade.js | `etrade_account` | `etrade.isAuthenticated()` | — |
 | `wiki` | plugin-wiki.js | `wiki_scan`, `wiki_index` | `config.sourceDir` set | `source` |
 | `browser` | plugin-browser.js | `web_search`, `web_fetch` (via Chrome extension) | off by default; supersedes `web` | — |
+| `obsidian` | plugin-obsidian.js | `obsidian_export` | off by default | — |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
 
@@ -604,6 +614,33 @@ Full-width top bar spanning entire window width with: colored session `+` button
 
 ### Conversation Pinning
 Pin button (📌) in sidebar persists conversations to disk across server restarts. Compact button (≡) on pinned conversations sends the full conversation to the LLM for summarization — messages are irreversibly replaced with a structured summary preserving outcomes, decisions, and lessons learned. Two-click confirmation (click → "Compact?" → click again). Especially useful for long coding sessions with many tool rounds. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
+
+### Obsidian Export
+`plugin-obsidian.js` + `services/obsidian.js`, design in `docs/OBSIDIAN.md`. **Manual, one-way**: the
+sidebar **Save to Obsidian** button writes the conversation as a Markdown note into an Obsidian vault.
+Nothing syncs by itself (pinning, messages, compacts never touch the vault), nothing in the note links
+back to the app, and the exporter never deletes from the vault (a title or colour change since the
+last save **renames** the note, matched by the `-<id8>.md` suffix). Off by default.
+
+- **Vault**: `OBSIDIAN_VAULT` → vault picked on the card → Obsidian registry (`~/.config/obsidian/obsidian.json`,
+  Flatpak and Snap paths too; `open` vault first, then most recent). `resolveVault()` returns `null` when none
+  exists and every path short-circuits: the hook no-ops (one warning per process), the route returns 409,
+  the tool returns an error. Obsidian itself is never required — with `OBSIDIAN_VAULT` any folder works.
+- **Trigger**: sidebar "Save to Obsidian" button (visible while the plugin is on) → `POST /:id/obsidian`
+  with `{ color }`; or the `obsidian_export` tool when the user asks. The store has no hook and no
+  Obsidian import.
+- **Session colour and hidden prompts**: the export request carries `color` and the store keeps it as
+  `conv.session` (it was browser-only state); session-init user messages are stored with `hidden: true`.
+  The exporter uses them for the colour subfolder, the `lumispec/<colour>` tag and skipping the init prompt.
+- **Note shape**: `<Folder>/<colour>/<slug>-<id8>.md`, YAML properties (title, id, created/updated,
+  session, pinned, model, messages, tokens, tools_used, tags), `## 🧑/🤖 <local time>` per turn,
+  reasoning and tool results as folded callouts (results trimmed to 1,500 chars; `_markdown` used when
+  present; `_autoSaved` files linked), pipeline runs as `### Step n` / `#### Subtask n.m`, applets cut
+  out into `<base>-applet-<n>.html` sidecars, user images and `/files/<name>` data files copied into the
+  vault's attachment folder (`.obsidian/app.json` → `attachmentFolderPath`, default `<Folder>/attachments/`)
+  with links rewritten to `[[name]]`. Writes are atomic (`.tmp` + rename) and path-guarded to the vault.
+- `renderNote()` is pure and snapshot-tested in `test/obsidian.test.js` (`npm test`).
+- Tool execution `context` now carries `conversationId` in both loops (documented before, never set).
 
 ## Key Architecture Details
 - `.env` file is **required** — config.js exits if missing

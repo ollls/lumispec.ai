@@ -58,6 +58,23 @@ router.post('/:id/unpin', (req, res) => {
   res.json(conv);
 });
 
+// Export conversation to the Obsidian vault now (pinned or not). Body: { color? }.
+router.post('/:id/obsidian', async (req, res) => {
+  const conv = conversations.get(req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+  if (!isToolGroupEnabled('obsidian')) return res.status(400).json({ error: 'Obsidian Export plugin is disabled' });
+  if (req.body?.color) conversations.setSession(conv.id, req.body.color);
+  try {
+    const { exportNow } = await import('../tools/plugin-obsidian.js');
+    const result = await exportNow(conv);
+    res.json({ ok: true, path: result.path, moved: result.moved || null, attachments: result.attachments.length });
+  } catch (err) {
+    if (err.message === 'no vault configured') return res.status(409).json({ error: 'no vault configured — set OBSIDIAN_VAULT or pick a vault on the Obsidian plugin card' });
+    console.error('[obsidian] export failed:', err.message);
+    res.status(500).json({ error: 'Export failed: ' + err.message });
+  }
+});
+
 // Compact conversation — LLM summarizes, replaces messages
 router.post('/:id/compact', async (req, res) => {
   const conv = conversations.get(req.params.id);
@@ -136,7 +153,7 @@ router.post('/:id/messages', async (req, res) => {
   const storedContent = images && images.length > 0
     ? { text: displayContent, images }
     : displayContent;
-  const userMsg = conversations.addMessage(conv.id, 'user', storedContent);
+  const userMsg = conversations.addMessage(conv.id, 'user', storedContent, { hidden: sessionInit });
 
   // Expand [template: name] tags — inject saved applet HTML as context for the LLM
   const templateRe = /\[template:\s*([^\]]+)\]/gi;
@@ -435,6 +452,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           if (allowedCalls.length > 0) {
             console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
             const context = {
+          conversationId: conv.id,
               autorun,
               cite,
               confirmFn: (command) => {
@@ -477,6 +495,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
         const roundStart = Date.now();
         const context = {
+          conversationId: conv.id,
           autorun,
           cite,
           confirmFn: (command) => {
@@ -645,6 +664,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       if (lastChanceCalls.length > 0) {
         console.warn(`[tool-loop] forced answer still contains tool call(s): ${lastChanceCalls.map(c => c.name).join(', ')}, executing last chance`);
         const context = {
+          conversationId: conv.id,
           autorun,
           cite,
           confirmFn: (command) => {
@@ -684,6 +704,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       if (safetyCalls.length > 0) {
         console.warn(`[safety-net] finalContent contains unparsed tool call(s): ${safetyCalls.map(c => c.name).join(', ')} — executing`);
         const context = {
+          conversationId: conv.id,
           autorun,
           cite,
           confirmFn: (command) => {

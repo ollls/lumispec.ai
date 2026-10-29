@@ -1,12 +1,30 @@
 # Obsidian export — plan
 
-**Status:** planned, not started. Written 2026-10-25.
+**Status:** stages 1–2 implemented 2026-10-29 (`src/services/obsidian.js`, `src/tools/plugin-obsidian.js`,
+`test/obsidian.test.js`); stage 3 open. Written 2026-10-25.
+
+Deviations from the plan as written, discovered during implementation:
+- Session colour and the hidden session-init flag were **browser-only** state. The export request
+  now carries `color` and the store keeps it as `conv.session`; session-init user messages are
+  stored with `hidden: true`. Conversations started before this change keep showing their init
+  prompt in the note.
+- The panel got a generic `configUi().fields` renderer (select / text / boolean) and
+  `POST /api/plugins/:group/toggle` accepts `{ config: {…} }`, limited to keys declared in `defaults`.
+- The plugin ships one tool, `obsidian_export`, from the start (the loader accepts `tools: {}`,
+  but the tool is useful). Tool `context` now carries `conversationId` in both loops — CLAUDE.md
+  documented it, the routes never set it.
+- A **title** change renames the note too (any `*-<id8>.md` under the folder tree is moved), not
+  only a colour change. Nothing is deleted.
+- **No auto-export** (Decision 5): the `savePinned()` hook, its debounce and the auto-export
+  toggle were built, then removed. Save is a deliberate click.
+- No deep link: the footer carries no URL (Decision 4, 2026-10-29).
 
 ## Goal
 
-Lumispec conversations appear as notes in an Obsidian vault, in a folder of their own, kept
-current while a conversation is pinned, with the conversation's metadata as Obsidian properties
-and the tool work folded away in callouts. No plugin on the Obsidian side; Obsidian watches its
+Lumispec conversations can be saved as notes in an Obsidian vault, in a folder of their own, with
+the conversation's metadata as Obsidian properties and the tool work folded away in callouts.
+Saving is **manual**: the sidebar **Save to Obsidian** button writes the note; nothing syncs by
+itself (Decision 5). No plugin on the Obsidian side; Obsidian watches its
 vault folder and picks the files up on its own.
 
 This is a **one-way translation**, not a sync and not a copy. Lumispec's own store (in-memory
@@ -34,7 +52,6 @@ resolved vault path or "no vault found"), persisted in `data/plugins.json` under
 |---|---|---|
 | Vault | dropdown of registry paths on the card; `.env` `OBSIDIAN_VAULT=<path>` overrides (vault on a share, or a server without Obsidian) | the registry's `open` vault, else the most recently used |
 | Folder inside the vault | text field | `Lumispec` |
-| Auto-export pinned conversations | toggle | on |
 | Include tool results | toggle | on (folded) |
 | Include reasoning | toggle | off — thinking is long and rarely worth keeping |
 
@@ -99,8 +116,7 @@ already stripped before storage). Rendering rules:
 - **Images** the user attached → copied to attachments, embedded `![[file]]`.
 - **Files saved by tools** (CSV etc. under `SOURCE_DIR`, referenced as `/files/<name>` in the
   text) → copied to attachments, links rewritten to `[[<name>]]`.
-- Footer: `---` then `Exported from Lumispec · <updated> · [open](http://localhost:3000/#<id>)`
-  (the app has no deep-link route today — **small frontend addition**, or drop the link).
+- Footer: `---` then `Exported from Lumispec · <updated>`. **No link back into the app** (Decision 4).
 
 ### Compact summaries
 
@@ -121,18 +137,37 @@ the detail in Obsidian even though it does in Lumispec.
 
 ## Triggers
 
-- **Pin** → export; every subsequent change to a pinned conversation (new message, title edit,
-  compact, token count) → regenerate. Hook: `savePinned()` in `services/conversations.js` is the
-  single choke point for "pinned conversation changed" — call the exporter from there
-  (debounced ~1 s, since a tool-heavy turn saves many times).
-- **Unpin** → leave the note in place (Decision 2); write `pinned: false` in frontmatter on the
-  next explicit export only.
 - **Save to Obsidian** button in the sidebar row (next to pin/compact) → export this conversation
-  now, pinned or not. `POST /api/conversations/:id/obsidian`.
-- **Delete conversation** → leave the note (same reasoning as unpin). Optional "also delete note"
-  confirmation later.
+  now, pinned or not. `POST /api/conversations/:id/obsidian` with `{ color }` (the session colour
+  is browser state; the store keeps it as `conv.session` from then on). The `obsidian_export` tool
+  does the same when the user asks the model to.
+- **Nothing else writes.** Pinning, new messages, title edits and compacts do not touch the vault
+  (Decision 5). Saving again overwrites the note with the current state of the conversation; a
+  title or colour change since the last save renames the note (matched on the `-<id8>.md` suffix).
+- **Unpin / delete** → leave the note in place (Decision 2). The exporter never deletes.
 - Export is **idempotent**: same conversation → same path → file overwritten atomically
   (write `.tmp`, rename), so Obsidian never reads a half-written note.
+
+## No vault resolved (Obsidian not installed, or registry empty)
+
+Nothing breaks; the feature is inert until a folder is configured.
+
+- **Discovery.** `findVaults()` finds none of the three registry files → empty vault dropdown,
+  `cardStatus()` shows "no vault found" (amber). The card still appears in the Plugins panel.
+- **Enabling.** The plugin can be turned on; `enableWarning` raises the toast
+  "no vault found — set OBSIDIAN_VAULT". Nothing is written anywhere.
+- **Override.** `OBSIDIAN_VAULT=<path>` in `.env` points the exporter at any folder. Obsidian is
+  not required to produce the files: the exporter writes plain Markdown and copies attachments.
+  With no `.obsidian/app.json` present, attachments go to `<Folder>/attachments/`. Installing
+  Obsidian later and opening that folder as a vault picks everything up.
+- **Triggers with no vault.** `resolveVault(cfg)` returns `null` and every export path short-
+  circuits on it:
+  - **Save to Obsidian** / `POST /:id/obsidian` returns `409 { error: "no vault configured" }`
+    and the frontend shows it as an error toast;
+  - the optional `obsidian_export` tool returns `{ error: "no vault configured — set
+    OBSIDIAN_VAULT or pick a vault on the Obsidian plugin card" }` so the LLM can relay it.
+- Once a vault appears (Obsidian installed and a vault opened, or the override set and the
+  server restarted), **Save to Obsidian** works normally.
 
 ## Implementation
 
@@ -143,8 +178,8 @@ the detail in Obsidian even though it does in Lumispec.
   vault and `text`/`boolean` fields — the panel renderer needs those two control types added,
   generic), `cardStatus`, `enableWarning` ("no vault found — set OBSIDIAN_VAULT"), optional
   `obsidian_export` tool.
-- `src/services/conversations.js` — `savePinned()` calls a registered `onPinnedChange` hook
-  (keeps the store free of an Obsidian import).
+- `src/services/conversations.js` — `setSession()` (colour from the export request) and the
+  `hidden` flag on session-init messages. No hook: the store knows nothing about Obsidian.
 - `src/routes/conversations.js` — `POST /:id/obsidian`.
 - `src/public/js/app.js` — sidebar button + toast with the written path; card controls.
 - `src/config.js` — `obsidian.vault` from `OBSIDIAN_VAULT`.
@@ -171,9 +206,8 @@ It never deletes files. `.obsidian/` is read, never written.
 
 1. `renderNote()` + unit fixtures; `findVaults()`; the plugin card with vault/folder/toggles and a
    working **Save to Obsidian** button. Manual export only. Useful on its own.
-2. Auto-export on pinned change via the `savePinned` hook, debounced.
-3. Applet sidecars, attachment copying, vault attachment-folder setting.
-4. Transcript-preserving compact; `wiki/` export; deep link back into the app.
+2. Applet sidecars, attachment copying, vault attachment-folder setting.
+3. Transcript-preserving compact; `wiki/` export.
 
 ## Decisions (2026-10-25)
 
@@ -187,5 +221,21 @@ It never deletes files. `.obsidian/` is read, never written.
 3. **Reasoning export off by default**, with the toggle on the card. Flipping it on and
    re-exporting adds the trace retroactively, since every export regenerates the note from the
    stored conversation.
+4. **No backward connection from Obsidian to Lumispec** (2026-10-29). The note carries no URL,
+   id-based link or anything else that opens the app; the only identifier is the `lumispec_id`
+   property, kept for de-duplication and Dataview. The vault is a one-way destination: Lumispec
+   writes, nothing in the vault points back.
 
-All decisions are made; the plan is ready to implement in the rollout order above.
+5. **Manual export only** (2026-10-29). Pinning does not sync to Obsidian; the only ways a note
+   gets written are the sidebar **Save to Obsidian** button and the `obsidian_export` tool. The
+   pinned-change hook was removed. A saved note reflects the conversation at the moment of the
+   click; save again to refresh it.
+
+All decisions are made. Stages 1–2 are in; see the status block at the top for what diverged.
+
+## Remaining (stage 3)
+
+- Transcript-preserving compact (`…-transcript.md` beside the summary note).
+- `wiki/` export with `source: file:<path>` rewritten to wikilinks.
+- Optional "also remove the note" checkbox on the delete confirmation.
+- Chart.js applets stay unrendered in Obsidian (no rasteriser) — accepted.

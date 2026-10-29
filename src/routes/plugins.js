@@ -11,9 +11,21 @@ router.get('/', async (_req, res) => {
 
 // Toggle a plugin group on/off and/or update its config
 router.post('/:group/toggle', async (req, res) => {
-  const { enabled, mode, engines } = req.body;
-  if (enabled === undefined && mode === undefined && engines === undefined) {
-    return res.status(400).json({ error: 'At least one of enabled, mode, or engines required' });
+  const { enabled, mode, engines, config: fields } = req.body;
+  if (enabled === undefined && mode === undefined && engines === undefined && fields === undefined) {
+    return res.status(400).json({ error: 'At least one of enabled, mode, engines, or config required' });
+  }
+  // Generic per-plugin fields (declared by the plugin's `defaults`): only scalars, only keys the
+  // plugin declares — updatePluginConfig drops the rest.
+  if (fields !== undefined) {
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+      return res.status(400).json({ error: 'config must be an object' });
+    }
+    for (const [k, v] of Object.entries(fields)) {
+      if (!/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/.test(k)) return res.status(400).json({ error: `Bad config key: ${k}` });
+      if (!['string', 'number', 'boolean'].includes(typeof v)) return res.status(400).json({ error: `config.${k} must be a string, number or boolean` });
+      if (typeof v === 'string' && v.length > 1024) return res.status(400).json({ error: `config.${k} too long` });
+    }
   }
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be boolean' });
@@ -33,6 +45,7 @@ router.post('/:group/toggle', async (req, res) => {
   if (enabled !== undefined) updates.enabled = enabled;
   if (mode !== undefined) updates.mode = mode;
   if (engines !== undefined) updates.engines = engines;
+  if (fields !== undefined) updates.config = fields;
   const result = await updatePluginConfig(req.params.group, updates);
   if (result.error) return res.status(400).json(result);
   res.json(result);
