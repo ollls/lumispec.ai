@@ -134,6 +134,31 @@ the detail in Obsidian even though it does in Lumispec.
 - Export is **idempotent**: same conversation → same path → file overwritten atomically
   (write `.tmp`, rename), so Obsidian never reads a half-written note.
 
+## No vault resolved (Obsidian not installed, or registry empty)
+
+Nothing breaks; the feature is inert until a folder is configured.
+
+- **Discovery.** `findVaults()` finds none of the three registry files → empty vault dropdown,
+  `cardStatus()` shows "no vault found" (amber). The card still appears in the Plugins panel.
+- **Enabling.** The plugin can be turned on; `enableWarning` raises the toast
+  "no vault found — set OBSIDIAN_VAULT". Nothing is written anywhere.
+- **Override.** `OBSIDIAN_VAULT=<path>` in `.env` points the exporter at any folder. Obsidian is
+  not required to produce the files: the exporter writes plain Markdown and copies attachments.
+  With no `.obsidian/app.json` present, attachments go to `<Folder>/attachments/`. Installing
+  Obsidian later and opening that folder as a vault picks everything up.
+- **Triggers with no vault.** `resolveVault(cfg)` returns `null` and every export path short-
+  circuits on it:
+  - the `savePinned()` hook (auto-export) **no-ops silently** — it must never throw into the
+    conversation store, and must not log on every save (one `console.warn` on the first skip
+    per process is enough);
+  - **Save to Obsidian** / `POST /:id/obsidian` returns `409 { error: "no vault configured" }`
+    and the frontend shows it as an error toast;
+  - the optional `obsidian_export` tool returns `{ error: "no vault configured — set
+    OBSIDIAN_VAULT or pick a vault on the Obsidian plugin card" }` so the LLM can relay it.
+- Once a vault appears (Obsidian installed and a vault opened, or the override set and the
+  server restarted), the next trigger exports normally; pinned conversations are not back-filled
+  automatically — click **Save to Obsidian** on each, or re-pin.
+
 ## Implementation
 
 - `src/services/obsidian.js` — `findVaults()` (read the registries), `resolveVault(cfg)`,
