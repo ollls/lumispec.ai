@@ -51,6 +51,7 @@ function create(title) {
     slotId: null,
     tokenCount: 0,
     pinned: false,
+    session: null, // session colour ('blue', 'amber', …); set by the Obsidian export request
     createdAt: now,
     updatedAt: now,
   };
@@ -61,8 +62,8 @@ function create(title) {
 function list() {
   return [...store.values()]
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt.localeCompare(a.updatedAt))
-    .map(({ id, title, slotId, tokenCount, pinned, messages, createdAt, updatedAt }) => ({
-      id, title, slotId, tokenCount, pinned, messageCount: messages.length, createdAt, updatedAt,
+    .map(({ id, title, slotId, tokenCount, pinned, session, messages, createdAt, updatedAt }) => ({
+      id, title, slotId, tokenCount, pinned, session: session || null, messageCount: messages.length, createdAt, updatedAt,
     }));
 }
 
@@ -84,12 +85,14 @@ function updateTitle(id, title) {
   return conv;
 }
 
-function addMessage(id, role, content) {
+function addMessage(id, role, content, { hidden = false } = {}) {
   const conv = store.get(id);
   if (!conv) return null;
   // sentAt lets the LLM history rebuild re-derive the same [Now: ...] stamp for a user message on
   // every later turn, so the prompt prefix stays byte-identical for KV cache reuse.
+  // hidden marks the auto-submitted session-init prompt, which the UI does not show as a bubble.
   const msg = { role, content, sentAt: new Date().toISOString() };
+  if (hidden) msg.hidden = true;
   conv.messages.push(msg);
   conv.updatedAt = new Date().toISOString();
   if (conv.pinned) savePinned(id);
@@ -117,6 +120,18 @@ function setTokenCount(id, count) {
   conv.tokenCount = count;
   conv.updatedAt = new Date().toISOString();
   if (conv.pinned) savePinned(id);
+  return conv;
+}
+
+// Session colour lives in the browser (localStorage); the frontend reports it with an Obsidian
+// export request so the note can be grouped by it. Only set when a colour is actually supplied.
+function setSession(id, session) {
+  const conv = store.get(id);
+  if (!conv) return null;
+  if (session && typeof session === 'string' && /^[a-z]{1,16}$/.test(session) && conv.session !== session) {
+    conv.session = session;
+    if (conv.pinned) savePinned(id);
+  }
   return conv;
 }
 
@@ -158,6 +173,6 @@ function truncateMessages(id, fromIndex) {
 
 export default {
   create, list, get, remove, updateTitle,
-  addMessage, updateMessageContent, setSlot, setTokenCount,
+  addMessage, updateMessageContent, setSlot, setTokenCount, setSession,
   pin, unpin, compact, truncateMessages,
 };

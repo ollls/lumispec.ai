@@ -20,6 +20,7 @@ const state = {
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
   sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
   sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
+  obsidianEnabled: false, // Obsidian Export plugin on → sidebar rows get a "Save to Obsidian" button
 };
 
 // Session colors in top-bar button order — drives the sidebar filter strip
@@ -92,6 +93,24 @@ function flashMsg(text) {
   el.style.opacity = '1';
   clearTimeout(el._timer);
   el._timer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+// Small bottom-right toast for actions outside the Plugins panel (e.g. Save to Obsidian)
+function showToast(message, isError = false, ms = 5000) {
+  let el = document.getElementById('app-toast');
+  if (el) el.remove();
+  el = document.createElement('div');
+  el.id = 'app-toast';
+  el.textContent = message;
+  Object.assign(el.style, {
+    position: 'fixed', right: '16px', bottom: '16px', zIndex: '60', maxWidth: '420px',
+    padding: '10px 14px', borderRadius: '8px', fontSize: '13px', lineHeight: '1.4',
+    background: isError ? '#7f1d1d' : '#1e3a5f', color: isError ? '#fecaca' : '#bfdbfe',
+    border: `1px solid ${isError ? '#991b1b' : '#3b5e8f'}`, boxShadow: '0 4px 16px rgba(0,0,0,.4)',
+    wordBreak: 'break-all',
+  });
+  document.body.appendChild(el);
+  setTimeout(() => { if (el.parentElement) el.remove(); }, ms);
 }
 
 function requireSession() {
@@ -331,6 +350,17 @@ const api = {
     const res = await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
     return res.json();
   },
+  async exportObsidian(id) {
+    // The session colour is browser state; it rides along so the note lands in the colour subfolder
+    const color = state.sessionColors[id] || null;
+    const res = await fetch(`/api/conversations/${id}/obsidian`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, ...data };
+  },
   async unpinConversation(id) {
     const res = await fetch(`/api/conversations/${id}/unpin`, { method: 'POST' });
     return res.json();
@@ -555,8 +585,31 @@ function renderSidebar() {
       });
     }
 
+    // Save to Obsidian — only while the Obsidian Export plugin is on. Manual only: nothing syncs by itself
+    let obsBtn = null;
+    if (state.obsidianEnabled && (conv.messageCount || 0) > 0) {
+      obsBtn = document.createElement('button');
+      obsBtn.className = 'text-zinc-600 hover:text-violet-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
+      obsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 3v18M5 7l7 4 7-4"/></svg>';
+      obsBtn.title = 'Save to Obsidian';
+      obsBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        obsBtn.disabled = true;
+        obsBtn.style.opacity = '0.5';
+        try {
+          const r = await api.exportObsidian(conv.id);
+          if (r.ok) showToast(`Saved to Obsidian: ${r.path}${r.moved ? ' (moved)' : ''}`);
+          else showToast(r.error || 'Obsidian export failed', true);
+        } finally {
+          obsBtn.disabled = false;
+          obsBtn.style.opacity = '';
+        }
+      });
+    }
+
     item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
+    if (obsBtn) item.appendChild(obsBtn);
     if (compactBtn) item.appendChild(compactBtn);
     item.appendChild(pinBtn);
     item.appendChild(delBtn);
@@ -3378,8 +3431,86 @@ async function pollPluginCards() {
   } catch {}
 }
 
+function syncObsidianFlag(plugins) {
+  const on = plugins.some(pl => pl.group === 'obsidian' && pl.enabled);
+  if (on !== state.obsidianEnabled) {
+    state.obsidianEnabled = on;
+    renderSidebar();
+  }
+}
+
+// Generic per-plugin fields declared by configUi() → { fields: [{ key, label, type, options?, placeholder?, note?, disabled? }] }.
+// type: 'select' | 'text' | 'boolean'. Each change POSTs { config: { [key]: value } }.
+function renderPluginFields(p, container) {
+  for (const f of p.config.fields) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-3';
+    row.style.marginTop = '8px';
+    const lbl = document.createElement('span');
+    Object.assign(lbl.style, { fontSize: '12px', color: '#a1a1aa', minWidth: '120px' });
+    lbl.textContent = f.label || f.key;
+    row.appendChild(lbl);
+    const save = async (value) => {
+      const res = await fetch(`/api/plugins/${p.group}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: { [f.key]: value } }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok && result.error) showPluginToast(result.error, true);
+      refreshPluginConfig();
+    };
+    const current = p.config[f.key];
+    const ctlStyle = {
+      fontSize: '12px', padding: '3px 8px', borderRadius: '6px',
+      background: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', outline: 'none',
+    };
+    if (f.type === 'select') {
+      const sel = document.createElement('select');
+      Object.assign(sel.style, { ...ctlStyle, cursor: 'pointer', maxWidth: '420px' });
+      for (const o of f.options || []) {
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.label ?? o.value;
+        if (String(o.value) === String(current ?? '')) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.disabled = !!f.disabled;
+      sel.addEventListener('change', () => save(sel.value));
+      row.appendChild(sel);
+    } else if (f.type === 'boolean') {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!current;
+      Object.assign(cb.style, { accentColor: '#6366f1', cursor: 'pointer' });
+      cb.disabled = !!f.disabled;
+      cb.addEventListener('change', () => save(cb.checked));
+      row.appendChild(cb);
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = current ?? '';
+      inp.placeholder = f.placeholder || '';
+      Object.assign(inp.style, { ...ctlStyle, width: '260px' });
+      inp.disabled = !!f.disabled;
+      const commit = () => { if (inp.value !== String(current ?? '')) save(inp.value.trim()); };
+      inp.addEventListener('change', commit);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+      row.appendChild(inp);
+    }
+    if (f.note) {
+      const note = document.createElement('span');
+      Object.assign(note.style, { fontSize: '11px', color: '#71717a' });
+      note.textContent = f.note;
+      row.appendChild(note);
+    }
+    container.appendChild(row);
+  }
+}
+
 function renderPluginConfig(plugins) {
   pluginLiveKey = pluginLiveSnapshot(plugins);
+  syncObsidianFlag(plugins);
   pluginConfigList.innerHTML = '';
   if (plugins.length === 0) {
     const empty = document.createElement('div');
@@ -3556,9 +3687,13 @@ function renderPluginConfig(plugins) {
     // plugin's configUi() descriptor (web: both; browser: engines only).
     const hasModes = Array.isArray(p.config?.modes) && p.config.modes.length > 0;
     const hasEngines = Array.isArray(p.config?.availableEngines) && p.config.availableEngines.length > 0;
-    if (p.config && p.enabled && (hasModes || hasEngines)) {
+    const hasFields = Array.isArray(p.config?.fields) && p.config.fields.length > 0;
+    if (p.config && p.enabled && (hasModes || hasEngines || hasFields)) {
       const configSection = document.createElement('div');
       Object.assign(configSection.style, { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #3f3f46' });
+
+      // Generic fields (select / text / boolean) declared by the plugin
+      if (hasFields) renderPluginFields(p, configSection);
 
       // Mode dropdown
       if (hasModes) {
@@ -4380,6 +4515,7 @@ saveCompactBtn.addEventListener('click', async () => {
   pollInternet();
   setInterval(pollInternet, 30000);
   initPluginStatuses();
+  fetch('/api/plugins').then(r => r.json()).then(syncObsidianFlag).catch(() => {});
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();

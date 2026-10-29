@@ -8,6 +8,12 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## ✨ v1.4.1 — Obsidian export
+
+- 📓 **Save to Obsidian** *(new)* — turn on the **Obsidian Export** plugin and every conversation in the sidebar gets a vault icon. One click writes it into your Obsidian vault as a Markdown note: properties (session colour, model, tools used, token count), one heading per turn, tool calls folded into callouts, reasoning optional, charts and data files copied alongside as attachments. The card finds your vaults through Obsidian's own registry (native, Flatpak, Snap); `OBSIDIAN_VAULT` points it at any folder instead. Manual and one-way: nothing syncs by itself, nothing in the note links back, nothing in the vault is ever deleted. Off by default. See "Add Obsidian export" below and [`releases/1.4.1.md`](releases/1.4.1.md).
+
+Everything else is as in v1.4.0:
+
 ## ✨ v1.4.0 highlights
 
 - 🌐 **Browser Search** *(new)* — `web_search` and `web_fetch` run in a hidden tab of **your own Chrome** via a small extension: real cookies, real TLS fingerprint, so Google, Bing, Brave and bot-walled sites like Reuters answer like they do for a person. One engine at a time, bot walls outwaited, pages read as soon as they are interactive, every fallback to HTTP disclosed and a failed URL not re-fetched for 90 s. Result pages a parser cannot read are saved to `logs/browser-debug/` for selector repair — see "Keeping the search engines current". **Requires installing the extension from [`extension/README.md`](extension/README.md)** (Chrome/Edge/Brave, load unpacked). Off by default.
@@ -28,7 +34,7 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.4.0.md`](releases/1.4.0.md) (latest) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.4.1.md`](releases/1.4.1.md) (latest) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -316,6 +322,27 @@ BROWSER_SEARCH_BROWSER=google-chrome    # browser the "Open chrome://extensions"
 Without the extension (or with Chrome closed) Browser Search falls back to the HTTP search above
 and says so in every result.
 
+### Add Obsidian export (optional)
+
+Turn on **Obsidian Export** in **Plugins** and a **Save to Obsidian** button appears on every
+conversation in the sidebar. One click writes that conversation into your vault as a Markdown note —
+frontmatter properties (session colour, model, tools used, token count), one heading per turn, tool
+calls folded into callouts, charts and data files saved alongside as attachments. The card finds
+your vaults through Obsidian's own registry (native, Flatpak and Snap installs); pick one, choose
+the folder inside it (default `Lumispec`), and decide whether tool results and reasoning go in.
+
+Saving is manual and one-way: nothing syncs by itself, the note never links back to the app, and
+saving again overwrites the note with the conversation as it stands. Unpinning or deleting a
+conversation leaves its note in place.
+
+No Obsidian on this machine? Set the vault explicitly and the exporter writes plain Markdown there:
+
+```bash
+OBSIDIAN_VAULT=/path/to/any/folder
+```
+
+Design notes: [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md).
+
 ### Keeping the search engines current
 
 Browser Search reads real search-result pages, so it depends on each engine's HTML. When an engine
@@ -373,7 +400,9 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/TOOL_MODULARIZATION.md`](docs/TOOL_MODULARIZATION.md) | History of the prompt-modularization refactor |
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
-| [`releases/1.4.0.md`](releases/1.4.0.md) | v1.4.0 release notes (latest) |
+| [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
+| [`releases/1.4.1.md`](releases/1.4.1.md) | v1.4.1 release notes (latest) — Obsidian export |
+| [`releases/1.4.0.md`](releases/1.4.0.md) | v1.4.0 release notes |
 | [`releases/1.3.0.md`](releases/1.3.0.md) | v1.3.0 release notes |
 | [`releases/1.2.0.md`](releases/1.2.0.md) | v1.2.0 release notes |
 | [`releases/1.1.0.md`](releases/1.1.0.md) | v1.1.0 release notes |

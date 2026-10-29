@@ -53,6 +53,11 @@ export default {
     backend: process.env.LLM_BACKEND || 'llama', // 'llama' or 'claude'
   },
   routeLog: process.env.ROUTE_LOG === '1',
+  obsidian: {
+    // Optional vault path; overrides the vault picked on the Obsidian plugin card and the
+    // registry lookup (for a vault on a share, or a server without Obsidian installed)
+    vault: process.env.OBSIDIAN_VAULT || '',
+  },
   location: process.env.LOCATION || '',
   sourceDir: process.env.SOURCE_DIR || '',
   sourceTest: process.env.SOURCE_TEST || '',
