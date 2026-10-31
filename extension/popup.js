@@ -44,6 +44,35 @@ async function runTest() {
   line('Snippet', r.textSnippet || '');
 }
 $('run').onclick = runTest;
+
+// Tab Fetch checks (docs/TAB_FETCH.md): the list the server would get, and a read of the tab
+// the user is looking at — in place, nothing navigated or closed.
+$('listTabs').onclick = async () => {
+  const out = $('out');
+  out.textContent = 'Listing…';
+  const r = await call({ type: 'tabs' });
+  out.textContent = '';
+  if (r.error) { out.textContent = `Error: ${r.error}`; return; }
+  if (!r.tabs.length) { out.textContent = 'No readable web tabs open.'; return; }
+  for (const t of r.tabs) {
+    const d = document.createElement('div'); d.className = 'r';
+    d.innerHTML = `<b>${t.current ? '▶ ' : ''}#${t.id}</b> `;
+    d.appendChild(document.createTextNode(`${t.title || '(untitled)'} — ${t.url}${t.discarded ? ' (suspended)' : ''}`));
+    out.appendChild(d);
+  }
+};
+$('readCurrent').onclick = async () => {
+  const out = $('out');
+  out.textContent = 'Reading the current tab…';
+  const r = await call({ type: 'readCurrent' });
+  out.textContent = '';
+  if (r.error) { out.textContent = `Error: ${r.error}`; return; }
+  const line = (label, value) => { const d = document.createElement('div'); d.className = 'r'; d.innerHTML = `<b>${label}</b> `; d.appendChild(document.createTextNode(value)); out.appendChild(d); };
+  line('Tab', `${r.title} — ${r.url}`);
+  line('Read in', `${r.ms} ms (in place, nothing reloaded)`);
+  line('Text', `${r.textChars} chars on screen (${r.textSource}) · ${r.domChars} in the DOM · HTML ${r.htmlChars} chars (${r.sentChars} sent)`);
+  line('Snippet', r.textSnippet || '');
+};
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTest(); });
 
 refresh();

@@ -3451,14 +3451,25 @@ function syncObsidianFlag(plugins) {
 // card's own group, or to `group` when the field edits another group's entry (the fetch cap lives on
 // `web` and is also shown on the Browser Search card); `value` then supplies the current value.
 function renderPluginFields(p, container) {
+  // One grid per card — label · control, with the note on its own full-width line beneath — so
+  // every checkbox, select and input lines up in the same column however long the labels get
+  // (Browser Search has six fields, the Tab Fetch ones with 40-char labels), and notes read as
+  // one or two lines instead of a squeezed third column. Rows were independent flex lines with a
+  // 120px label slot.
+  const grid = document.createElement('div');
+  Object.assign(grid.style, {
+    display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)',
+    columnGap: '14px', rowGap: '2px', alignItems: 'center', marginTop: '10px', marginBottom: '10px',
+  });
+  container.appendChild(grid);
   for (const f of p.config.fields) {
-    const row = document.createElement('div');
-    row.className = 'flex items-center gap-3';
-    row.style.marginTop = '8px';
     const lbl = document.createElement('span');
-    Object.assign(lbl.style, { fontSize: '12px', color: '#a1a1aa', minWidth: '120px' });
+    Object.assign(lbl.style, { fontSize: '12px', color: '#a1a1aa', maxWidth: '340px' });
     lbl.textContent = f.label || f.key;
-    row.appendChild(lbl);
+    grid.appendChild(lbl);
+    const cell = document.createElement('div');
+    cell.className = 'flex items-center';
+    const row = cell; // controls append here
     const save = async (value) => {
       const res = await fetch(`/api/plugins/${f.group || p.group}/toggle`, {
         method: 'POST',
@@ -3513,13 +3524,11 @@ function renderPluginFields(p, container) {
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
       row.appendChild(inp);
     }
-    if (f.note) {
-      const note = document.createElement('span');
-      Object.assign(note.style, { fontSize: '11px', color: '#71717a' });
-      note.textContent = f.note;
-      row.appendChild(note);
-    }
-    container.appendChild(row);
+    grid.appendChild(cell);
+    const note = document.createElement('div');
+    Object.assign(note.style, { fontSize: '11px', color: '#71717a', lineHeight: '1.35', gridColumn: '1 / -1', marginBottom: '8px' });
+    note.textContent = f.note || '';
+    grid.appendChild(note);
   }
 }
 

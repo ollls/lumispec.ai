@@ -50,3 +50,17 @@ test('detectWall leaves a real page with an embedded CAPTCHA widget alone', () =
   const html = `<html><head><title>Contact us</title></head><body><article>${body}</article><form><iframe src="https://www.google.com/recaptcha/api2/anchor?k=abc" title="reCAPTCHA"></iframe></form></body></html>`;
   assert.equal(detectWall({ html, title: 'Contact us', textChars: 4000 }), null);
 });
+
+// view: "text" — the page as laid out on screen. The extension sends document.body.innerText;
+// renderedText() turns it into one trimmed line per visual row for the model.
+test('renderedText joins table cells, drops blank lines and consecutive repeats, and caps', async () => {
+  const { renderedText } = await import('../src/tools/plugin-web.js');
+  const inner = 'Inbox\n\n\nSmartReversals\tNew thread from SmartReversals - Trading Compass chat\t11:00 AM\nSmartReversals\tNew thread from SmartReversals - Trading Compass chat\t11:00 AM\n  The Aging Edge  \t The Cool Room And The Deep Sleep Connection \t10:07 AM\n';
+  const out = renderedText(inner);
+  assert.equal(out, 'Inbox\nSmartReversals · New thread from SmartReversals - Trading Compass chat · 11:00 AM\nThe Aging Edge · The Cool Room And The Deep Sleep Connection · 10:07 AM');
+  // Empty grid cells (star, importance marker, attachment icon) leave runs of separators behind
+  assert.equal(renderedText('Sender · · · · · Subject here · · - snippet text · · · 11:00 AM'), 'Sender · Subject here · - snippet text · 11:00 AM');
+  assert.equal(renderedText(' · Leading and trailing · '), 'Leading and trailing');
+  const capped = renderedText(Array.from({ length: 100 }, (_, i) => `row ${i} with some words`).join('\n'), 300);
+  assert.ok(capped.length <= 320 && capped.endsWith('[...truncated]'), capped.slice(-60));
+});

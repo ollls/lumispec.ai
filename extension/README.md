@@ -18,7 +18,7 @@ Chrome Web Store and nothing is installed system-wide; removing it is one click.
 |---|---|
 | `manifest.json` | Manifest V3. Permissions: `tabs`, `scripting`, `storage`, `alarms`; host access `<all_urls>` (any page the assistant asks for, including search result pages). |
 | `background.js` | Service worker. Keeps a WebSocket to the server; on a `fetch` request opens the URL in an **inactive** tab, waits for it to render (re-reading while the page is still a bot wall or nearly empty), returns the live DOM HTML plus text length and wall hints, closes the tab. One hidden tab at a time. |
-| `popup.html` / `popup.js` | Toolbar popup: connection state and version, server URL + token, enable toggle, and a **Test** box that loads any URL in a hidden tab and reports title, size, and wall status — works without the server. |
+| `popup.html` / `popup.js` | Toolbar popup: connection state and version, server URL + token, enable toggle, a **Test** box that loads any URL in a hidden tab and reports title, size, and wall status, and **List my tabs** / **Read current tab** for Tab Fetch — all work without the server. |
 
 The search engine (DuckDuckGo, Brave, Bing or Google) is chosen on the Browser Search card
 in the Lumispec Plugins panel — one at a time.
@@ -122,6 +122,10 @@ uninstall on the server side.
 | Tabs stay open | The worker was killed mid-search. Close them by hand; the next search is unaffected. |
 | `web_fetch` falls back with "bot/JS challenge wall" | The site (Reuters, Cloudflare-fronted pages) showed a challenge that did not clear within about 8 s of waiting. Open the site once in a normal tab so the challenge cookie is set, then retry. |
 | `web_fetch` result says "visible text: article extraction found nothing" | Chrome rendered the page but the server's article extractor could not read it (web apps such as Gmail). You get the page's visible text instead of a cookie-less HTTP re-fetch; the page is saved under `logs/browser-debug/` for parser work. |
+| `browser_tabs` or `web_fetch { tab }` says the extension "predates Tab Fetch" | Reading your open tabs needs extension 0.7.0 or later. Reload it on `chrome://extensions`. The popup's **List my tabs** / **Read current tab** buttons show exactly what the assistant would get. |
+| The assistant says several tabs match | Two or more open tabs fit what you said (two Chase tabs, or "my bank" with two banks open). Name the one you mean, or give the tab id it listed. |
+| "The active tab is Lumispec itself" | You asked for "this tab" while the app was focused. Switch to the page you mean, or name it. |
+| A `view: "text"` result says the extension "predates v0.6.0" | The connected extension does not send the on-screen text yet, so the server approximated it from the markup. Reload the extension on `chrome://extensions`. |
 | An HTTP fallback result carries `loginWall: true` | The fallback ran without your browser's cookies and hit a sign-in page. It says nothing about whether you are logged in; the `note` names the page your browser actually reached. |
 | Service worker shows "inactive" on the card | Normal. Chrome suspends idle workers; the alarm and the socket wake it. Click **service worker** on the card to open its console. |
 

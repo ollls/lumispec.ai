@@ -234,9 +234,19 @@ const FETCHERS = { regular: fetchRegular, stealth: fetchStealth, browser: fetchB
 const JS_WALL = /(enable js\b|enable javascript|just a moment|checking your browser|verify you are human|attention required)/i;
 const MIN_USEFUL_CHARS = 200;
 
-async function fetchTier(tier, url) {
+async function fetchTier(tier, url, view = 'article') {
   const fetcher = FETCHERS[tier] || fetchRegular;
-  const { markdown, title } = htmlToMarkdown(await fetcher(url), url, { maxChars: await getFetchMaxChars() });
+  const html = await fetcher(url);
+  const maxChars = await getFetchMaxChars();
+  if (view === 'text') {
+    const { document } = parseHTML(html);
+    const title = (document.querySelector('title')?.textContent || '').trim();
+    return {
+      url, title, content: visibleText(html, maxChars), view: 'text', _tier: tier,
+      note: 'Visible text approximated from the markup (HTTP fetch, no layout engine): hidden elements may be included. The Browser Search extension returns the true on-screen text.',
+    };
+  }
+  const { markdown, title } = htmlToMarkdown(html, url, { maxChars });
   return { url, title, content: markdown, _tier: tier };
 }
 
@@ -276,6 +286,40 @@ async function fetchBrowser(url) {
     await page.close().catch(() => {});
     armIdleTimer();
   }
+}
+
+/**
+ * Visible text approximated from markup, one line per block, capped. The HTTP tier's version of
+ * view: "text" — no layout engine, so hidden elements cannot be told apart and may be included.
+ */
+export function visibleText(html, cap = FETCH_MAX_CHARS) {
+  try {
+    const broken = (html || '').replace(/<\/(p|div|li|tr|h[1-6]|section|article|header|footer|td|th|dd|dt|blockquote|pre|label)>|<br\s*\/?>/gi, '$&\n');
+    const { document } = parseHTML(broken);
+    for (const el of document.querySelectorAll('script, style, noscript, template, svg')) el.remove();
+    return renderedText(document.body?.textContent || document.documentElement?.textContent || '', cap);
+  } catch { return ''; }
+}
+
+/**
+ * Normalize rendered text (Chrome's innerText, or the approximation above) for the model: one
+ * trimmed line per visual row, table cells joined with " · ", blank lines and consecutive
+ * repeats dropped, capped with the usual marker.
+ */
+export function renderedText(text, cap = FETCH_MAX_CHARS) {
+  const out = [];
+  let len = 0;
+  let prev = null;
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.split('\t').map(c => c.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ')
+      .replace(/(?:\s*·\s*){2,}/g, ' · ')        // empty cells in a grid row leave runs of separators
+      .replace(/^(?:\s*·\s*)+|(?:\s*·\s*)+$/g, '')
+      .trim();
+    if (!line || line === prev) continue;
+    if (len + line.length > cap) { out.push('[...truncated]'); break; }
+    out.push(line); len += line.length + 1; prev = line;
+  }
+  return out.join('\n');
 }
 
 // Index pages (homepages, section fronts, date archives) defeat Readability: every headline is a
@@ -465,14 +509,14 @@ export async function runWebSearch(query) {
 }
 
 /** Fetch a page with the saved fetch mode (auto = stealth, then browser if blocked). */
-export async function runWebFetch(url) {
+export async function runWebFetch(url, { view = 'article' } = {}) {
   const { mode } = await getWebConfig();
-  if (mode !== 'auto') return fetchTier(mode, url);
+  if (mode !== 'auto') return fetchTier(mode, url, view);
 
   // Tier A — one HTTP request, no JS. Serves the large majority of pages.
   let cheap = null;
   try {
-    cheap = await fetchTier('stealth', url);
+    cheap = await fetchTier('stealth', url, view);
     if (!looksBlocked(cheap)) return cheap;
   } catch (err) {
     console.warn(`[web_fetch] stealth tier failed for ${url}: ${err.message}`);
@@ -481,7 +525,7 @@ export async function runWebFetch(url) {
   // Tier B — real browser. Only for pages that need JS or refused tier A.
   let rich;
   try {
-    rich = await fetchTier('browser', url);
+    rich = await fetchTier('browser', url, view);
   } catch (err) {
     console.warn(`[web_fetch] browser tier failed for ${url}: ${err.message}`);
     if (cheap) return cheap;
@@ -515,6 +559,7 @@ export default {
   prompt: `## Web Research
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (Cloudflare block, login wall, "enable JavaScript", empty content), use the search snippet descriptions directly — they often contain the data you need.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
+- web_fetch "view": "article" (default) for articles and news fronts; "text" for web applications (mail, calendars, dashboards, boards) or when "article" returns repeated fragments and image links. Page through an application with its own date or filter URLs; invented pagination parameters are ignored.
 - Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks — the search backend returns no results for quoted phrases. \`site:\` is fine.
 - Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
   tools: {
@@ -524,9 +569,9 @@ export default {
       execute: async ({ query }) => runWebSearch(query),
     },
     web_fetch: {
-      description: 'Fetch a web page and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
-      parameters: { url: 'string' },
-      execute: async ({ url }) => runWebFetch(url),
+      description: 'Fetch a web page. Requires a "url" argument. Optional "view": "article" (default) extracts the article or, on a front page, the list of headline links as markdown; "text" returns the page as it reads on screen, one line per visual row — use it for web applications (mail, calendars, dashboards, boards) and whenever an "article" result comes back as repeated fragments and image links. ALWAYS use after web_search to read the most relevant result before answering.',
+      parameters: { url: 'string', view: 'string' },
+      execute: async ({ url, view }) => runWebFetch(url, { view: view === 'text' ? 'text' : 'article' }),
     },
   },
 };

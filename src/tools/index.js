@@ -326,6 +326,9 @@ function registerPlugin(plugin) {
   toolGroups[plugin.group] = {
     tools: toolNames,
     condition: plugin.condition || undefined,
+    // Either may be a function, resolved each time the system prompt is built, so a plugin can
+    // shape its guidance from live config (Browser Search adds Tab Fetch lines only while the
+    // user has it on). getSystemPrompt() is synchronous: functions must answer from cached state.
     routing: plugin.routing || [],
     prompt: plugin.prompt || null,
     status: plugin.status || null,
@@ -832,15 +835,16 @@ export function getSystemPrompt({ applets = false, precision = false, cite = fal
   // common path for any conversation that can read code.
   const citeSection = cite ? CITE_RULES : '';
 
+  const resolveDyn = (v) => { try { return typeof v === 'function' ? v() : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
   const groupSections = Object.values(toolGroups)
     .filter(isGroupEnabled)
-    .map(g => g.prompt)
+    .map(g => resolveDyn(g.prompt))
     .filter(Boolean)
     .join('\n\n');
 
   const routingLines = Object.values(toolGroups)
     .filter(isGroupEnabled)
-    .map(g => g.routing)
+    .map(g => resolveDyn(g.routing))
     .filter(Boolean)
     .flat()
     .filter(Boolean);

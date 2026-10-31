@@ -11,10 +11,15 @@
 // rendered HTML. Search-engine URLs and result parsing live in tools/plugin-browser.js.
 //
 // Protocol (JSON text frames):
-//   ext → srv  { type: 'hello', version, capabilities: ['fetch'], ua }
-//   srv → ext  { type: 'fetch',  id, url, maxChars?, settleMs?, retryDelays? }
-//   ext → srv  { type: 'result', id, page: { title, url, html, textChars, wall, wallText?, truncated }, ms }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read'], ua }
+//   srv → ext  { type: 'fetch',  id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId? }
+//   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms, openTabs?, tab?, reused? }
+//   srv → ext  { type: 'tabs',   id }                      → { type: 'result', id, tabs: [...] }
+//   srv → ext  { type: 'read',   id, tabId, maxChars? }    → { type: 'result', id, page, tab, ms }
 //   ext → srv  { type: 'error',  id, message }
+// `tabs` / `read` are Tab Fetch (docs/TAB_FETCH.md): the user's own open tabs, listed and read in
+// place. The extension never navigates or closes them; policy (toggles, confirmation) is the
+// plugin's. Extensions before 0.7.0 do not advertise the capabilities and the methods reject.
 // Liveness uses WebSocket protocol-level ping/pong (browsers answer automatically).
 
 import { WebSocketServer } from 'ws';
@@ -172,18 +177,52 @@ class BrowserBridge {
     });
   }
 
+  /** Whether the connected extension advertised a capability ('fetch' | 'tabs' | 'read'). */
+  hasCapability(name) {
+    return this.connected && Array.isArray(this.#hello?.capabilities) && this.#hello.capabilities.includes(name);
+  }
+
   /**
    * Load a URL in a hidden tab and return the rendered page.
    * @param {string} url
-   * @param {{ maxChars?: number, settleMs?: number, retryDelays?: number[] }} [opts]
+   * @param {{ maxChars?: number, settleMs?: number, retryDelays?: number[], openTabs?: boolean, reuseTabId?: number }} [opts]
    *   settleMs: wait after load before the first read (client-rendered pages);
-   *   retryDelays: extra waits while the page is still a bot wall / thin ([] = read once).
-   * @returns {Promise<{ title: string, url: string, html: string, textChars: number, wall: boolean, wallText?: string, ms: number }>}
+   *   retryDelays: extra waits while the page is still a bot wall / thin ([] = read once);
+   *   openTabs: also report the user's open tabs on the same host (`openTabs` on the result);
+   *   reuseTabId: read that user tab in place instead of opening a hidden one (`tab`, `reused` on the result).
+   * @returns {Promise<{ title: string, url: string, html: string, text?: string, textChars: number, domChars?: number, wall: boolean, wallText?: string, ms: number, openTabs?: object[], tab?: object, reused?: boolean }>}
    */
   async fetchPage(url, opts = {}) {
     const msg = await this.#request({ type: 'fetch', url, ...opts }, config.browserSearch.timeoutMs);
     if (!msg.page || typeof msg.page.html !== 'string') throw new Error('Extension returned no page content');
-    return { ...msg.page, ms: msg.ms };
+    const out = { ...msg.page, ms: msg.ms };
+    if (Array.isArray(msg.openTabs)) out.openTabs = msg.openTabs;
+    if (msg.tab) out.tab = msg.tab;
+    if (msg.reused) out.reused = true;
+    return out;
+  }
+
+  /**
+   * The user's open web tabs (the extension's own excluded).
+   * @returns {Promise<Array<{ id: number, windowId: number, active: boolean, current: boolean, title: string, url: string, lastAccessed: number|null, discarded: boolean }>>}
+   */
+  async listTabs() {
+    if (!this.hasCapability('tabs')) throw new Error(this.connected ? 'The connected extension predates Tab Fetch — reload it at chrome://extensions' : 'Browser extension not connected');
+    const msg = await this.#request({ type: 'tabs' }, Math.min(config.browserSearch.timeoutMs, 10000));
+    return Array.isArray(msg.tabs) ? msg.tabs : [];
+  }
+
+  /**
+   * Read one of the user's tabs in place (no navigation, reload, activation or close).
+   * @param {number} tabId
+   * @param {{ maxChars?: number }} [opts]
+   * @returns {Promise<{ title: string, url: string, html: string, text?: string, textChars: number, ms: number, tab: object }>}
+   */
+  async readTab(tabId, opts = {}) {
+    if (!this.hasCapability('read')) throw new Error(this.connected ? 'The connected extension predates Tab Fetch — reload it at chrome://extensions' : 'Browser extension not connected');
+    const msg = await this.#request({ type: 'read', tabId, ...opts }, config.browserSearch.timeoutMs);
+    if (!msg.page || typeof msg.page.html !== 'string') throw new Error('Extension returned no page content');
+    return { ...msg.page, ms: msg.ms, tab: msg.tab || null };
   }
 }
 
