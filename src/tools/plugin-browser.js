@@ -25,7 +25,8 @@ import { parseHTML } from 'linkedom';
 import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
-import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField } from './plugin-web.js';
+import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField, visibleText, renderedText } from './plugin-web.js';
+export { visibleText } from './plugin-web.js'; // kept for callers/tests that import it from here
 
 // Version of the extension source shipped in this checkout. Compared with the version the
 // connected extension announces in `hello`, so an un-reloaded extension is called out.
@@ -194,29 +195,6 @@ function pageText(page) {
     for (const el of document.querySelectorAll('script, style, noscript')) el.remove();
     return `${page.title || ''} ${text(document.body)}`.slice(0, 3000);
   } catch { return page.title || ''; }
-}
-
-/**
- * Visible text of a returned page in reading order, one line per block, capped. Used when the
- * article extractor finds nothing in a page the browser rendered: worse than markdown, far
- * better than a cookie-less re-fetch.
- */
-export function visibleText(html, cap = FETCH_MAX_CHARS) {
-  try {
-    const broken = (html || '').replace(/<\/(p|div|li|tr|h[1-6]|section|article|header|footer|td|th|dd|dt|blockquote|pre|label)>|<br\s*\/?>/gi, '$&\n');
-    const { document } = parseHTML(broken);
-    for (const el of document.querySelectorAll('script, style, noscript, template, svg')) el.remove();
-    const lines = (document.body?.textContent || document.documentElement?.textContent || '')
-      .split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const out = [];
-    let len = 0;
-    for (const l of lines) {
-      if (out.length && out[out.length - 1] === l) continue;   // repeated labels
-      if (len + l.length > cap) { out.push('[...truncated]'); break; }
-      out.push(l); len += l.length + 1;
-    }
-    return out.join('\n');
-  } catch { return ''; }
 }
 
 /** A short page that reads like a sign-in screen. Checked on HTTP fallback results only. */
@@ -474,11 +452,11 @@ async function fallbackSearch(query, reason) {
   return { ...res, sources: `${res.sources || 'HTTP search'} (fallback: ${reason})`, fallback: reason };
 }
 
-async function fallbackFetch(url, reason, page = null) {
+async function fallbackFetch(url, reason, page = null, view = 'article') {
   console.warn(`[browser_fetch] falling back to HTTP fetch: ${reason}`);
-  logToolCall('web_fetch', 'browser_fallback', { args: { url }, rawResult: reason });
+  logToolCall('web_fetch', 'browser_fallback', { args: { url, view }, rawResult: reason });
   try {
-    const res = await runWebFetch(url);
+    const res = await runWebFetch(url, { view });
     const out = { ...res, _tier: `${res._tier || 'http'} (fallback: ${reason})`, fallback: reason };
     if (looksLikeLoginPage(res)) {
       // The fallback has no browser session. A sign-in page here is a property of the fallback,
@@ -551,6 +529,7 @@ export default {
   prompt: `## Web Research (via browser extension)
 - web_search and web_fetch run inside the user's own browser; when the extension is offline they transparently fall back to HTTP and the result says so in "fallback".
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (login wall, CAPTCHA, empty content), use the search snippet descriptions directly.
+- web_fetch "view": "article" (default) for articles and news fronts; "text" for web applications (mail, calendars, dashboards, boards) or when "article" returns repeated fragments and image links — it is the page exactly as it reads on screen in the user's browser. Page through an application with its own date or filter URLs; invented pagination parameters are ignored.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
 - Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks. \`site:\` is fine.
 - Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
@@ -576,12 +555,13 @@ export default {
       },
     },
     web_fetch: {
-      description: 'Fetch a web page through the user\'s browser and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
-      parameters: { url: 'string' },
-      execute: async ({ url }) => {
+      description: 'Fetch a web page through the user\'s browser. Requires a "url" argument. Optional "view": "article" (default) extracts the article or, on a front page, the list of headline links as markdown; "text" returns the page exactly as it reads on screen in the user\'s browser, one line per visual row, hidden labels and images excluded — use it for web applications (mail, calendars, dashboards, boards) and whenever an "article" result comes back as repeated fragments and image links. ALWAYS use after web_search to read the most relevant result before answering.',
+      parameters: { url: 'string', view: 'string' },
+      execute: async ({ url, view: viewArg }) => {
         if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
+        const view = viewArg === 'text' ? 'text' : 'article';
         const offline = offlineReason();
-        if (offline) return fallbackFetch(url, offline);
+        if (offline) return fallbackFetch(url, offline, null, view);
 
         const recent = recentFailure(url);
         if (recent) {
@@ -599,21 +579,32 @@ export default {
           }
           if (page.wall) {
             const snippet = (page.wallText || '').slice(0, 80);
-            return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${secs}s ("${snippet}")`, page);
+            return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${secs}s ("${snippet}")`, page, view);
           }
           const walled = detectWall(page);
-          if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page);
+          if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page, view);
           const maxChars = await getFetchMaxChars();
-          const { markdown, title } = htmlToMarkdown(page.html, page.url || url, { maxChars });
           const tier = `extension (${page.ms} ms${page.reads > 1 ? `, ${page.reads} reads` : ''})`;
+          if (view === 'text') {
+            // The page as laid out on screen. Extensions before v0.6.0 do not send innerText;
+            // approximate from the markup and say so.
+            const fromScreen = typeof page.text === 'string' && page.text.trim().length > 0;
+            const content = fromScreen ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars);
+            if (content.length >= MIN_USEFUL_CHARS) {
+              const out = { url: page.url || url, title: page.title, content, view: 'text', _tier: page.textSource === 'styleWalk' ? `${tier}, on-screen text by style walk (innerText had no layout)` : tier };
+              if (!fromScreen) out.note = 'Visible text approximated from the markup: the connected extension predates v0.6.0 and does not send the on-screen text. Reload it at chrome://extensions.';
+              return out;
+            }
+          }
+          const { markdown, title } = htmlToMarkdown(page.html, page.url || url, { maxChars });
           if ((markdown || '').trim().length >= MIN_USEFUL_CHARS) {
             return { url: page.url || url, title: title || page.title, content: markdown, _tier: tier };
           }
           // The extractor found nothing in a page Chrome rendered. Keep the page: this is a parser
           // problem and the reason alone cannot be debugged after the fact.
           const saved = dumpPage('fetch-thin', page);
-          const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
-          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? visibleText(page.html, maxChars) : '';
+          const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.domChars ? ` of ${page.domChars} in the DOM` : ''}${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
+          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? (page.text ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars)) : '';
           if (text.length >= MIN_USEFUL_CHARS) {
             // Chrome saw a real page. Hand over its visible text; never swap the user's session
             // for a cookie-less re-fetch of a page that already loaded.
@@ -623,9 +614,9 @@ export default {
               note: 'Content is the page\'s visible text in reading order, not an extracted article.',
             };
           }
-          return fallbackFetch(url, `browser returned ${(markdown || '').trim().length} chars of content after ${secs}s (${detail})`, page);
+          return fallbackFetch(url, `browser returned ${(markdown || '').trim().length} chars of content after ${secs}s (${detail})`, page, view);
         } catch (err) {
-          const res = await fallbackFetch(url, err.message);
+          const res = await fallbackFetch(url, err.message, null, view);
           if (res.error) recentFetchFailures.set(url, { reason: err.message, at: Date.now() });
           return res;
         }

@@ -81,6 +81,11 @@ kept) and `web_search` / `web_fetch` are served through a Chrome extension inste
   visible text stops growing, so progressively rendered apps are read after their content arrives.
   The extension strips script/style/noscript/template/svg before sending (the server discards them
   anyway; on Gmail and NYT they were 75–100% of the bytes), so the 4M-char cap only bites on content.
+- **Two views.** `web_fetch` takes `view: "article"` (default: Readability, or the headline-link list
+  on a front page) or `view: "text"`: the page as it reads on screen, one line per visual row. The
+  extension sends Chrome's `innerText` (hidden labels and images excluded) and `renderedText()`
+  normalizes it; the HTTP tier approximates from markup and says so in `note`. Built for web
+  applications — a Gmail inbox row is ~100 chars in text view versus ~500 as markdown.
 - **A rendered page never falls back to HTTP.** If the extractor finds nothing in a page Chrome
   reported ≥500 chars of visible text for, `web_fetch` returns that visible text (one line per
   block) instead of re-fetching without the browser's cookies — which on a signed-in site returns a

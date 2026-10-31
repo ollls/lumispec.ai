@@ -10,9 +10,12 @@
 // Protocol (JSON text frames over one WebSocket):
 //   ext → srv  { type: 'hello', version, capabilities: ['fetch'], ua }
 //   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays? }
-//   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, textChars, wall, wallText?, truncated, reads }, ms }
+//   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms }
 //     html is the live DOM minus script/style/noscript/template/svg (the server discards those
 //     anyway, and on Gmail / NYT they were 75-100% of the bytes); htmlChars is the raw size.
+//     text is document.body.innerText — the page as laid out on screen, hidden elements excluded,
+//     one line per visual row — which backs web_fetch's view: "text" (web apps such as mail or
+//     dashboards, whose markup is mostly machinery and hidden labels).
 //   ext → srv  { type: 'error', id, message }
 //   srv → ext  { type: 'ping', id }   →   ext → srv  { type: 'pong', id }
 
@@ -34,7 +37,9 @@ const FETCH_MIN_TEXT_CHARS = 200;           // below this the page is "thin": no
 const FETCH_STABLE_PROBE_MS = 600;          // gap between two text-length reads
 const FETCH_STABLE_MAX_MS = 6000;           // give up waiting for stability after this
 const FETCH_STABLE_MIN_GROWTH = 40;         // chars; smaller changes (clocks, counters) count as settled
+const FETCH_MIN_VISIBLE_SHARE = 0.1;        // below this share of DOM text on screen, the page is still painting
 const FETCH_MAX_CHARS_DEFAULT = 4_000_000;  // applies to the stripped HTML, so only content can hit it
+const FETCH_TEXT_MAX_CHARS = 400_000;       // cap on the rendered innerText sent alongside
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
@@ -43,10 +48,78 @@ const RECONNECT_MAX_MS = 30000;
 // Runs inside the page: is the document usable even if the load event never fires? Also the cheap
 // probe for the stability loop (text length + wall flag, no HTML serialization).
 function probeReady(minChars) {
-  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-  const WALL = /(enable js\b|enable javascript|disable any ad ?blocker|just a moment|checking your browser|verify (that )?you are (a )?human|attention required|access denied|are you a robot|unusual traffic|press and hold)/i;
-  const wall = text.length < 1500 && WALL.test(text.slice(0, 2000));
-  return { readyState: document.readyState, textChars: text.length, wall, usable: document.readyState !== 'loading' && text.length >= minChars };
+  try {
+    // Readable DOM text: body textContent minus script/style/noscript/template contents, which
+    // are text to the DOM but never to the screen (Reuters carries ~1.2M chars of inline JSON).
+    function domTextChars() {
+      const body = document.body;
+      if (!body) return 0;
+      let dead = 0;
+      for (const el of body.querySelectorAll('script, style, noscript, template')) dead += (el.textContent || '').length;
+      return Math.max(0, (body.textContent || '').replace(/\s+/g, ' ').trim().length - dead);
+    }
+    // On-screen text without relying on layout: walks the DOM and drops subtrees whose computed
+    // style hides them (display none, visibility hidden, aria-hidden). innerText only returns
+    // text that has layout, and in an inactive tab Chrome skips layout for virtualized lists —
+    // Gmail's inbox reported 593 chars of innerText against 24K chars of readable DOM text.
+    // Blocks become lines, table/grid cells are joined with " · ".
+    function visibleTextWalk(max) {
+      const BLOCK = /^(block|flex|grid|table|table-row|table-row-group|table-header-group|table-footer-group|table-caption|list-item|flow-root)$/;
+      const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'IFRAME', 'CANVAS', 'VIDEO', 'AUDIO']);
+      const ROW_MAX = 240; // a row is one visual line; Gmail's snippet cell holds far more text than it shows
+      const out = [];
+      let line = '';
+      let total = 0;
+      let inRow = false;
+      const flush = () => {
+        let t = line.replace(/\s+/g, ' ').replace(/( · )+/g, ' · ').replace(/^ · | · $/g, '').trim();
+        if (inRow && t.length > ROW_MAX) t = t.slice(0, ROW_MAX - 1) + '…';
+        if (t) { out.push(t); total += t.length + 1; }
+        line = '';
+      };
+      const walk = (node) => {
+        if (total > max) return;
+        if (node.nodeType === 3) { line += node.data; return; }
+        if (node.nodeType !== 1 || SKIP.has(node.tagName) || node.getAttribute('aria-hidden') === 'true') return;
+        const cs = getComputedStyle(node);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return;
+        const d = cs.display;
+        const role = node.getAttribute('role');
+        // A leaf row (no rows nested inside — layout tables such as Hacker News nest them) is one
+        // visual line: inner blocks and cells join with " · " instead of breaking.
+        const row = !inRow && (d === 'table-row' || role === 'row') && !node.querySelector('tr, [role="row"]');
+        const block = node.tagName === 'BR' || BLOCK.test(d);
+        const cell = d === 'table-cell' || role === 'gridcell' || role === 'cell' || role === 'columnheader';
+        if (row) { flush(); inRow = true; }
+        else if (block) { if (inRow) { if (line.trim()) line += ' · '; } else flush(); }
+        else if (cell && line.trim()) line += ' · ';
+        if (node.tagName !== 'BR') for (const c of node.childNodes) walk(c);
+        if (row) { flush(); inRow = false; }
+        else if (block && !inRow) flush();
+      };
+      if (document.body) walk(document.body);
+      flush();
+      return out.join('\n').slice(0, max);
+    }
+    let text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    // DOM text that is not on screen yet (visibility: hidden, display: none). Gmail keeps its
+    // loading shell at ~450 visible chars for several seconds while the inbox rows already sit
+    // in the DOM hidden, so "visible text stopped growing" alone settles on the shell.
+    const domChars = domTextChars();
+    let walked = false;
+    if (domChars > 0 && text.length < domChars * 0.1) {
+      // innerText may be starved of layout rather than the page unrendered: measure by style.
+      text = visibleTextWalk(400000).replace(/\s+/g, ' ').trim();
+      walked = true;
+    }
+    const WALL = /(enable js\b|enable javascript|disable any ad ?blocker|just a moment|checking your browser|verify (that )?you are (a )?human|attention required|access denied|are you a robot|unusual traffic|press and hold)/i;
+    const wall = text.length < 1500 && WALL.test(text.slice(0, 2000));
+    return { readyState: document.readyState, textChars: text.length, domChars, walked, wall, usable: document.readyState !== 'loading' && text.length >= minChars };
+  } catch (e) {
+    // Runs inside the page: a thrown error would surface as "returned nothing" (an undefined
+    // result), so report it as data instead.
+    return { error: `page probe failed: ${(e && e.message) || e}` };
+  }
 }
 
 /**
@@ -95,31 +168,98 @@ function serialized(fn) {
 // Runs INSIDE the loaded page (chrome.scripting.executeScript), so it must be self-contained.
 // Returns the live DOM after scripts ran, plus generic hints so the caller can tell a
 // bot-challenge shell ("Please enable JS…", "Just a moment…") from a real page.
-function extractPage(maxChars) {
-  const root = document.documentElement;
-  if (!root) return { error: 'Page has no document' };
-  const htmlChars = root.outerHTML.length;
-  // Serialize a copy without the markup the server deletes before reading: inline scripts
-  // (preloaded JSON state), stylesheets, noscript, inert templates and icon SVGs. Gmail's head
-  // holds ~1.9M chars of CSS and the old cap fell inside it, so the body never left Chrome.
-  const clone = root.cloneNode(true);
-  for (const el of clone.querySelectorAll('script, style, noscript, template, svg')) el.remove();
-  const html = clone.outerHTML;
-  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-  const head = text.slice(0, 2000);
-  const WALL = /(enable js\b|enable javascript|disable any ad ?blocker|just a moment|checking your browser|verify (that )?you are (a )?human|attention required|access denied|are you a robot|unusual traffic|press and hold)/i;
-  const wall = text.length < 1500 && WALL.test(head);
-  return {
-    title: document.title || '',
-    url: location.href,
-    html: html.length > maxChars ? html.slice(0, maxChars) : html,
-    htmlChars,
-    truncated: html.length > maxChars,
-    textChars: text.length,
-    textSnippet: head.slice(0, 300),
-    wall,
-    wallText: wall ? head.slice(0, 160) : undefined,
-  };
+function extractPage(maxChars, textMaxChars) {
+  try {
+    // Readable DOM text: body textContent minus script/style/noscript/template contents, which
+    // are text to the DOM but never to the screen (Reuters carries ~1.2M chars of inline JSON).
+    function domTextChars() {
+      const body = document.body;
+      if (!body) return 0;
+      let dead = 0;
+      for (const el of body.querySelectorAll('script, style, noscript, template')) dead += (el.textContent || '').length;
+      return Math.max(0, (body.textContent || '').replace(/\s+/g, ' ').trim().length - dead);
+    }
+    // On-screen text without relying on layout: walks the DOM and drops subtrees whose computed
+    // style hides them (display none, visibility hidden, aria-hidden). innerText only returns
+    // text that has layout, and in an inactive tab Chrome skips layout for virtualized lists —
+    // Gmail's inbox reported 593 chars of innerText against 24K chars of readable DOM text.
+    // Blocks become lines, table/grid cells are joined with " · ".
+    function visibleTextWalk(max) {
+      const BLOCK = /^(block|flex|grid|table|table-row|table-row-group|table-header-group|table-footer-group|table-caption|list-item|flow-root)$/;
+      const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'IFRAME', 'CANVAS', 'VIDEO', 'AUDIO']);
+      const ROW_MAX = 240; // a row is one visual line; Gmail's snippet cell holds far more text than it shows
+      const out = [];
+      let line = '';
+      let total = 0;
+      let inRow = false;
+      const flush = () => {
+        let t = line.replace(/\s+/g, ' ').replace(/( · )+/g, ' · ').replace(/^ · | · $/g, '').trim();
+        if (inRow && t.length > ROW_MAX) t = t.slice(0, ROW_MAX - 1) + '…';
+        if (t) { out.push(t); total += t.length + 1; }
+        line = '';
+      };
+      const walk = (node) => {
+        if (total > max) return;
+        if (node.nodeType === 3) { line += node.data; return; }
+        if (node.nodeType !== 1 || SKIP.has(node.tagName) || node.getAttribute('aria-hidden') === 'true') return;
+        const cs = getComputedStyle(node);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return;
+        const d = cs.display;
+        const role = node.getAttribute('role');
+        // A leaf row (no rows nested inside — layout tables such as Hacker News nest them) is one
+        // visual line: inner blocks and cells join with " · " instead of breaking.
+        const row = !inRow && (d === 'table-row' || role === 'row') && !node.querySelector('tr, [role="row"]');
+        const block = node.tagName === 'BR' || BLOCK.test(d);
+        const cell = d === 'table-cell' || role === 'gridcell' || role === 'cell' || role === 'columnheader';
+        if (row) { flush(); inRow = true; }
+        else if (block) { if (inRow) { if (line.trim()) line += ' · '; } else flush(); }
+        else if (cell && line.trim()) line += ' · ';
+        if (node.tagName !== 'BR') for (const c of node.childNodes) walk(c);
+        if (row) { flush(); inRow = false; }
+        else if (block && !inRow) flush();
+      };
+      if (document.body) walk(document.body);
+      flush();
+      return out.join('\n').slice(0, max);
+    }
+    const root = document.documentElement;
+    if (!root) return { error: 'Page has no document' };
+    const htmlChars = root.outerHTML.length;
+    // Serialize a copy without the markup the server deletes before reading: inline scripts
+    // (preloaded JSON state), stylesheets, noscript, inert templates and icon SVGs. Gmail's head
+    // holds ~1.9M chars of CSS and the old cap fell inside it, so the body never left Chrome.
+    const clone = root.cloneNode(true);
+    for (const el of clone.querySelectorAll('script, style, noscript, template, svg')) el.remove();
+    const html = clone.outerHTML;
+    let rendered = document.body?.innerText || '';   // layout text: hidden elements excluded, newlines per visual row
+    let text = rendered.replace(/\s+/g, ' ').trim();
+    const domChars = domTextChars();
+    let textSource = 'innerText';
+    if (domChars > 0 && text.length < domChars * 0.1) {
+      rendered = visibleTextWalk(textMaxChars);
+      text = rendered.replace(/\s+/g, ' ').trim();
+      textSource = 'styleWalk';
+    }
+    const head = text.slice(0, 2000);
+    const WALL = /(enable js\b|enable javascript|disable any ad ?blocker|just a moment|checking your browser|verify (that )?you are (a )?human|attention required|access denied|are you a robot|unusual traffic|press and hold)/i;
+    const wall = text.length < 1500 && WALL.test(head);
+    return {
+      title: document.title || '',
+      url: location.href,
+      html: html.length > maxChars ? html.slice(0, maxChars) : html,
+      htmlChars,
+      truncated: html.length > maxChars,
+      text: rendered.length > textMaxChars ? rendered.slice(0, textMaxChars) : rendered,
+      textChars: text.length,
+      domChars,
+      textSource,
+      textSnippet: head.slice(0, 300),
+      wall,
+      wallText: wall ? head.slice(0, 160) : undefined,
+    };
+  } catch (e) {
+    return { error: `page script failed: ${(e && e.message) || e}` }; // see probeReady
+  }
 }
 
 /**
@@ -163,13 +303,15 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
         }
         const next = await run(probeReady, FETCH_MIN_TEXT_CHARS);
         reads++;
-        const settled = !next.wall && next.textChars >= FETCH_MIN_TEXT_CHARS
+        // Most of the DOM still hidden means the app is mid-paint: keep probing within the budget.
+        const stillPainting = next.domChars > 0 && next.textChars < next.domChars * FETCH_MIN_VISIBLE_SHARE;
+        const settled = !next.wall && next.textChars >= FETCH_MIN_TEXT_CHARS && !stillPainting
           && Math.abs(next.textChars - probe.textChars) < Math.max(FETCH_STABLE_MIN_GROWTH, next.textChars * 0.02)
           && probe.textChars >= FETCH_MIN_TEXT_CHARS;  // the previous read must also have been a real page
         probe = next;
         if (settled) break;
       }
-      const page = await run(extractPage, maxChars);
+      const page = await run(extractPage, maxChars, FETCH_TEXT_MAX_CHARS);
       page.reads = reads;
       return { page, ms: Date.now() - started };
     } finally {

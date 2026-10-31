@@ -122,6 +122,7 @@ uninstall on the server side.
 | Tabs stay open | The worker was killed mid-search. Close them by hand; the next search is unaffected. |
 | `web_fetch` falls back with "bot/JS challenge wall" | The site (Reuters, Cloudflare-fronted pages) showed a challenge that did not clear within about 8 s of waiting. Open the site once in a normal tab so the challenge cookie is set, then retry. |
 | `web_fetch` result says "visible text: article extraction found nothing" | Chrome rendered the page but the server's article extractor could not read it (web apps such as Gmail). You get the page's visible text instead of a cookie-less HTTP re-fetch; the page is saved under `logs/browser-debug/` for parser work. |
+| A `view: "text"` result says the extension "predates v0.6.0" | The connected extension does not send the on-screen text yet, so the server approximated it from the markup. Reload the extension on `chrome://extensions`. |
 | An HTTP fallback result carries `loginWall: true` | The fallback ran without your browser's cookies and hit a sign-in page. It says nothing about whether you are logged in; the `note` names the page your browser actually reached. |
 | Service worker shows "inactive" on the card | Normal. Chrome suspends idle workers; the alarm and the socket wake it. Click **service worker** on the card to open its console. |
 
