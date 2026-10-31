@@ -441,7 +441,12 @@ export const ENGINES = {
 
   bing: {
     label: 'Bing',
-    url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en&count=10`,
+    // No `count=`: with it Bing serves a stripped page (1.5K chars of text instead of ~5.6K), and
+    // together with setlang it answers the FIRST WORD of the query only — every search on
+    // 2026-10-31 returned "What is AI" for "AI stocks sell off…", driver downloads for "Intel
+    // quarterly earnings…". Measured through the extension: q alone and q+setlang give 10
+    // correct results; q+count thins the page; q+setlang+count degrades the results.
+    url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en`,
     settleMs: 300, retryDelays: [],
     block: (page) => {
       if (/\/turing\//.test(page.url || '')) return 'Bing showed a CAPTCHA page';
