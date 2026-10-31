@@ -16,7 +16,7 @@ place.** The human drives, the model reads. This is the opposite division of lab
 planner click and type; that branch stays parked.
 
 A visible, active tab also has real layout, so `innerText` is exact there and the computed-style
-walker from v1.4.3 is not needed on this path.
+walker that backs the text view is not needed on this path.
 
 ## Rules (decided)
 
@@ -86,7 +86,7 @@ walker from v1.4.3 is not needed on this path.
    trip without the extension knowing the toggle.
 5. **`hello`** advertises `capabilities: ['fetch', 'tabs', 'read']`. Popup shows the count of
    readable tabs in its status line.
-6. Manifest `0.7.0`. Self-contained check for injected functions as in v1.4.3 (no module scope).
+6. Manifest `0.7.0`. Self-contained check for injected functions as for the text view (no module scope).
 
 *Acceptance:* with the extension reloaded, the popup's Test box can list tabs and read the active
 one; a `read` of a closed tab id rejects with "tab closed"; hidden fetches still work unchanged.
@@ -163,7 +163,7 @@ In the `url` path, before `fetchWithRetry`:
      Say which tab to read.', openTabs }`.
    - otherwise proceed; attach `openTabs` (that host only) and `hint: 'The user has this site open;
      offer to read that tab instead of loading pages in the background.'`
-4. `readTabs` off → none of this runs; behavior identical to v1.4.3.
+4. `readTabs` off → none of this runs; behavior identical to the hidden fetch before Tab Fetch.
 
 ### Step 7 — Prompt and routing
 
@@ -194,7 +194,7 @@ config, as `getSystemPrompt()` re-reads plugin prompts per message):
 
 ### Step 10 — Validation before release
 
-- Hidden fetch unchanged with all toggles off (Reuters, NYT, Gmail text view as in v1.4.3).
+- Hidden fetch unchanged with all toggles off (Reuters, NYT, Gmail text view as before Tab Fetch).
 - Two bank-like tabs open (any two logged-in sites): "look at my <A> tab" reads A; "look at my bank"
   returns both and the model asks; `tab: "active"` with the app focused asks.
 - Reuse: open a URL by hand, fetch the same URL → `source: 'tab'`, no new tab flashes in the tab

@@ -695,7 +695,7 @@ export default {
         }
 
         // Rule 4 (docs/TAB_FETCH.md): a site the user has open is treated with care. Only when Tab
-        // Fetch is on — otherwise behaviour is exactly the v1.4.3 hidden fetch.
+        // Fetch is on — otherwise behaviour is exactly the v1.4.2 hidden fetch (plus the text view).
         const fetchOpts = {};
         let care = {};
         const cfg = await tabConfig();

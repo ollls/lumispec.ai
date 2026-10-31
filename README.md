@@ -11,9 +11,10 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
-## ✨ v1.4.3 — Pages as they read on screen
+## ✨ v1.5.0 — Your browser, read two new ways
 
-- 👁️ **`web_fetch` `view: "text"`** *(new)* — besides the default `article` view (Readability, or the headline list on a front page), the model can ask for a page as it is laid out on screen: one line per visual row, hidden tooltips and labels excluded, grid cells joined with ` · `. Built for web applications — a Gmail inbox row is 142 characters in text view versus ~500 as markdown, so "list my top 70 subjects" costs about three fetches instead of nineteen; Google News reads five times denser. The extension sends Chrome's `innerText` and, when Chrome has not laid the page out (inactive tabs skip layout for virtualized lists), walks the DOM by computed style instead. Extension v0.6.5, **reload required**. See [`releases/1.4.3.md`](releases/1.4.3.md).
+- 👁️ **`web_fetch` `view: "text"`** *(new)* — besides the default `article` view (Readability, or the headline list on a front page), the model can ask for a page as it is laid out on screen: one line per visual row, hidden tooltips and labels excluded, grid cells joined with ` · `. Built for web applications — a Gmail inbox row is 142 characters in text view versus ~500 as markdown, so "list my top 70 subjects" costs about three fetches instead of nineteen; Google News reads five times denser. When Chrome has not laid the page out (inactive tabs skip layout for virtualized lists), a computed-style walker reads it instead.
+- 🗂️ **Tab Fetch** *(new, off by default)* — open and prepare a page yourself (login, two-factor, a CAPTCHA you passed, filters, scrolling), then say "look at this" or "look at my Chase tab". With **Let the assistant read my open tabs** on, the model lists your open tabs and reads the one you named **in place** — never navigated, clicked, typed in, scrolled or closed. If two tabs could be the one you meant, it asks; each read asks for your approval unless you turn that off, and autorun never bypasses it. The hidden-tab fetch stays the default; an address you already have open is read from your tab instead of loaded again. Design: [`docs/TAB_FETCH.md`](docs/TAB_FETCH.md). Extension 0.7.0, **reload required**. See [`releases/1.5.0.md`](releases/1.5.0.md).
 
 Everything else is as in v1.4.2:
 
@@ -52,7 +53,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.4.3.md`](releases/1.4.3.md) (latest) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.0.md`](releases/1.5.0.md) (latest) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -419,7 +420,7 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.4.3.md`](releases/1.4.3.md) | v1.4.3 release notes (latest) — `web_fetch` text view, Browser Search extension v0.6.5 |
+| [`releases/1.5.0.md`](releases/1.5.0.md) | v1.5.0 release notes (latest) — `web_fetch` text view, Tab Fetch, Browser Search extension 0.7.0 |
 | [`releases/1.4.2.md`](releases/1.4.2.md) | v1.4.2 release notes — web fetch fixes, Browser Search extension v0.5.0 |
 | [`releases/1.4.1.md`](releases/1.4.1.md) | v1.4.1 release notes — Obsidian export |
 | [`releases/1.4.0.md`](releases/1.4.0.md) | v1.4.0 release notes |
