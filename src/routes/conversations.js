@@ -330,6 +330,12 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     const MAX_TOOL_ROUNDS = 20;
     const MAX_SAME_TOOL_REPEATS = 3;
     const MAX_PARALLEL_TOOLS = 4;
+    // Consecutive unparseable-tool-call retries before giving up on tools for this turn. The
+    // retry message rarely helps once the model is stuck in a shape (2026-10-29: 17 identical
+    // malformed rounds in a row), and each retry is a full LLM call.
+    const MAX_REPAIR_ROUNDS = 3;
+    let repairRounds = 0;           // consecutive repair rounds; reset by any executed tool round
+    let forcedAnswerPrompt = 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.';
     // Context budget. Every round appends its tool results to llmMessages, so a long tool run
     // walks the prompt into the slot's context wall. llama-server does NOT error there: it
     // returns 200 with finish_reason "length" and an empty message, which surfaced as a blank
@@ -490,6 +496,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           toolCallsFound.length = MAX_PARALLEL_TOOLS;
         }
         logRoute('tools');
+        repairRounds = 0;
         // Execute all tool calls in parallel
         const toolNames = toolCallsFound.map(tc => tc.name).join(', ');
         console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
@@ -621,6 +628,14 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         // Skip both if content contains applet blocks (HTML/JS may have {"name": patterns)
         const hasApplet = /<applet[\s>]/i.test(result.content);
         const hasToolCallTag = /<tool_call/i.test(result.content);
+        const unparseable = !hasApplet && (hasToolCallTag || /\{"name"\s*:\s*"/.test(result.content));
+        if (unparseable && ++repairRounds > MAX_REPAIR_ROUNDS) {
+          console.warn(`[tool-loop] round ${round + 1}: ${MAX_REPAIR_ROUNDS} consecutive unparseable tool calls, giving up on tools for this turn`);
+          logRoute('end', 'repair-limit');
+          llmMessages.push(asAssistant(result.content, result.reasoning));
+          forcedAnswerPrompt = `Your last ${repairRounds} tool calls could not be parsed and were never executed. Do NOT call any tools. Answer now using only the information already gathered, and say plainly which lookups did not happen.`;
+          break;
+        }
         if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
           console.warn(`[tool-loop] response contains bare JSON tool call with no <tool_call> tag. Content (last 200 chars): ...${result.content.slice(-200)}`);
           logRoute('repair', 'bare-json');
@@ -647,10 +662,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     // another message onto a prompt that is already at the wall. Empty there means empty.
     if (!finalContent && !ctxWindDown) {
       console.warn(`[tool-loop] no final content after ${MAX_TOOL_ROUNDS} rounds, forcing answer`);
-      llmMessages.push({
-        role: 'user',
-        content: 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.',
-      });
+      llmMessages.push({ role: 'user', content: forcedAnswerPrompt });
       promptTokens = await countPromptTokens(llmMessages);
       const forced = await streamRound(llmMessages, {
         slotId,

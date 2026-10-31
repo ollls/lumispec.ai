@@ -1035,8 +1035,18 @@ function unescapeJsonString(s) {
     .replace(/\\"/g, '"');
 }
 
+// Qwen3.8 sometimes drops the opening quote of a key after a comma + newline
+// (`"name": "x",\narguments": {...}`), and sometimes names the tool under "function"
+// instead of "name" — one call in each shape ran for 17 rounds on 2026-10-29 because neither
+// shape parsed. Both are mechanical, so fix them before asking the model to retry.
+function normalizeToolCallKeys(raw) {
+  return raw
+    .replace(/^(\s*\{\s*)"(?:function|tool_name|tool)"(\s*:)/, '$1"name"$2')
+    .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)"(\s*:)/g, '$1"$2"$3');
+}
+
 function repairToolCallJson(raw) {
-  raw = raw.replace(/\s*\/>/g, '}').replace(/<\/[^>]+>/g, '');
+  raw = normalizeToolCallKeys(raw.replace(/\s*\/>/g, '}').replace(/<\/[^>]+>/g, ''));
   const quoteFixed = raw.replace(/:(\s*)([a-zA-Z_][a-zA-Z0-9_]*)"/g, ':$1"$2"');
   const nameMatch = quoteFixed.match(/"name"\s*:\s*"([^"]+)"/);
   if (!nameMatch) return null;
@@ -1139,7 +1149,7 @@ export function parseToolCalls(text) {
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
     const raw = match[1];
-    const normalized = raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    const normalized = normalizeToolCallKeys(raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null'));
     try {
       const parsed = JSON.parse(normalized);
       if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });

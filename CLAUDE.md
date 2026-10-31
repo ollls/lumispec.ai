@@ -291,7 +291,8 @@ export default {
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
 - Max 4 parallel tool calls per round (excess dropped)
-- Bare/malformed JSON tool calls trigger retry prompts (skipped when response contains `<applet>` blocks)
+- Bare/malformed JSON tool calls trigger retry prompts (skipped when response contains `<applet>` blocks). `MAX_REPAIR_ROUNDS` (3) caps consecutive retries: the loop then breaks to the forced answer with a "your last N tool calls were never executed" instruction instead of burning the remaining rounds (route log `end`/`repair-limit`)
+- Parser key normalization (`normalizeToolCallKeys`): accepts `"function"`/`"tool_name"`/`"tool"` as the name key and re-quotes keys that lost their opening quote (`,\narguments": {`), both seen from Qwen3.8 on 2026-10-29
 - Safety net catches unparsed tool calls in final content (also skipped for applet responses)
 - Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data (finance group only)
 - Fabrication detector: catches LLM presenting Greeks/prices without fetching data (finance group only)
