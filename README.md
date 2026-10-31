@@ -329,6 +329,15 @@ person. It needs a small extension that you load yourself — there is no store 
    plus verify, update and remove, is in **[`extension/README.md`](extension/README.md)**.
 2. Turn on **Browser Search** on the same card and pick one engine. The **Browser** dot in the top
    bar is green while the extension is connected.
+3. **After every `git pull`**, glance at the card: if it says the extension is *outdated*, reload it
+   once on `chrome://extensions` (the extension changes rarely, but when it does the server knows).
+   Until you do, newer features answer "reload the extension" and the old read loop applies.
+4. **Tab Fetch (optional, off by default).** To let the assistant read a page you already have
+   open — your bank after login, Gmail search results, a board you filtered by hand — switch on
+   **Let the assistant read my open tabs** on the same card, open the page, and say "look at this"
+   or "look at my Chase tab". It asks before each read (**Confirm before reading a tab**), asks
+   which tab when two could match, and never navigates, clicks or closes anything. Design:
+   [`docs/TAB_FETCH.md`](docs/TAB_FETCH.md).
 
 No `.env` change is required. Three optional variables:
 
