@@ -236,7 +236,7 @@ const MIN_USEFUL_CHARS = 200;
 
 async function fetchTier(tier, url) {
   const fetcher = FETCHERS[tier] || fetchRegular;
-  const { markdown, title } = htmlToMarkdown(await fetcher(url));
+  const { markdown, title } = htmlToMarkdown(await fetcher(url), url);
   return { url, title, content: markdown, _tier: tier };
 }
 
@@ -278,7 +278,62 @@ async function fetchBrowser(url) {
   }
 }
 
-export function htmlToMarkdown(html) {
+// Index pages (homepages, section fronts, date archives) defeat Readability: every headline is a
+// paragraph wrapped in a link, and Readability prunes link-dense blocks as "related links", so it
+// returns the story summaries with every headline missing (NYT homepage 2026-10-31: 0 of 91
+// headlines kept; Guardian /world/<date>: 0 of 30). The detector measures that loss directly: a
+// page counts as an index when headline-length link text is at least 30% of its text AND under
+// 30% of those links survive in Readability's output. Article pages measured 2-6% link text, and
+// the homepages Readability handles well (BBC, Guardian front, HN) kept 49-100% of their links.
+const INDEX_MIN_LINK_CHARS = 25;   // shorter anchors are nav, bylines, "Read more"
+const INDEX_MIN_LINK_SHARE = 0.3;
+const INDEX_MAX_LINKS_KEPT = 0.3;
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+/** Headline-length link texts of a document and their share of its text. Call before Readability (it mutates). */
+function longLinks(document) {
+  const total = norm(document.documentElement?.textContent).length;
+  const texts = new Set();
+  let inLinks = 0;
+  for (const a of document.querySelectorAll('a[href]')) {
+    const t = norm(a.textContent);
+    if (t.length >= INDEX_MIN_LINK_CHARS) { inLinks += t.length; texts.add(t); }
+  }
+  return { texts: [...texts], share: total ? inLinks / total : 0 };
+}
+
+/**
+ * Render an index page as one line per linked story: headline, URL, and the summary that follows
+ * it in the markup when there is one. Chrome-free and site-agnostic: it only looks at anchors with
+ * headline-length text and the next text block beside them.
+ */
+function renderLinkIndex(html, baseUrl) {
+  const { document } = parseHTML(html);
+  for (const sel of ['script', 'style', 'noscript', 'template', 'nav', 'footer', 'header']) {
+    document.querySelectorAll(sel).forEach(el => el.remove());
+  }
+  const seen = new Set();
+  const lines = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    const text = norm(a.textContent);
+    if (text.length < INDEX_MIN_LINK_CHARS) continue;
+    let href;
+    try { href = new URL(a.getAttribute('href'), baseUrl).href; } catch { continue; }
+    if (!/^https?:/i.test(href) || seen.has(href) || seen.has(text)) continue;
+    seen.add(href); seen.add(text);
+    let summary = '';
+    for (let el = a, i = 0; el && i < 4; el = el.parentElement, i++) {
+      const sib = el.nextElementSibling;
+      if (!sib || sib.querySelector('a, h1, h2, h3, h4')) continue;
+      const t = norm(sib.textContent);
+      if (t.length >= 30 && t.length <= 400 && t !== text) { summary = t; break; }
+    }
+    lines.push(`- [${text}](${href})${summary ? ` — ${summary}` : ''}`);
+  }
+  return lines;
+}
+
+export function htmlToMarkdown(html, baseUrl = 'http://localhost/') {
   const { document } = parseHTML(html);
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   turndown.remove(['script', 'style', 'noscript']);
@@ -287,14 +342,27 @@ export function htmlToMarkdown(html) {
   // can score one template as the whole page and Turndown then renders it as nothing. The NYT
   // homepage carries a 100K-char interactive this way (2026-10-31: 0 chars from a page with
   // 130K chars of body text). Drop them before anything scores the page.
-  document.querySelectorAll('template').forEach(el => el.remove());
+  document.querySelectorAll('template, script, style, noscript').forEach(el => el.remove());
+  const pageTitle = norm(document.querySelector('title')?.textContent);
+  const links = longLinks(document);
 
   const article = new Readability(document).parse();
 
   let markdown = '', title = '';
   if (article && article.content) {
-    markdown = turndown.turndown(article.content);
-    title = article.title;
+    const kept = norm(article.textContent);
+    const linksKept = links.texts.length ? links.texts.filter(t => kept.includes(t.slice(0, 30))).length / links.texts.length : 1;
+    if (links.share >= INDEX_MIN_LINK_SHARE && linksKept < INDEX_MAX_LINKS_KEPT) {
+      const lines = renderLinkIndex(html, baseUrl);
+      if (lines.length >= 5) {
+        markdown = `${pageTitle ? `# ${pageTitle}\n\n` : ''}Index page: ${lines.length} linked stories.\n\n${lines.join('\n')}`;
+        title = pageTitle;
+      }
+    }
+    if (!markdown) {
+      markdown = turndown.turndown(article.content);
+      title = article.title;
+    }
   }
   // Readability found nothing, or picked something Turndown cannot render: read the whole body.
   if (!markdown.trim()) {

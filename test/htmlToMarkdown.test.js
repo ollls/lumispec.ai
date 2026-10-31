@@ -33,3 +33,34 @@ test('an article Turndown renders as empty falls back to the whole body', () => 
   const { markdown } = htmlToMarkdown(html);
   assert.ok(markdown.includes('Visible heading'), markdown.slice(0, 200));
 });
+
+// Index pages: every headline is a paragraph inside a link, which Readability prunes as a
+// link-dense block, leaving summaries with no headlines (NYT homepage and Guardian date
+// archive, 2026-10-31). Such pages render as one line per linked story instead.
+function indexPage(n) {
+  const stories = Array.from({ length: n }, (_, i) => `
+    <div><div><a href="/2026/10/30/story-${i}"><div><p>Headline number ${i} that is long enough to count</p></div></a></div>
+    <div><p>Summary for story ${i}, a sentence or two of plain text beside the headline.</p></div></div>`).join('');
+  return `<!DOCTYPE html><html><head><title>Front Page</title></head><body>
+<header><nav><a href="/">Home</a><a href="/world">World</a></nav></header>
+<main>${stories}</main><footer>Footer</footer></body></html>`;
+}
+
+test('an index page renders as a headline list with absolute URLs and summaries', () => {
+  const { markdown, title } = htmlToMarkdown(indexPage(20), 'https://news.example.com/');
+  assert.equal(title, 'Front Page');
+  assert.ok(markdown.includes('Index page: 20 linked stories'), markdown.slice(0, 200));
+  assert.ok(markdown.includes('- [Headline number 0 that is long enough to count](https://news.example.com/2026/10/30/story-0) — Summary for story 0'));
+  assert.ok(markdown.includes('Headline number 19 that is long enough to count'));
+  assert.ok(!markdown.includes('[Home]'), 'nav links are not stories');
+});
+
+test('an article page with a few links still goes through Readability', () => {
+  const body = Array.from({ length: 12 }, (_, i) => `<p>Paragraph ${i} of the article body, with enough ordinary prose to be scored as content by Readability and kept.</p>`).join('');
+  const html = `<!DOCTYPE html><html><head><title>Article</title></head><body>
+<nav><a href="/">Home</a></nav><article><h1>Article headline</h1>${body}
+<p>See also <a href="/other-story">another long story title linked from the text</a>.</p></article></body></html>`;
+  const { markdown } = htmlToMarkdown(html, 'https://news.example.com/');
+  assert.ok(!markdown.includes('Index page:'), markdown.slice(0, 200));
+  assert.ok(markdown.includes('Paragraph 11 of the article body'));
+});

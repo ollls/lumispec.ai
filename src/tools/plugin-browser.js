@@ -520,7 +520,7 @@ export default {
           }
           const walled = detectWall(page);
           if (walled) return fallbackFetch(url, `${walled} (after ${Math.round((page.ms || 0) / 1000)}s)`);
-          const { markdown, title } = htmlToMarkdown(page.html);
+          const { markdown, title } = htmlToMarkdown(page.html, page.url || url);
           if ((markdown || '').trim().length < MIN_USEFUL_CHARS) {
             // Keep the page: a rendered DOM that the extractor cannot read is a parser problem,
             // and the reason alone (0 chars, textChars 12K) cannot be debugged after the fact.
