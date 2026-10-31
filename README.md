@@ -5,8 +5,8 @@
 ![lumispec.ai](Screenshot1.png)
 
 <p align="center">
-  <img src="Screenshot3.png" width="700" alt="Browser Search reading Reuters and saving the news to Reuters.md">
-  <br><sub>Browser Search: <code>web_fetch</code> reads Reuters (homepage, World, Business, Technology, Markets) and <code>source_write</code> saves the gathered news to <code>Reuters.md</code>.</sub>
+  <img src="Screenshot3.png" width="700" alt="World News Dashboard applet built from eight outlets fetched through Browser Search">
+  <br><sub>A task pipeline fetches eight outlets through Browser Search (<code>web_fetch</code> in a hidden tab of your own Chrome), and the model renders all 115 stories as an inline HTML applet with source badges, topic tags and filter chips.</sub>
 </p>
 
 Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model and get a full chat UI with web search, Python execution, code editing, interactive visualizations, deep E\*TRADE integration, and a task-pipeline runner — all running on your hardware. No cloud dependencies, no telemetry, no per-token bill.
