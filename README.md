@@ -13,6 +13,15 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## ✨ v1.4.2 — Web fetch fixes
+
+- 🌐 **Index pages as headline lists** *(fixed)* — homepages, section fronts and date archives used to come back as summaries with every headline missing (Readability prunes link-wrapped headlines as "related links": NYT 0 of 91 kept, Reuters 0 of 90). They are now detected generically and rendered as `- [headline](url) — summary` lines; article pages are untouched. `<template>` blocks that turned the NYT homepage into 0 chars are stripped first.
+- 🧩 **Browser Search extension v0.5.0** *(reload required)* — strips scripts, styles and templates before its size cap (Gmail's inline CSS used to swallow the whole cap before the body), reads a page until its visible text stops growing instead of at the first 200 characters, and **never trades a page Chrome rendered for a cookie-less HTTP re-fetch** — which is how a signed-in Gmail became a "you are logged out" login screen. CAPTCHAs inside an iframe (DataDome) are named instead of reported as "11 chars of content".
+- 📏 **Max chars per fetched page** *(new setting)* — default 4000 as before, 1000–50000, on both the Web Search & Fetch and Browser Search cards. Pages the extractor cannot read are saved under `logs/browser-debug/`; a card toggle can save every fetch for parser work.
+- 🎨 **Applets survive a dropped last token** — an answer ending in `</applet` (end-of-sequence sampled instead of the final `>`) now renders as the iframe it was meant to be. 🛠️ The tool-call parser repairs two Qwen3.8 shapes that once cost 17 wasted rounds and caps retries at 3. `npm test`: 34 tests. See [`releases/1.4.2.md`](releases/1.4.2.md).
+
+Everything else is as in v1.4.1:
+
 ## ✨ v1.4.1 — Obsidian export
 
 - 📓 **Save to Obsidian** *(new)* — turn on the **Obsidian Export** plugin and every conversation in the sidebar gets a vault icon. One click writes it into your Obsidian vault as a Markdown note: properties (session colour, model, tools used, token count), one heading per turn, tool calls folded into callouts, reasoning optional, charts and data files copied alongside as attachments. The card finds your vaults through Obsidian's own registry (native, Flatpak, Snap); `OBSIDIAN_VAULT` points it at any folder instead. Manual and one-way: nothing syncs by itself, nothing in the note links back, nothing in the vault is ever deleted. Off by default. See "Add Obsidian export" below and [`releases/1.4.1.md`](releases/1.4.1.md).
@@ -39,7 +48,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.4.1.md`](releases/1.4.1.md) (latest) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.4.2.md`](releases/1.4.2.md) (latest) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -406,7 +415,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.4.1.md`](releases/1.4.1.md) | v1.4.1 release notes (latest) — Obsidian export |
+| [`releases/1.4.2.md`](releases/1.4.2.md) | v1.4.2 release notes (latest) — web fetch fixes, Browser Search extension v0.5.0 |
+| [`releases/1.4.1.md`](releases/1.4.1.md) | v1.4.1 release notes — Obsidian export |
 | [`releases/1.4.0.md`](releases/1.4.0.md) | v1.4.0 release notes |
 | [`releases/1.3.0.md`](releases/1.3.0.md) | v1.3.0 release notes |
 | [`releases/1.2.0.md`](releases/1.2.0.md) | v1.2.0 release notes |
