@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
+import { replaceApplets } from '../services/applets.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
@@ -216,7 +217,6 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     const systemPrompt = getSystemPrompt({ applets, precision, cite });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
-    const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;
     // Earlier user messages are re-stamped from their sentAt, byte-identical to when they were
     // sent, so the slot's KV cache prefix keeps matching. Messages without sentAt (older pinned
     // conversations) are sent as stored.
@@ -238,7 +238,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
       if (msg.role === 'assistant') {
         const text = typeof msg.content === 'object' && msg.content.text
           ? msg.content.text : typeof msg.content === 'string' ? msg.content : '';
-        const stripped = text.replace(appletRe, (_m, type) => `[Applet: ${type} visualization]`);
+        const stripped = replaceApplets(text, (type) => `[Applet: ${type} visualization]`);
         // Retain: the stored turn reasoning (all rounds concatenated) rides along as reasoning_content,
         // which the chat template renders as this turn's <think> block. Off: content only, as before.
         const reasoning = retain && typeof msg.content === 'object' ? msg.content.reasoning : undefined;

@@ -692,17 +692,23 @@ if (typeof mermaid !== 'undefined') {
 let _mermaidId = 0;
 
 // ── Applet extraction & rendering ─────────────────────
-const APPLET_RE = /<applet\s+type=["']([^"']*)["'][^>]*>([\s\S]*?)<\/applet>/gi;
+// Mirrors src/services/applets.js. The final render tolerates a closing tag that is missing or
+// cut short at the very end of the text (2026-10-31: a 19K dashboard ended in `</applet`, the
+// model dropped the last `>`, and the HTML rendered as sanitized markdown). Partial renders
+// during streaming use the strict form so a half-streamed applet is not turned into an iframe.
+const APPLET_RE = /<applet\s+type=["']([^"']*)["'][^>]*>([\s\S]*?)(?:<\/applet>|$)/gi;
+const APPLET_CLOSED_RE = /<applet\s+type=["']([^"']*)["'][^>]*>([\s\S]*?)<\/applet>/gi;
+const APPLET_TRAILING_CLOSER_RE = /<(?:\/(?:a(?:p(?:p(?:l(?:e(?:t)?)?)?)?)?)?)?$/i;
 const MAX_APPLET_SIZE = 50 * 1024; // 50KB
 const THOUGHT_LABEL = 'Thought process';
 const THOUGHT_HTML = `<span class="mr-1">💭</span> ${THOUGHT_LABEL}`;
 const WORKING_HTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
 
-function extractApplets(text) {
+function extractApplets(text, { partial = false } = {}) {
   const applets = [];
-  const cleaned = text.replace(APPLET_RE, (_match, type, html) => {
+  const cleaned = text.replace(partial ? APPLET_CLOSED_RE : APPLET_RE, (_match, type, html) => {
     const idx = applets.length;
-    applets.push({ type: type.toLowerCase(), html: html.trim() });
+    applets.push({ type: type.toLowerCase(), html: html.trim().replace(APPLET_TRAILING_CLOSER_RE, '').trim() });
     return `<div data-applet="${idx}"></div>`;
   });
   return { cleaned, applets };
@@ -825,9 +831,9 @@ window.addEventListener('message', (e) => {
   });
 });
 
-function renderFormattedContent(text, container, { renderMermaid = false } = {}) {
+function renderFormattedContent(text, container, { renderMermaid = false, partial = false } = {}) {
   // Extract applets BEFORE DOMPurify (which strips <applet> tags)
-  const { cleaned, applets } = extractApplets(text);
+  const { cleaned, applets } = extractApplets(text, { partial });
 
   const raw = marked.parse(cleaned);
   container.innerHTML = DOMPurify.sanitize(raw);
@@ -906,17 +912,18 @@ function foldStepOutput(parent, span, label = 'Output') {
   return details;
 }
 
+// Streaming renders: the text is still growing, so only fully closed applets become iframes.
 function scheduleRender(text, container) {
   const now = Date.now();
   if (now - _lastRenderTime >= RENDER_INTERVAL) {
     _lastRenderTime = now;
-    renderFormattedContent(text, container);
+    renderFormattedContent(text, container, { partial: true });
     return;
   }
   clearTimeout(_renderTimer);
   _renderTimer = setTimeout(() => {
     _lastRenderTime = Date.now();
-    renderFormattedContent(text, container);
+    renderFormattedContent(text, container, { partial: true });
   }, RENDER_INTERVAL - (now - _lastRenderTime));
 }
 
