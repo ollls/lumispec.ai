@@ -11,6 +11,12 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## ✨ v1.4.3 — Pages as they read on screen
+
+- 👁️ **`web_fetch` `view: "text"`** *(new)* — besides the default `article` view (Readability, or the headline list on a front page), the model can ask for a page as it is laid out on screen: one line per visual row, hidden tooltips and labels excluded, grid cells joined with ` · `. Built for web applications — a Gmail inbox row is 142 characters in text view versus ~500 as markdown, so "list my top 70 subjects" costs about three fetches instead of nineteen; Google News reads five times denser. The extension sends Chrome's `innerText` and, when Chrome has not laid the page out (inactive tabs skip layout for virtualized lists), walks the DOM by computed style instead. Extension v0.6.5, **reload required**. See [`releases/1.4.3.md`](releases/1.4.3.md).
+
+Everything else is as in v1.4.2:
+
 ## ✨ v1.4.2 — Web fetch fixes
 
 - 🌐 **Index pages as headline lists** *(fixed)* — homepages, section fronts and date archives used to come back as summaries with every headline missing (Readability prunes link-wrapped headlines as "related links": NYT 0 of 91 kept, Reuters 0 of 90). They are now detected generically and rendered as `- [headline](url) — summary` lines; article pages are untouched. `<template>` blocks that turned the NYT homepage into 0 chars are stripped first.
@@ -46,7 +52,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.4.2.md`](releases/1.4.2.md) (latest) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.4.3.md`](releases/1.4.3.md) (latest) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -413,7 +419,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.4.2.md`](releases/1.4.2.md) | v1.4.2 release notes (latest) — web fetch fixes, Browser Search extension v0.5.0 |
+| [`releases/1.4.3.md`](releases/1.4.3.md) | v1.4.3 release notes (latest) — `web_fetch` text view, Browser Search extension v0.6.5 |
+| [`releases/1.4.2.md`](releases/1.4.2.md) | v1.4.2 release notes — web fetch fixes, Browser Search extension v0.5.0 |
 | [`releases/1.4.1.md`](releases/1.4.1.md) | v1.4.1 release notes — Obsidian export |
 | [`releases/1.4.0.md`](releases/1.4.0.md) | v1.4.0 release notes |
 | [`releases/1.3.0.md`](releases/1.3.0.md) | v1.3.0 release notes |
