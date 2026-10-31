@@ -282,12 +282,17 @@ async function fetchBrowser(url) {
 // paragraph wrapped in a link, and Readability prunes link-dense blocks as "related links", so it
 // returns the story summaries with every headline missing (NYT homepage 2026-10-31: 0 of 91
 // headlines kept; Guardian /world/<date>: 0 of 30). The detector measures that loss directly: a
-// page counts as an index when headline-length link text is at least 30% of its text AND under
-// 30% of those links survive in Readability's output. Article pages measured 2-6% link text, and
-// the homepages Readability handles well (BBC, Guardian front, HN) kept 49-100% of their links.
+// page counts as an index when headline-length link text is at least 20% of its text, under 30%
+// of those links survive in Readability's output, AND Readability kept under 70% of the page text.
+// Index pages measured 3-46% kept (a summary-rich front with no chrome reaches 60%); article pages
+// measured 2-6% link text with 76-94% kept; the homepages Readability handles well
+// (BBC, Guardian front, HN) kept 51-96% of their links. The share bound was 0.3 at first, and
+// Reuters sat on it: 0.31 on a light render, 0.24 once more summaries had loaded (0 of 90
+// headlines kept either way), so the same page flipped between the two renderings run to run.
 const INDEX_MIN_LINK_CHARS = 25;   // shorter anchors are nav, bylines, "Read more"
-const INDEX_MIN_LINK_SHARE = 0.3;
+const INDEX_MIN_LINK_SHARE = 0.2;
 const INDEX_MAX_LINKS_KEPT = 0.3;
+const INDEX_MAX_TEXT_KEPT = 0.7;   // guards short articles with big related-link rails
 const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
 /** Headline-length link texts of a document and their share of its text. Call before Readability (it mutates). */
@@ -344,6 +349,7 @@ export function htmlToMarkdown(html, baseUrl = 'http://localhost/') {
   // 130K chars of body text). Drop them before anything scores the page.
   document.querySelectorAll('template, script, style, noscript').forEach(el => el.remove());
   const pageTitle = norm(document.querySelector('title')?.textContent);
+  const totalText = norm(document.documentElement?.textContent).length;
   const links = longLinks(document);
 
   const article = new Readability(document).parse();
@@ -352,7 +358,8 @@ export function htmlToMarkdown(html, baseUrl = 'http://localhost/') {
   if (article && article.content) {
     const kept = norm(article.textContent);
     const linksKept = links.texts.length ? links.texts.filter(t => kept.includes(t.slice(0, 30))).length / links.texts.length : 1;
-    if (links.share >= INDEX_MIN_LINK_SHARE && linksKept < INDEX_MAX_LINKS_KEPT) {
+    const textKept = totalText ? kept.length / totalText : 1;
+    if (links.share >= INDEX_MIN_LINK_SHARE && linksKept < INDEX_MAX_LINKS_KEPT && textKept < INDEX_MAX_TEXT_KEPT) {
       const lines = renderLinkIndex(html, baseUrl);
       if (lines.length >= 5) {
         markdown = `${pageTitle ? `# ${pageTitle}\n\n` : ''}Index page: ${lines.length} linked stories.\n\n${lines.join('\n')}`;

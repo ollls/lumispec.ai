@@ -142,9 +142,14 @@ async function runInstallAction(id) {
   return { error: `Unknown action: ${id}` };
 }
 
-const DEFAULTS = { enabled: false, engines: ['duckduckgo'] };
+const DEFAULTS = { enabled: false, engines: ['duckduckgo'], dumpPages: false };
 const RESULT_LIMIT = 8;
 const MIN_USEFUL_CHARS = 200;
+// Visible text Chrome itself reported, above which a page is real whatever the extractor made of
+// it. The HTTP fallback runs without the browser's cookies, so re-fetching a real page from a
+// signed-in site hands the model a login screen (Gmail, 2026-10-31: inbox title in Chrome,
+// "Use Guest mode" from the fallback, model concluded the user was logged out).
+const REAL_PAGE_MIN_TEXT = 500;
 const DEBUG_DIR = resolve(fileURLToPath(new URL('../../logs/browser-debug', import.meta.url)));
 const RECENT_FAILURE_TTL_MS = 90_000;
 
@@ -190,6 +195,37 @@ function pageText(page) {
   } catch { return page.title || ''; }
 }
 
+/**
+ * Visible text of a returned page in reading order, one line per block, capped. Used when the
+ * article extractor finds nothing in a page the browser rendered: worse than markdown, far
+ * better than a cookie-less re-fetch.
+ */
+export function visibleText(html, cap = 4000) {
+  try {
+    const broken = (html || '').replace(/<\/(p|div|li|tr|h[1-6]|section|article|header|footer|td|th|dd|dt|blockquote|pre|label)>|<br\s*\/?>/gi, '$&\n');
+    const { document } = parseHTML(broken);
+    for (const el of document.querySelectorAll('script, style, noscript, template, svg')) el.remove();
+    const lines = (document.body?.textContent || document.documentElement?.textContent || '')
+      .split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const out = [];
+    let len = 0;
+    for (const l of lines) {
+      if (out.length && out[out.length - 1] === l) continue;   // repeated labels
+      if (len + l.length > cap) { out.push('[...truncated]'); break; }
+      out.push(l); len += l.length + 1;
+    }
+    return out.join('\n');
+  } catch { return ''; }
+}
+
+/** A short page that reads like a sign-in screen. Checked on HTTP fallback results only. */
+export function looksLikeLoginPage(res) {
+  const content = (res?.content || '').trim();
+  if (!content || content.length > 2500) return false;
+  const t = `${res.title || ''} ${content}`.slice(0, 3000);
+  return /\b(sign in|log ?in|use guest mode|not your computer|enter your (email|password|phone)|forgot (your )?(password|email)|create (an )?account|verify it.?s you|session (has )?expired)\b/i.test(t);
+}
+
 // Generic challenge / block pages, checked server-side on every returned page. The extension's
 // own wall regex (used for its in-tab retry) is a subset; this list is the one that produces the
 // user-facing reason, and it can be extended without an extension reload. First match wins.
@@ -208,12 +244,33 @@ const WALL_PATTERNS = [
     'site showed an "enable JavaScript" shell instead of content'],
 ];
 
-/** Returns a reason string if the page looks like a challenge / block page, else null. */
-function detectWall(page) {
+// Challenge pages that render inside a cross-origin iframe leave the main document with no text
+// at all, so the phrase list never sees them: Reuters answered the hidden tab with a DataDome
+// CAPTCHA iframe (2026-10-31), textChars 0, and the fetch was reported as "11 chars of content".
+const CHALLENGE_FRAME_RE = /captcha-delivery\.com|datadome|challenges\.cloudflare\.com|hcaptcha\.com|recaptcha|perimeterx|px-cdn\.net|arkoselabs|funcaptcha/i;
+function challengeFrame(document) {
+  for (const f of document.querySelectorAll('iframe')) {
+    const src = f.getAttribute('src') || '';
+    const title = f.getAttribute('title') || '';
+    if (!CHALLENGE_FRAME_RE.test(src) && !/captcha|challenge/i.test(title)) continue;
+    const id = `${src} ${title}`;
+    const vendor = /captcha-delivery|datadome/i.test(id) ? 'DataDome' : /cloudflare/i.test(id) ? 'Cloudflare' : /hcaptcha/i.test(id) ? 'hCaptcha'
+      : /recaptcha/i.test(id) ? 'reCAPTCHA' : /perimeterx|px-cdn/i.test(id) ? 'PerimeterX' : /arkose|funcaptcha/i.test(id) ? 'Arkose' : 'a';
+    return `site showed ${vendor} CAPTCHA (in an iframe) — open it in a normal tab, pass the check once, then retry`;
+  }
+  return null;
+}
+
+/** Returns a reason string if the page looks like a challenge / block page, else null. Exported for tests. */
+export function detectWall(page) {
   const t = pageText(page);
-  if (!t) return null;
-  // Real pages mention these words too; only a thin page counts as a wall.
+  // Real pages mention these words (and embed CAPTCHA widgets in forms); only a thin page counts as a wall.
   if (t.length > 2500 && (page.textChars ?? t.length) > 1500) return null;
+  try {
+    const frame = challengeFrame(parseHTML(page.html || '').document);
+    if (frame) return frame;
+  } catch { /* unparseable html: fall through to the text patterns */ }
+  if (!t) return null;
   for (const [re, msg] of WALL_PATTERNS) if (re.test(t)) return msg;
   return null;
 }
@@ -416,12 +473,22 @@ async function fallbackSearch(query, reason) {
   return { ...res, sources: `${res.sources || 'HTTP search'} (fallback: ${reason})`, fallback: reason };
 }
 
-async function fallbackFetch(url, reason) {
+async function fallbackFetch(url, reason, page = null) {
   console.warn(`[browser_fetch] falling back to HTTP fetch: ${reason}`);
   logToolCall('web_fetch', 'browser_fallback', { args: { url }, rawResult: reason });
   try {
     const res = await runWebFetch(url);
-    return { ...res, _tier: `${res._tier || 'http'} (fallback: ${reason})`, fallback: reason };
+    const out = { ...res, _tier: `${res._tier || 'http'} (fallback: ${reason})`, fallback: reason };
+    if (looksLikeLoginPage(res)) {
+      // The fallback has no browser session. A sign-in page here is a property of the fallback,
+      // not of the user's login state, and the model must not report it as one.
+      out.loginWall = true;
+      out.note = 'This sign-in page came from the HTTP fallback, which has no browser cookies. It is NOT evidence that the user is logged out. '
+        + (page?.title
+          ? `The user's browser did load this URL and reached "${page.title}" (${page.textChars || 0} chars of visible text); its content could not be extracted (${reason}).`
+          : `The browser could not load the page this time (${reason}); retry later rather than asking the user to sign in.`);
+    }
+    return out;
   } catch (err) {
     // Keep the browser-side reason visible even when the HTTP path fails too.
     return { url, error: `HTTP fallback failed: ${err.message}`, fallback: reason };
@@ -437,6 +504,11 @@ export default {
   configUi: () => ({
     engineMode: 'single', // radio: one engine at a time
     availableEngines: Object.entries(ENGINES).map(([id, e]) => ({ id, label: e.label, available: true })),
+    fields: [
+      // Parser work needs the real markup the extension saw; the fetch-thin dump only covers pages
+      // the extractor failed on outright, not pages it read badly (headlines missing, player junk).
+      { key: 'dumpPages', label: 'Save every fetched page to logs/browser-debug/', type: 'boolean', note: 'For extractor debugging. Files are gitignored; turn off when done.' },
+    ],
   }),
   status: {
     label: 'Browser',
@@ -513,21 +585,39 @@ export default {
         }
 
         try {
-          const page = await fetchWithRetry(url, {}); // extension defaults: 0.8 s settle, +3 s, +4 s while walled/thin
+          const page = await fetchWithRetry(url, {}); // extension defaults: settle, thin retries, then read until the text stops growing
+          const secs = Math.round((page.ms || 0) / 1000);
+          if ((await readPluginConfig()).browser?.dumpPages) {
+            let host = 'page'; try { host = new URL(page.url || url).hostname.replace(/^www\./, ''); } catch {}
+            const saved = dumpPage(`fetch-${host}`, page);
+            if (saved) console.log(`[browser_fetch] dumpPages: saved ${saved}`);
+          }
           if (page.wall) {
             const snippet = (page.wallText || '').slice(0, 80);
-            return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${Math.round((page.ms || 0) / 1000)}s ("${snippet}")`);
+            return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${secs}s ("${snippet}")`, page);
           }
           const walled = detectWall(page);
-          if (walled) return fallbackFetch(url, `${walled} (after ${Math.round((page.ms || 0) / 1000)}s)`);
+          if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page);
           const { markdown, title } = htmlToMarkdown(page.html, page.url || url);
-          if ((markdown || '').trim().length < MIN_USEFUL_CHARS) {
-            // Keep the page: a rendered DOM that the extractor cannot read is a parser problem,
-            // and the reason alone (0 chars, textChars 12K) cannot be debugged after the fact.
-            const saved = dumpPage('fetch-thin', page);
-            return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content after ${Math.round((page.ms || 0) / 1000)}s (page had ${page.textChars ?? '?'} chars of visible text${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''})`);
+          const tier = `extension (${page.ms} ms${page.reads > 1 ? `, ${page.reads} reads` : ''})`;
+          if ((markdown || '').trim().length >= MIN_USEFUL_CHARS) {
+            return { url: page.url || url, title: title || page.title, content: markdown, _tier: tier };
           }
-          return { url: page.url || url, title: title || page.title, content: markdown, _tier: `extension (${page.ms} ms)` };
+          // The extractor found nothing in a page Chrome rendered. Keep the page: this is a parser
+          // problem and the reason alone cannot be debugged after the fact.
+          const saved = dumpPage('fetch-thin', page);
+          const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
+          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? visibleText(page.html) : '';
+          if (text.length >= MIN_USEFUL_CHARS) {
+            // Chrome saw a real page. Hand over its visible text; never swap the user's session
+            // for a cookie-less re-fetch of a page that already loaded.
+            return {
+              url: page.url || url, title: page.title || title, content: text,
+              _tier: `${tier}, visible text: article extraction found nothing (${detail})`,
+              note: 'Content is the page\'s visible text in reading order, not an extracted article.',
+            };
+          }
+          return fallbackFetch(url, `browser returned ${(markdown || '').trim().length} chars of content after ${secs}s (${detail})`, page);
         } catch (err) {
           const res = await fallbackFetch(url, err.message);
           if (res.error) recentFetchFailures.set(url, { reason: err.message, at: Date.now() });

@@ -39,7 +39,7 @@ async function runTest() {
   line('Title', r.title || '(none)');
   line('Final URL', r.url);
   line('Loaded in', `${r.ms} ms`);
-  line('Text', `${r.textChars} chars · HTML ${r.htmlChars} chars`);
+  line('Text', `${r.textChars} chars · HTML ${r.htmlChars} chars (${r.sentChars} sent after stripping scripts/styles) · ${r.reads} read${r.reads === 1 ? '' : 's'}`);
   line('Bot wall', r.wall ? `YES — "${r.wallText}"` : 'no');
   line('Snippet', r.textSnippet || '');
 }

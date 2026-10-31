@@ -76,7 +76,16 @@ kept) and `web_search` / `web_fetch` are served through a Chrome extension inste
   CAPTCHA/consent detection, and a linkedom parser per engine — DuckDuckGo, Brave, Bing, Google. One
   engine is active at a time (radio on the Plugins card).
 - `web_fetch` reuses the HTML→Markdown pipeline below. Bot-challenge shells ("enable JS", "just a
-  moment") are re-read in the same tab after 0.8 s, +3 s, +4 s before giving up.
+  moment") and thin pages (under 200 chars of text) are re-read in the same tab after 0.8 s, +3 s,
+  +4 s before giving up; a page with real text is then probed every 0.6 s (up to 6 s) until its
+  visible text stops growing, so progressively rendered apps are read after their content arrives.
+  The extension strips script/style/noscript/template/svg before sending (the server discards them
+  anyway; on Gmail and NYT they were 75–100% of the bytes), so the 4M-char cap only bites on content.
+- **A rendered page never falls back to HTTP.** If the extractor finds nothing in a page Chrome
+  reported ≥500 chars of visible text for, `web_fetch` returns that visible text (one line per
+  block) instead of re-fetching without the browser's cookies — which on a signed-in site returns a
+  login page. When the HTTP fallback does run and its result reads like a sign-in page, the result
+  carries `loginWall: true` and a `note` saying it is not evidence the user is logged out.
 - **The HTTP path is the fallback.** No extension connected, timeout (`BROWSER_SEARCH_TIMEOUT_MS`,
   default 25 s), engine failure or empty results, or a persisting wall → `runWebSearch()` /
   `runWebFetch()` from `plugin-web.js` run with the saved Web Search & Fetch settings, and the
