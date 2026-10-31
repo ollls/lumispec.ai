@@ -86,6 +86,14 @@ kept) and `web_search` / `web_fetch` are served through a Chrome extension inste
   extension sends Chrome's `innerText` (hidden labels and images excluded) and `renderedText()`
   normalizes it; the HTTP tier approximates from markup and says so in `note`. Built for web
   applications — a Gmail inbox row is ~100 chars in text view versus ~500 as markdown.
+- **Reading the user's own tabs (Tab Fetch, `docs/TAB_FETCH.md`).** Off by default. With "Let the
+  assistant read my open tabs" on, `browser_tabs` lists the open web tabs and `web_fetch { tab }`
+  reads one in place — `"active"`, an id, or a host/title fragment that matches exactly one tab;
+  several matches make the model ask. Each read asks for approval unless "Confirm before reading a
+  tab" is off; autorun never bypasses it. Nothing is navigated, clicked or closed. A fetch of an
+  address already open reads that tab instead of loading it again; a hidden fetch on a host the
+  user has open carries their tabs as a hint (or stops, with "Never open hidden tabs on sites I have
+  open"). Extension 0.7.0+.
 - **A rendered page never falls back to HTTP.** If the extractor finds nothing in a page Chrome
   reported ≥500 chars of visible text for, `web_fetch` returns that visible text (one line per
   block) instead of re-fetching without the browser's cookies — which on a signed-in site returns a

@@ -143,7 +143,28 @@ async function runInstallAction(id) {
   return { error: `Unknown action: ${id}` };
 }
 
-const DEFAULTS = { enabled: false, engines: ['duckduckgo'], dumpPages: false };
+const DEFAULTS = {
+  enabled: false, engines: ['duckduckgo'], dumpPages: false,
+  // Tab Fetch (docs/TAB_FETCH.md): the user's own open tabs, listed and read in place.
+  readTabs: false,          // master switch: browser_tabs + web_fetch { tab }
+  confirmTabReads: true,    // approve each read (autorun does not bypass it)
+  reuseOpenTab: true,       // a fetch of an address already open reads that tab instead of loading it again
+  protectOpenSites: false,  // never open hidden tabs on a host the user has open; return the tabs and stop
+};
+// Last-read Tab Fetch toggles, for the synchronous prompt()/cardStatus(); refreshed by
+// beforeCard() (the panel polls every 4 s while open) and by every tab-related tool call.
+let tabCfgCache = { readTabs: DEFAULTS.readTabs, confirmTabReads: DEFAULTS.confirmTabReads, reuseOpenTab: DEFAULTS.reuseOpenTab, protectOpenSites: DEFAULTS.protectOpenSites };
+async function tabConfig() {
+  const b = (await readPluginConfig()).browser || {};
+  tabCfgCache = {
+    readTabs: typeof b.readTabs === 'boolean' ? b.readTabs : DEFAULTS.readTabs,
+    confirmTabReads: typeof b.confirmTabReads === 'boolean' ? b.confirmTabReads : DEFAULTS.confirmTabReads,
+    reuseOpenTab: typeof b.reuseOpenTab === 'boolean' ? b.reuseOpenTab : DEFAULTS.reuseOpenTab,
+    protectOpenSites: typeof b.protectOpenSites === 'boolean' ? b.protectOpenSites : DEFAULTS.protectOpenSites,
+  };
+  return tabCfgCache;
+}
+tabConfig().catch(() => {});
 let cardFetchMaxChars = FETCH_MAX_CHARS; // refreshed by beforeCard() for the (sync) card descriptor
 const RESULT_LIMIT = 8;
 const MIN_USEFUL_CHARS = 200;
@@ -182,6 +203,98 @@ function recentFailure(url) {
   if (!e) return null;
   if (Date.now() - e.at > RECENT_FAILURE_TTL_MS) { recentFetchFailures.delete(url); return null; }
   return e;
+}
+
+// ── Tab Fetch helpers (pure; unit-tested in test/tabFetch.test.js) ──────────────────────
+
+const TAB_FETCH_OFF = 'Reading your open tabs is off — enable "Let the assistant read my open tabs" on the Browser Search card.';
+
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
+
+/** The app's own UI, which must never be read as "the active tab". */
+export function isAppUrl(u, port = config.port) {
+  try {
+    const x = new URL(u);
+    if (!/^https?:$/.test(x.protocol)) return false;
+    const localHost = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(x.hostname);
+    const p = x.port || (x.protocol === 'https:' ? '443' : '80');
+    return localHost && String(p) === String(port);
+  } catch { return false; }
+}
+
+/** Address identity for "already open": scheme + host (no www) + path (no trailing slash) + hash; tracking params dropped, other query params kept. */
+export function normalizeUrlForReuse(u) {
+  try {
+    const x = new URL(u);
+    const params = [...x.searchParams.entries()].filter(([k]) => !/^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$|ref$|source$|mod$|iid$)/i.test(k));
+    params.sort(([a], [b]) => a.localeCompare(b));
+    const q = params.length ? '?' + params.map(([k, v]) => `${k}=${v}`).join('&') : '';
+    return `${x.protocol}//${hostOf(u)}${x.pathname.replace(/\/+$/, '') || '/'}${q}${x.hash || ''}`;
+  } catch { return String(u || ''); }
+}
+
+/** What the model gets per tab: no megabyte URLs, times as ISO. */
+export function tabSummary(t) {
+  let url = t.url || '';
+  try { const x = new URL(url); if (x.search.length > 80) url = `${x.origin}${x.pathname}${x.hash || ''} (query omitted)`; } catch {}
+  return {
+    id: t.id, title: t.title || '(untitled)', host: hostOf(t.url), url,
+    current: !!t.current, discarded: !!t.discarded || undefined,
+    lastAccessed: Number.isFinite(t.lastAccessed) ? new Date(t.lastAccessed).toISOString() : undefined,
+  };
+}
+
+/**
+ * Resolve a `tab` argument against the user's open tabs. One match reads; zero or several ask.
+ *   "active"  → the current tab of the focused window (never the app's own UI)
+ *   number    → by id (or a numeric string)
+ *   string    → case-insensitive host suffix, or substring of title or URL; exactly one must match
+ * Returns { tab } or { error, candidates? }.
+ */
+export function resolveTab(spec, tabs, { port = config.port } = {}) {
+  const list = Array.isArray(tabs) ? tabs : [];
+  if (list.length === 0) return { error: 'No readable web tabs are open in the browser.' };
+  const raw = spec === true ? 'active' : String(spec ?? '').trim();
+  if (!raw) return { error: 'Which tab? Give "active", a tab id from browser_tabs, or a host/title fragment.', candidates: list.map(tabSummary) };
+  if (raw.toLowerCase() === 'active' || raw.toLowerCase() === 'current') {
+    const cur = list.find(t => t.current);
+    if (!cur) return { error: 'No focused web tab (the focused tab may be a chrome:// page). Ask which tab to read.', candidates: list.map(tabSummary) };
+    if (isAppUrl(cur.url, port)) return { error: 'The active tab is Lumispec itself. Ask the user which tab they mean.', candidates: list.filter(t => !isAppUrl(t.url, port)).map(tabSummary) };
+    return { tab: cur };
+  }
+  if (/^\d+$/.test(raw)) {
+    const byId = list.find(t => t.id === Number(raw));
+    return byId ? { tab: byId } : { error: `tab ${raw} is closed or not readable — list tabs again`, candidates: list.map(tabSummary) };
+  }
+  const needle = raw.toLowerCase();
+  const needleHost = hostOf(needle.includes('://') ? needle : `https://${needle}`);
+  const matches = list.filter(t => {
+    const host = hostOf(t.url);
+    const title = (t.title || '').toLowerCase();
+    const url = (t.url || '').toLowerCase();
+    return (needleHost && (host === needleHost || host.endsWith('.' + needleHost))) || title.includes(needle) || url.includes(needle);
+  }).filter(t => !isAppUrl(t.url, port));
+  if (matches.length === 1) return { tab: matches[0] };
+  if (matches.length === 0) return { error: `No open tab matches "${raw}". Ask the user to open it, or list tabs again.`, candidates: list.filter(t => !isAppUrl(t.url, port)).map(tabSummary) };
+  return { error: `${matches.length} open tabs match "${raw}" — ask the user which one.`, candidates: matches.map(tabSummary) };
+}
+
+/**
+ * What a hidden fetch should do about the user's open tabs on that host (rule 4).
+ * Returns { reuseTabId } | { stop, openTabs } | { openTabs, hint } | {}.
+ */
+export function hostCarePlan(url, tabs, cfg) {
+  const host = hostOf(url);
+  const same = (Array.isArray(tabs) ? tabs : []).filter(t => hostOf(t.url) === host && !isAppUrl(t.url));
+  if (!host || same.length === 0) return {};
+  const want = normalizeUrlForReuse(url);
+  const exact = same.find(t => !t.discarded && normalizeUrlForReuse(t.url) === want);
+  if (exact && cfg.reuseOpenTab) return { reuseTabId: exact.id, tab: exact };
+  const openTabs = same.map(tabSummary);
+  if (cfg.protectOpenSites) {
+    return { stop: true, openTabs, error: `You have ${host} open in your browser (${same.map(t => `"${t.title || t.url}"`).join(', ')}) and "Never open hidden tabs on sites I have open" is on. Ask which tab to read, then call web_fetch with "tab".` };
+  }
+  return { openTabs, hint: 'The user has this site open in their browser. Offer to read that tab (web_fetch with "tab") instead of loading more pages in the background.' };
 }
 
 // ── Parser helpers (linkedom) ───────────────────────
@@ -480,7 +593,7 @@ export default {
   description: 'Runs web_search and web_fetch in a hidden tab of your own Chrome via the Lumispec Browser Search extension. Replaces Web Search & Fetch while enabled; falls back to it when the extension is offline.',
   supersedes: ['web'],
   defaults: DEFAULTS,
-  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); },
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); await tabConfig(); },
   configUi: () => ({
     engineMode: 'single', // radio: one engine at a time
     availableEngines: Object.entries(ENGINES).map(([id, e]) => ({ id, label: e.label, available: true })),
@@ -491,6 +604,11 @@ export default {
       // Parser work needs the real markup the extension saw; the fetch-thin dump only covers pages
       // the extractor failed on outright, not pages it read badly (headlines missing, player junk).
       { key: 'dumpPages', label: 'Save every fetched page to logs/browser-debug/', type: 'boolean', note: 'For extractor debugging. Files are gitignored; turn off when done.' },
+      // Tab Fetch (docs/TAB_FETCH.md). Off by default: tab titles and URLs are personal.
+      { key: 'readTabs', label: 'Let the assistant read my open tabs', type: 'boolean', note: 'Lists tab titles and URLs to the model on request and lets it read a tab in place (never navigates, clicks or closes). Off: browser_tabs and web_fetch { tab } are unavailable.' },
+      { key: 'confirmTabReads', label: 'Confirm before reading a tab', type: 'boolean', note: 'Approve each read; the prompt names the tab. Autorun does not skip this.' },
+      { key: 'reuseOpenTab', label: 'Reuse my open tab when the address matches', type: 'boolean', note: 'A fetch of an address you already have open reads that tab instead of loading it again.' },
+      { key: 'protectOpenSites', label: 'Never open hidden tabs on sites I have open', type: 'boolean', note: 'Return your open tabs and stop instead of loading more pages on a site you are logged into.' },
     ],
   }),
   status: {
@@ -508,7 +626,10 @@ export default {
       if (extensionOutdated()) {
         return { ok: false, text: `Extension connected${detail} — outdated, this checkout ships v${SHIPPED_EXTENSION_VERSION}. Reload it at chrome://extensions.` };
       }
-      return { ok: true, text: `Extension connected${detail}` };
+      if (tabCfgCache.readTabs && !bridge.hasCapability('read')) {
+        return { ok: false, text: `Extension connected${detail} — Tab Fetch is on but this extension cannot read tabs; reload it at chrome://extensions.` };
+      }
+      return { ok: true, text: `Extension connected${detail}${tabCfgCache.readTabs ? ' · Tab Fetch on' : ''}` };
     }
     if (info.everConnected) {
       const seen = info.lastSeen ? new Date(info.lastSeen).toLocaleTimeString() : 'unknown';
@@ -523,16 +644,18 @@ export default {
   enableWarning: () => bridge.connected
     ? null
     : 'Browser Search is on, but no browser extension is connected. Install it with the buttons on this card and keep that browser open. Until it connects, searches fall back to Web Search & Fetch.',
-  routing: [
+  routing: () => [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
+    ...(tabCfgCache.readTabs ? ['- "look at this" / "my X tab" / "what I have open" / a site that needs the user\'s login → "browser_tabs", then "web_fetch" with "tab"'] : []),
   ],
-  prompt: `## Web Research (via browser extension)
+  prompt: () => `## Web Research (via browser extension)
 - web_search and web_fetch run inside the user's own browser; when the extension is offline they transparently fall back to HTTP and the result says so in "fallback".
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (login wall, CAPTCHA, empty content), use the search snippet descriptions directly.
 - web_fetch "view": "article" (default) for articles and news fronts; "text" for web applications (mail, calendars, dashboards, boards) or when "article" returns repeated fragments and image links — it is the page exactly as it reads on screen in the user's browser. Page through an application with its own date or filter URLs; invented pagination parameters are ignored.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
 - Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks. \`site:\` is fine.
-- Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
+- Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.${tabCfgCache.readTabs ? `
+- The user may already have the page open. When they say "look at this", "my X tab", "what I have open", or the site needs their login or something they did by hand (filters, scrolling, a CAPTCHA), call browser_tabs and read with web_fetch { tab }. "tab" is "active", a tab id, or a host/title fragment; exactly one tab must match — if several could, show them and ask which. Reading never navigates, clicks or closes the user's tab; if the information is on a page they have not opened, ask them to open it.${tabCfgCache.confirmTabReads ? ' Each tab read asks the user for approval; if they decline, do not retry.' : ''}` : ''}`,
   tools: {
     web_search: {
       description: 'Search the web through the user\'s browser (results page loaded in a hidden tab). Requires a "query" argument.',
@@ -555,11 +678,13 @@ export default {
       },
     },
     web_fetch: {
-      description: 'Fetch a web page through the user\'s browser. Requires a "url" argument. Optional "view": "article" (default) extracts the article or, on a front page, the list of headline links as markdown; "text" returns the page exactly as it reads on screen in the user\'s browser, one line per visual row, hidden labels and images excluded — use it for web applications (mail, calendars, dashboards, boards) and whenever an "article" result comes back as repeated fragments and image links. ALWAYS use after web_search to read the most relevant result before answering.',
-      parameters: { url: 'string', view: 'string' },
-      execute: async ({ url, view: viewArg }) => {
-        if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
+      description: 'Fetch a web page through the user\'s browser. Give a "url" to load the page in a hidden tab, OR a "tab" to read a tab the user already has open, in place: "tab" is "active" (the tab they are looking at), a tab id from browser_tabs, or a host/title fragment that matches exactly one open tab — use it when the user says "look at this", "my X tab", or when a site needs their login or something they did by hand (filters, scrolling, a CAPTCHA). Optional "view": "article" (default) extracts the article or, on a front page, the list of headline links as markdown; "text" returns the page exactly as it reads on screen in the user\'s browser, one line per visual row, hidden labels and images excluded — use it for web applications (mail, calendars, dashboards, boards) and whenever an "article" result comes back as repeated fragments and image links. ALWAYS use after web_search to read the most relevant result before answering.',
+      parameters: { url: 'string', view: 'string', tab: 'string' },
+      execute: async ({ url, view: viewArg, tab }, context) => {
         const view = viewArg === 'text' ? 'text' : 'article';
+        const wantsTab = tab !== undefined && tab !== null && tab !== '' && tab !== false;
+        if (wantsTab) return readUserTab({ spec: tab === true ? (url || 'active') : tab, url, view, context });
+        if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
         const offline = offlineReason();
         if (offline) return fallbackFetch(url, offline, null, view);
 
@@ -569,8 +694,29 @@ export default {
           return { url, error: `This URL already failed ${ago}s ago (${recent.reason}). Not retried — use another source or the search snippets.`, fallback: recent.reason, notRetried: true };
         }
 
+        // Rule 4 (docs/TAB_FETCH.md): a site the user has open is treated with care. Only when Tab
+        // Fetch is on — otherwise behaviour is exactly the v1.4.3 hidden fetch.
+        const fetchOpts = {};
+        let care = {};
+        const cfg = await tabConfig();
+        if (cfg.readTabs && bridge.hasCapability('tabs')) {
+          try {
+            care = hostCarePlan(url, await bridge.listTabs(), cfg);
+          } catch (err) {
+            console.warn(`[browser_fetch] could not list tabs for host care: ${err.message}`);
+            care = {};
+          }
+          if (care.stop) {
+            logToolCall('web_fetch', 'host_protected', { args: { url }, rawResult: care.openTabs });
+            return { url, error: care.error, openTabs: care.openTabs };
+          }
+          if (care.reuseTabId) fetchOpts.reuseTabId = care.reuseTabId;
+        }
+
+        let page = null;
+        let result;
         try {
-          const page = await fetchWithRetry(url, {}); // extension defaults: settle, thin retries, then read until the text stops growing
+          page = await fetchWithRetry(url, fetchOpts); // extension defaults: settle, thin retries, then read until the text stops growing
           const secs = Math.round((page.ms || 0) / 1000);
           if ((await readPluginConfig()).browser?.dumpPages) {
             let host = 'page'; try { host = new URL(page.url || url).hostname.replace(/^www\./, ''); } catch {}
@@ -584,43 +730,149 @@ export default {
           const walled = detectWall(page);
           if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page, view);
           const maxChars = await getFetchMaxChars();
-          const tier = `extension (${page.ms} ms${page.reads > 1 ? `, ${page.reads} reads` : ''})`;
-          if (view === 'text') {
-            // The page as laid out on screen. Extensions before v0.6.0 do not send innerText;
-            // approximate from the markup and say so.
-            const fromScreen = typeof page.text === 'string' && page.text.trim().length > 0;
-            const content = fromScreen ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars);
-            if (content.length >= MIN_USEFUL_CHARS) {
-              const out = { url: page.url || url, title: page.title, content, view: 'text', _tier: page.textSource === 'styleWalk' ? `${tier}, on-screen text by style walk (innerText had no layout)` : tier };
-              if (!fromScreen) out.note = 'Visible text approximated from the markup: the connected extension predates v0.6.0 and does not send the on-screen text. Reload it at chrome://extensions.';
-              return out;
+          const tier = page.reused
+            ? `extension (your open tab, read in place, ${page.ms} ms)`
+            : `extension (${page.ms} ms${page.reads > 1 ? `, ${page.reads} reads` : ''})`;
+          result = renderFetched(page, url, view, maxChars, tier);
+          if (!result) {
+            // The extractor found nothing in a page Chrome rendered. Keep the page: this is a parser
+            // problem and the reason alone cannot be debugged after the fact.
+            const saved = dumpPage('fetch-thin', page);
+            const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.domChars ? ` of ${page.domChars} in the DOM` : ''}${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
+            const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? (page.text ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars)) : '';
+            if (text.length >= MIN_USEFUL_CHARS) {
+              // Chrome saw a real page. Hand over its visible text; never swap the user's session
+              // for a cookie-less re-fetch of a page that already loaded.
+              result = {
+                url: page.url || url, title: page.title, content: text,
+                _tier: `${tier}, visible text: article extraction found nothing (${detail})`,
+                note: 'Content is the page\'s visible text in reading order, not an extracted article.',
+              };
+            } else if (page.reused) {
+              return { url, error: `Your open tab "${page.tab?.title || url}" has no readable text yet (${page.textChars || 0} chars on screen) — is it still loading? Not re-fetched, to keep your session untouched.`, source: 'tab', tab: page.tab ? tabSummary(page.tab) : undefined };
+            } else {
+              return fallbackFetch(url, `browser returned 0 chars of content after ${secs}s (${detail})`, page, view);
             }
           }
-          const { markdown, title } = htmlToMarkdown(page.html, page.url || url, { maxChars });
-          if ((markdown || '').trim().length >= MIN_USEFUL_CHARS) {
-            return { url: page.url || url, title: title || page.title, content: markdown, _tier: tier };
-          }
-          // The extractor found nothing in a page Chrome rendered. Keep the page: this is a parser
-          // problem and the reason alone cannot be debugged after the fact.
-          const saved = dumpPage('fetch-thin', page);
-          const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.domChars ? ` of ${page.domChars} in the DOM` : ''}${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
-          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? (page.text ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars)) : '';
-          if (text.length >= MIN_USEFUL_CHARS) {
-            // Chrome saw a real page. Hand over its visible text; never swap the user's session
-            // for a cookie-less re-fetch of a page that already loaded.
-            return {
-              url: page.url || url, title: page.title || title, content: text,
-              _tier: `${tier}, visible text: article extraction found nothing (${detail})`,
-              note: 'Content is the page\'s visible text in reading order, not an extracted article.',
-            };
-          }
-          return fallbackFetch(url, `browser returned ${(markdown || '').trim().length} chars of content after ${secs}s (${detail})`, page, view);
         } catch (err) {
           const res = await fallbackFetch(url, err.message, null, view);
           if (res.error) recentFetchFailures.set(url, { reason: err.message, at: Date.now() });
           return res;
         }
+        if (page?.reused) {
+          result.source = 'tab';
+          result.tab = page.tab ? tabSummary(page.tab) : undefined;
+          result.note = [result.note, 'Read from the tab you already had open, not reloaded — the page is as you left it.'].filter(Boolean).join(' ');
+          logToolCall('web_fetch', 'tab_reused', { args: { url }, rawResult: result.tab });
+        } else if (care.openTabs) {
+          result.openTabs = care.openTabs;
+          result.hint = care.hint;
+        }
+        return result;
+      },
+    },
+    browser_tabs: {
+      description: 'List the tabs the user has open in their browser: id, title, host, URL, which one is current. Call it before web_fetch with "tab" when the user says "look at this", "my X tab", or a site needs their login or something they did by hand. Exactly one tab must match what the user meant; if several could, show them and ask. Only available while the user has enabled "Let the assistant read my open tabs" on the Browser Search card.',
+      parameters: {},
+      execute: async () => {
+        const cfg = await tabConfig();
+        if (!cfg.readTabs) return { error: TAB_FETCH_OFF };
+        const offline = offlineReason();
+        if (offline) return { error: `Cannot list tabs: ${offline}` };
+        if (!bridge.hasCapability('tabs')) return { error: 'The connected extension predates Tab Fetch — reload it at chrome://extensions.' };
+        let tabs;
+        try { tabs = await bridge.listTabs(); } catch (err) { return { error: `Cannot list tabs: ${err.message}` }; }
+        const visible = tabs.filter(t => !isAppUrl(t.url));
+        const current = tabs.find(t => t.current) || null;
+        const out = {
+          tabs: visible.map(tabSummary),
+          current: current && !isAppUrl(current.url) ? current.id : null,
+          activeIsLumispec: !!(current && isAppUrl(current.url)),
+          note: 'Read one with web_fetch { tab: <id> } (or "active"). One match reads; if several tabs could be the one the user means, ask.',
+        };
+        if (visible.length === 0) out.note = 'No readable web tabs are open (besides Lumispec itself).';
+        out._markdown = ['| Tab | Host | Id | |', '|---|---|---|---|', ...visible.map(t => `| ${(t.title || '(untitled)').replace(/\|/g, '\\|').slice(0, 70)} | ${hostOf(t.url)} | ${t.id} | ${t.current ? '▶ current' : ''}${t.discarded ? ' (suspended)' : ''} |`)].join('\n');
+        logToolCall('browser_tabs', 'call', { args: {}, rawResult: { count: visible.length, current: out.current } });
+        return out;
       },
     },
   },
 };
+
+// ── Tab Fetch: read a user's tab in place ─────────────────────────────────────────────────
+
+/**
+ * Turn a fetched/read page into the tool result for the requested view, or null when the
+ * extractor found under MIN_USEFUL_CHARS (caller decides what that means).
+ */
+function renderFetched(page, url, view, maxChars, tier) {
+  if (view === 'text') {
+    // The page as laid out on screen. Extensions before v0.6.0 do not send innerText;
+    // approximate from the markup and say so.
+    const fromScreen = typeof page.text === 'string' && page.text.trim().length > 0;
+    const content = fromScreen ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars);
+    if (content.length >= MIN_USEFUL_CHARS) {
+      const out = { url: page.url || url, title: page.title, content, view: 'text', _tier: page.textSource === 'styleWalk' ? `${tier}, on-screen text by style walk (innerText had no layout)` : tier };
+      if (!fromScreen) out.note = 'Visible text approximated from the markup: the connected extension predates v0.6.0 and does not send the on-screen text. Reload it at chrome://extensions.';
+      return out;
+    }
+  }
+  const { markdown, title } = htmlToMarkdown(page.html, page.url || url, { maxChars });
+  if ((markdown || '').trim().length >= MIN_USEFUL_CHARS) {
+    return { url: page.url || url, title: title || page.title, content: markdown, _tier: tier };
+  }
+  return null;
+}
+
+/**
+ * web_fetch { tab }: resolve, confirm, read in place. Never navigates, never falls back to HTTP
+ * (there is no URL-driven fetch implied by reading a tab). Exported for tests with a fake bridge.
+ */
+export async function readUserTab({ spec, url, view, context, deps = {} }) {
+  const br = deps.bridge || bridge;
+  const cfg = deps.cfg || await tabConfig();
+  const maxChars = deps.maxChars ?? await getFetchMaxChars();
+  if (!cfg.readTabs) return { error: TAB_FETCH_OFF };
+  if (!br.connected) return { error: `Cannot read a tab: ${deps.offline || offlineReason() || 'browser extension not connected'}` };
+  if (!br.hasCapability('read')) return { error: 'The connected extension predates Tab Fetch — reload it at chrome://extensions.' };
+
+  let tabs;
+  try { tabs = await br.listTabs(); } catch (err) { return { error: `Cannot list tabs: ${err.message}` }; }
+  const resolved = resolveTab(spec ?? url, tabs, { port: deps.port });
+  if (!resolved.tab) {
+    const out = { error: resolved.error };
+    if (resolved.candidates) out.tabs = resolved.candidates;
+    return out;
+  }
+  const t = resolved.tab;
+  const summary = tabSummary(t);
+
+  if (cfg.confirmTabReads) {
+    // Autorun deliberately does NOT bypass this (same stance as source_project): the risk case is
+    // the model choosing a tab on its own, which is exactly when a pipeline runs unattended.
+    if (!context?.confirmFn) return { error: 'Reading a tab needs your approval, and this run has no confirmation channel. Turn off "Confirm before reading a tab" on the Browser Search card, or ask in chat.' };
+    const approved = await context.confirmFn(`Read your open browser tab: "${summary.title}" (${summary.host})`);
+    if (!approved) return { error: `You declined to let the assistant read the tab "${summary.title}". Nothing was read.`, declined: true, tab: summary };
+  }
+
+  let page;
+  try { page = await br.readTab(t.id, { maxChars }); } catch (err) {
+    return { error: `Could not read the tab "${summary.title}": ${err.message}`, tab: summary };
+  }
+  const tier = `extension (your open tab, read in place, ${page.ms} ms)`;
+  let result = renderFetched(page, t.url, view, maxChars, tier);
+  if (!result) {
+    const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? (page.text ? renderedText(page.text, maxChars) : visibleText(page.html, maxChars)) : '';
+    if (text.length >= MIN_USEFUL_CHARS) {
+      result = { url: page.url || t.url, title: page.title || t.title, content: text, _tier: `${tier}, visible text: article extraction found nothing`, note: 'Content is the page\'s visible text in reading order, not an extracted article.' };
+    } else {
+      return { error: `Your tab "${summary.title}" has no readable text (${page.textChars || 0} chars on screen) — is it still loading, or a blank page? Nothing was re-fetched.`, source: 'tab', tab: summary };
+    }
+  }
+  result.source = 'tab';
+  result.tab = { ...summary, title: page.tab?.title || summary.title };
+  result.note = [result.note, 'Read from the user\'s open tab, in place: the page is as they left it (see tab.lastAccessed). Nothing was navigated, clicked or closed.'].filter(Boolean).join(' ');
+  logToolCall('web_fetch', 'tab_read', { args: { tab: String(spec ?? url), view }, rawResult: { tab: result.tab, chars: result.content.length, textSource: page.textSource } });
+  return result;
+}
+

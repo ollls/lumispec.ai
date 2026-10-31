@@ -8,16 +8,27 @@
 // requires reloading this extension.
 //
 // Protocol (JSON text frames over one WebSocket):
-//   ext → srv  { type: 'hello', version, capabilities: ['fetch'], ua }
-//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays? }
-//   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read'], ua }
+//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId? }
+//   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms, openTabs?, tab?, reused? }
 //     html is the live DOM minus script/style/noscript/template/svg (the server discards those
 //     anyway, and on Gmail / NYT they were 75-100% of the bytes); htmlChars is the raw size.
 //     text is document.body.innerText — the page as laid out on screen, hidden elements excluded,
 //     one line per visual row — which backs web_fetch's view: "text" (web apps such as mail or
 //     dashboards, whose markup is mostly machinery and hidden labels).
+//   srv → ext  { type: 'tabs', id }
+//   ext → srv  { type: 'result', id, tabs: [{ id, windowId, active, current, title, url, lastAccessed, discarded }] }
+//   srv → ext  { type: 'read', id, tabId, maxChars? }
+//   ext → srv  { type: 'result', id, page: { …same as fetch… }, tab: { id, windowId, active, current, title, url, lastAccessed }, ms }
 //   ext → srv  { type: 'error', id, message }
 //   srv → ext  { type: 'ping', id }   →   ext → srv  { type: 'pong', id }
+//
+// Tab Fetch (docs/TAB_FETCH.md): `tabs` lists the user's own open tabs and `read` reads one of
+// them in place — the user prepares the page (login, filters, scrolling), the model reads it.
+// Reading never navigates, reloads, activates or closes a tab. The extension's own transient
+// tabs are never listed or readable. `fetch { openTabs: true }` additionally reports the user's
+// open tabs on the requested host, and `fetch { reuseTabId }` reads that tab instead of opening
+// a hidden one; whether to do either is the server's policy (card toggles), not the extension's.
 
 const DEFAULTS = {
   serverUrl: 'ws://localhost:3000/ws/browser',
@@ -158,6 +169,9 @@ function waitForTabLoad(tabId, timeoutMs, minChars) {
 
 let tabChain = Promise.resolve();
 
+// Tabs this extension created and will close. Never listed, never readable as a user tab.
+const ownTabs = new Set();
+
 /** Serialized: one hidden tab at a time keeps us under site rate limits. */
 function serialized(fn) {
   const p = tabChain.then(fn, fn);
@@ -277,6 +291,7 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
     const started = Date.now();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const tab = await chrome.tabs.create({ url, active: false });
+    ownTabs.add(tab.id);
     const run = async (func, ...args) => {
       const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args });
       if (!result) throw new Error('Page script returned nothing');
@@ -315,8 +330,72 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
       page.reads = reads;
       return { page, ms: Date.now() - started };
     } finally {
+      ownTabs.delete(tab.id);
       chrome.tabs.remove(tab.id).catch(() => {});
     }
+  });
+}
+
+// ── The user's own tabs ─────────────────────────────
+
+const isWebUrl = (u) => /^https?:\/\//i.test(u || '');
+
+/** The user's open web tabs, this extension's own excluded. `current` = active tab of the focused window. */
+async function listTabs() {
+  const all = await chrome.tabs.query({});
+  let currentId = null;
+  try {
+    const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    currentId = cur?.id ?? null;
+  } catch {}
+  return all
+    .filter(t => Number.isFinite(t.id) && !ownTabs.has(t.id) && isWebUrl(t.url) && !t.incognito)
+    .map(t => ({
+      id: t.id,
+      windowId: t.windowId,
+      active: !!t.active,
+      current: t.id === currentId,
+      title: t.title || '',
+      url: t.url || '',
+      lastAccessed: Number.isFinite(t.lastAccessed) ? Math.round(t.lastAccessed) : null, // Chrome 121+
+      discarded: !!t.discarded,
+    }));
+}
+
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
+
+/** The user's open tabs on the same host as `url` (own tabs excluded). */
+async function openTabsOnHost(url) {
+  const host = hostOf(url);
+  if (!host) return [];
+  return (await listTabs()).filter(t => hostOf(t.url) === host);
+}
+
+/**
+ * Read one of the user's tabs in place: no navigation, no reload, no activation, no close.
+ * The tab is in whatever state the user left it — that is the point.
+ */
+function readTab(tabId, { maxChars = FETCH_MAX_CHARS_DEFAULT } = {}) {
+  return serialized(async () => {
+    const started = Date.now();
+    if (!Number.isFinite(tabId)) throw new Error('Invalid tab id');
+    if (ownTabs.has(tabId)) throw new Error('That tab belongs to the extension, not the user');
+    let tab;
+    try { tab = await chrome.tabs.get(tabId); } catch { throw new Error('tab closed'); }
+    if (!isWebUrl(tab.url)) throw new Error('That tab is not a web page (chrome:// or extension page)');
+    if (tab.incognito) throw new Error('Incognito tabs are not read');
+    if (tab.discarded) throw new Error('That tab was suspended by Chrome (memory saver) — click it once to reload it, then retry');
+    const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPage, args: [maxChars, FETCH_TEXT_MAX_CHARS] });
+    if (!result) throw new Error('Page script returned nothing');
+    if (result.error) throw new Error(result.error);
+    result.reads = 1;
+    let current = false;
+    try { const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); current = cur?.id === tabId; } catch {}
+    return {
+      page: result,
+      tab: { id: tab.id, windowId: tab.windowId, active: !!tab.active, current, title: tab.title || '', url: tab.url || '', lastAccessed: Number.isFinite(tab.lastAccessed) ? Math.round(tab.lastAccessed) : null },
+      ms: Date.now() - started,
+    };
   });
 }
 
@@ -389,7 +468,7 @@ async function connect() {
     send({
       type: 'hello',
       version: chrome.runtime.getManifest().version,
-      capabilities: ['fetch'],
+      capabilities: ['fetch', 'tabs', 'read'],
       ua: navigator.userAgent,
     });
   };
@@ -429,8 +508,35 @@ async function handleServerMessage(raw) {
         if (Number.isFinite(msg.maxChars)) opts.maxChars = msg.maxChars;
         if (Number.isFinite(msg.settleMs)) opts.settleMs = msg.settleMs;
         if (Array.isArray(msg.retryDelays)) opts.retryDelays = msg.retryDelays;
+        if (Number.isFinite(msg.reuseTabId)) {
+          // The server found the address already open in a user tab: read it in place.
+          const { page, tab, ms } = await readTab(msg.reuseTabId, opts);
+          send({ type: 'result', id: msg.id, page, ms, tab, reused: true });
+          return;
+        }
+        const reply = { type: 'result', id: msg.id };
+        if (msg.openTabs === true) { try { reply.openTabs = await openTabsOnHost(msg.url); } catch { reply.openTabs = []; } }
         const { page, ms } = await runFetch(msg.url, opts);
-        send({ type: 'result', id: msg.id, page, ms });
+        send({ ...reply, page, ms });
+      } catch (e) {
+        send({ type: 'error', id: msg.id, message: e.message });
+      }
+      return;
+    }
+    case 'tabs': {
+      try {
+        send({ type: 'result', id: msg.id, tabs: await listTabs() });
+      } catch (e) {
+        send({ type: 'error', id: msg.id, message: e.message });
+      }
+      return;
+    }
+    case 'read': {
+      try {
+        const opts = {};
+        if (Number.isFinite(msg.maxChars)) opts.maxChars = msg.maxChars;
+        const { page, tab, ms } = await readTab(msg.tabId, opts);
+        send({ type: 'result', id: msg.id, page, tab, ms });
       } catch (e) {
         send({ type: 'error', id: msg.id, message: e.message });
       }
@@ -462,6 +568,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
         reconnectDelay = RECONNECT_MIN_MS;
         await connect();
         reply({ ok: true });
+        return;
+      case 'tabs':
+        try {
+          const tabs = await listTabs();
+          reply({ ok: true, tabs: tabs.map(t => ({ id: t.id, title: t.title, url: t.url, current: t.current, discarded: t.discarded })) });
+        } catch (e) {
+          reply({ error: e.message });
+        }
+        return;
+      case 'readCurrent':
+        try {
+          const tabs = await listTabs();
+          const cur = tabs.find(t => t.current);
+          if (!cur) { reply({ error: 'No current web tab (the focused tab is a chrome:// page or the popup itself)' }); return; }
+          const { page, tab, ms } = await readTab(cur.id);
+          reply({ ok: true, ms, title: tab.title, url: tab.url, textChars: page.textChars, domChars: page.domChars, textSource: page.textSource, htmlChars: page.htmlChars, sentChars: page.html.length, textSnippet: page.textSnippet });
+        } catch (e) {
+          reply({ error: e.message });
+        }
         return;
       case 'test':
         try {
