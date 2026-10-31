@@ -522,7 +522,10 @@ export default {
           if (walled) return fallbackFetch(url, `${walled} (after ${Math.round((page.ms || 0) / 1000)}s)`);
           const { markdown, title } = htmlToMarkdown(page.html);
           if ((markdown || '').trim().length < MIN_USEFUL_CHARS) {
-            return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content after ${Math.round((page.ms || 0) / 1000)}s`);
+            // Keep the page: a rendered DOM that the extractor cannot read is a parser problem,
+            // and the reason alone (0 chars, textChars 12K) cannot be debugged after the fact.
+            const saved = dumpPage('fetch-thin', page);
+            return fallbackFetch(url, `browser returned ${markdown.trim().length} chars of content after ${Math.round((page.ms || 0) / 1000)}s (page had ${page.textChars ?? '?'} chars of visible text${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''})`);
           }
           return { url: page.url || url, title: title || page.title, content: markdown, _tier: `extension (${page.ms} ms)` };
         } catch (err) {

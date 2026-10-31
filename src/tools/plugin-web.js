@@ -283,19 +283,27 @@ export function htmlToMarkdown(html) {
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   turndown.remove(['script', 'style', 'noscript']);
 
+  // <template> contents are inert markup, but linkedom reports them as text, so Readability
+  // can score one template as the whole page and Turndown then renders it as nothing. The NYT
+  // homepage carries a 100K-char interactive this way (2026-10-31: 0 chars from a page with
+  // 130K chars of body text). Drop them before anything scores the page.
+  document.querySelectorAll('template').forEach(el => el.remove());
+
   const article = new Readability(document).parse();
 
-  let markdown, title;
+  let markdown = '', title = '';
   if (article && article.content) {
     markdown = turndown.turndown(article.content);
     title = article.title;
-  } else {
+  }
+  // Readability found nothing, or picked something Turndown cannot render: read the whole body.
+  if (!markdown.trim()) {
     const { document: doc2 } = parseHTML(html);
-    for (const sel of ['script', 'style', 'noscript', 'nav', 'footer', 'header', 'aside']) {
+    for (const sel of ['script', 'style', 'noscript', 'template', 'nav', 'footer', 'header', 'aside']) {
       doc2.querySelectorAll(sel).forEach(el => el.remove());
     }
     markdown = turndown.turndown(doc2.toString());
-    title = doc2.querySelector('title')?.textContent || '';
+    title = title || doc2.querySelector('title')?.textContent || '';
   }
 
   const maxLen = 4000;
