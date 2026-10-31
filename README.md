@@ -3,7 +3,7 @@
 > A local-first AI workbench. Chat with your own LLM, point it at your codebase, your portfolio, the web, your travel plans — and let it do the work end to end.
 
 <p align="center">
-  <img src="Screenshot1.png" alt="LLM Workbench showing the World News Dashboard applet built from eight outlets fetched through Browser Search">
+  <img src="screenshot-dashboard.png" alt="LLM Workbench showing the World News Dashboard applet built from eight outlets fetched through Browser Search">
   <br><sub>A task pipeline fetches eight outlets through Browser Search (<code>web_fetch</code> in a hidden tab of your own Chrome), and the model renders all 115 stories as an inline HTML applet with source badges, topic tags and filter chips.</sub>
 </p>
 
