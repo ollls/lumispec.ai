@@ -236,7 +236,7 @@ const MIN_USEFUL_CHARS = 200;
 
 async function fetchTier(tier, url) {
   const fetcher = FETCHERS[tier] || fetchRegular;
-  const { markdown, title } = htmlToMarkdown(await fetcher(url));
+  const { markdown, title } = htmlToMarkdown(await fetcher(url), url, { maxChars: await getFetchMaxChars() });
   return { url, title, content: markdown, _tier: tier };
 }
 
@@ -278,29 +278,137 @@ async function fetchBrowser(url) {
   }
 }
 
-export function htmlToMarkdown(html) {
+// Index pages (homepages, section fronts, date archives) defeat Readability: every headline is a
+// paragraph wrapped in a link, and Readability prunes link-dense blocks as "related links", so it
+// returns the story summaries with every headline missing (NYT homepage 2026-10-31: 0 of 91
+// headlines kept; Guardian /world/<date>: 0 of 30). The detector measures that loss directly: a
+// page counts as an index when headline-length link text is at least 20% of its text, under 30%
+// of those links survive in Readability's output, AND Readability kept under 70% of the page text.
+// Index pages measured 3-46% kept (a summary-rich front with no chrome reaches 60%); article pages
+// measured 2-6% link text with 76-94% kept; the homepages Readability handles well
+// (BBC, Guardian front, HN) kept 51-96% of their links. The share bound was 0.3 at first, and
+// Reuters sat on it: 0.31 on a light render, 0.24 once more summaries had loaded (0 of 90
+// headlines kept either way), so the same page flipped between the two renderings run to run.
+// Content handed to the model per fetch. 4000 since the March refactor. Configurable since
+// 2026-10-31, when a news-digest pipeline lost a headline per source to the cut: the saved value
+// lives on this group's card ("Max chars per fetched page") and the Browser Search card edits the
+// same entry; getFetchMaxChars() is what both fetch paths read. The default stays 4000: in chat
+// every fetch result sits in the prompt until the old-tool-result trim, so a bigger cap reaches
+// the context wind-down sooner; pipeline steps are isolated and can afford more.
+export const FETCH_MAX_CHARS = 4000;
+export const FETCH_MAX_CHARS_RANGE = [1000, 50000];
+let cardFetchMaxChars = FETCH_MAX_CHARS; // refreshed by beforeCard() for the (sync) card descriptor
+
+/** The configured per-fetch cap, clamped; the default when nothing is saved. */
+export async function getFetchMaxChars() {
+  const cfg = await readPluginConfig();
+  const n = Number(cfg.web?.fetchMaxChars);
+  if (!Number.isFinite(n)) return FETCH_MAX_CHARS;
+  return Math.min(FETCH_MAX_CHARS_RANGE[1], Math.max(FETCH_MAX_CHARS_RANGE[0], Math.round(n)));
+}
+
+/** Field descriptor for the cap, shared by the web and browser cards (`group` targets the stored entry). */
+export function fetchMaxCharsField(value) {
+  return {
+    key: 'fetchMaxChars', group: 'web', value, label: 'Max chars per fetched page', type: 'number',
+    min: FETCH_MAX_CHARS_RANGE[0], max: FETCH_MAX_CHARS_RANGE[1], step: 500,
+    note: '≈1 token per 4 chars, kept in context for the rest of the chat. Raise it for pipelines (steps are isolated); keep it modest for long chats. Shared by Web Search & Fetch and Browser Search.',
+  };
+}
+const INDEX_MIN_LINK_CHARS = 25;   // shorter anchors are nav, bylines, "Read more"
+const INDEX_MIN_LINK_SHARE = 0.2;
+const INDEX_MAX_LINKS_KEPT = 0.3;
+const INDEX_MAX_TEXT_KEPT = 0.7;   // guards short articles with big related-link rails
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+/** Headline-length link texts of a document and their share of its text. Call before Readability (it mutates). */
+function longLinks(document) {
+  const total = norm(document.documentElement?.textContent).length;
+  const texts = new Set();
+  let inLinks = 0;
+  for (const a of document.querySelectorAll('a[href]')) {
+    const t = norm(a.textContent);
+    if (t.length >= INDEX_MIN_LINK_CHARS) { inLinks += t.length; texts.add(t); }
+  }
+  return { texts: [...texts], share: total ? inLinks / total : 0 };
+}
+
+/**
+ * Render an index page as one line per linked story: headline, URL, and the summary that follows
+ * it in the markup when there is one. Chrome-free and site-agnostic: it only looks at anchors with
+ * headline-length text and the next text block beside them.
+ */
+function renderLinkIndex(html, baseUrl) {
+  const { document } = parseHTML(html);
+  for (const sel of ['script', 'style', 'noscript', 'template', 'nav', 'footer', 'header']) {
+    document.querySelectorAll(sel).forEach(el => el.remove());
+  }
+  const seen = new Set();
+  const lines = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    const text = norm(a.textContent);
+    if (text.length < INDEX_MIN_LINK_CHARS) continue;
+    let href;
+    try { href = new URL(a.getAttribute('href'), baseUrl).href; } catch { continue; }
+    if (!/^https?:/i.test(href) || seen.has(href) || seen.has(text)) continue;
+    seen.add(href); seen.add(text);
+    let summary = '';
+    for (let el = a, i = 0; el && i < 4; el = el.parentElement, i++) {
+      const sib = el.nextElementSibling;
+      if (!sib || sib.querySelector('a, h1, h2, h3, h4')) continue;
+      const t = norm(sib.textContent);
+      if (t.length >= 30 && t.length <= 400 && t !== text) { summary = t; break; }
+    }
+    lines.push(`- [${text}](${href})${summary ? ` — ${summary}` : ''}`);
+  }
+  return lines;
+}
+
+export function htmlToMarkdown(html, baseUrl = 'http://localhost/', { maxChars = FETCH_MAX_CHARS } = {}) {
   const { document } = parseHTML(html);
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   turndown.remove(['script', 'style', 'noscript']);
 
+  // <template> contents are inert markup, but linkedom reports them as text, so Readability
+  // can score one template as the whole page and Turndown then renders it as nothing. The NYT
+  // homepage carries a 100K-char interactive this way (2026-10-31: 0 chars from a page with
+  // 130K chars of body text). Drop them before anything scores the page.
+  document.querySelectorAll('template, script, style, noscript').forEach(el => el.remove());
+  const pageTitle = norm(document.querySelector('title')?.textContent);
+  const totalText = norm(document.documentElement?.textContent).length;
+  const links = longLinks(document);
+
   const article = new Readability(document).parse();
 
-  let markdown, title;
+  let markdown = '', title = '';
   if (article && article.content) {
-    markdown = turndown.turndown(article.content);
-    title = article.title;
-  } else {
+    const kept = norm(article.textContent);
+    const linksKept = links.texts.length ? links.texts.filter(t => kept.includes(t.slice(0, 30))).length / links.texts.length : 1;
+    const textKept = totalText ? kept.length / totalText : 1;
+    if (links.share >= INDEX_MIN_LINK_SHARE && linksKept < INDEX_MAX_LINKS_KEPT && textKept < INDEX_MAX_TEXT_KEPT) {
+      const lines = renderLinkIndex(html, baseUrl);
+      if (lines.length >= 5) {
+        markdown = `${pageTitle ? `# ${pageTitle}\n\n` : ''}Index page: ${lines.length} linked stories.\n\n${lines.join('\n')}`;
+        title = pageTitle;
+      }
+    }
+    if (!markdown) {
+      markdown = turndown.turndown(article.content);
+      title = article.title;
+    }
+  }
+  // Readability found nothing, or picked something Turndown cannot render: read the whole body.
+  if (!markdown.trim()) {
     const { document: doc2 } = parseHTML(html);
-    for (const sel of ['script', 'style', 'noscript', 'nav', 'footer', 'header', 'aside']) {
+    for (const sel of ['script', 'style', 'noscript', 'template', 'nav', 'footer', 'header', 'aside']) {
       doc2.querySelectorAll(sel).forEach(el => el.remove());
     }
     markdown = turndown.turndown(doc2.toString());
-    title = doc2.querySelector('title')?.textContent || '';
+    title = title || doc2.querySelector('title')?.textContent || '';
   }
 
-  const maxLen = 4000;
-  if (markdown.length > maxLen) {
-    markdown = markdown.slice(0, maxLen) + '\n\n[...truncated]';
+  if (markdown.length > maxChars) {
+    markdown = markdown.slice(0, maxChars) + '\n\n[...truncated]';
   }
   return { markdown, title };
 }
@@ -389,9 +497,11 @@ export default {
   group: 'web',
   label: 'Web Search & Fetch',
   description: 'Web search and page fetching with configurable engines and fetch modes.',
-  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'] },
+  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'], fetchMaxChars: FETCH_MAX_CHARS },
   // Rendered by the Plugins panel as a mode dropdown + engine checkboxes
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); },
   configUi: () => ({
+    fields: [fetchMaxCharsField(cardFetchMaxChars)],
     modes: ['auto', 'regular', 'stealth', 'browser'],
     availableEngines: [
       { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },

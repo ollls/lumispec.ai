@@ -11,6 +11,7 @@ import { readFileSync, existsSync, statSync, readdirSync, mkdirSync, writeFileSy
 import { join, resolve, basename, extname, sep, dirname } from 'path';
 import { homedir } from 'os';
 import config from '../config.js';
+import { replaceApplets } from './applets.js';
 
 // ── Vault discovery ─────────────────────────────────
 
@@ -67,7 +68,6 @@ function dirExists(p) {
 
 // ── Rendering ───────────────────────────────────────
 
-const APPLET_RE = /<applet\s+type=["']([a-z0-9_-]+)["']\s*>([\s\S]*?)<\/applet>/gi;
 const TOOL_RESULT_LIMIT = 1500;
 
 export function slugify(title) {
@@ -161,10 +161,10 @@ function renderReasoning(reasoning, ctx) {
 
 /** Cut <applet> blocks out of assistant text; each becomes an HTML sidecar linked from a callout. */
 function extractApplets(text, ctx) {
-  return String(text).replace(APPLET_RE, (_m, type, body) => {
+  return replaceApplets(text, (type, body) => {
     const n = ctx.sidecars.filter(s => s.kind === 'applet').length + 1;
     const name = `${ctx.base}-applet-${n}.html`;
-    ctx.sidecars.push({ kind: 'applet', name, content: wrapApplet(type, body.trim()) });
+    ctx.sidecars.push({ kind: 'applet', name, content: wrapApplet(type, body) });
     return `\n${callout('example', `Applet (${type}) — [[${name}]]`)}\n`;
   });
 }

@@ -9,6 +9,7 @@ import config from '../config.js';
 const router = Router();
 
 const MAX_TOOL_ROUNDS = 20;
+const MAX_REPAIR_ROUNDS = 3; // consecutive unparseable-tool-call retries before giving up on tools (mirrors conversations.js)
 const MAX_SAME_TOOL_REPEATS = 3;
 const MAX_PARALLEL_TOOLS = 4;
 // How much of the previous step's output a step may receive. This is the pipeline's ONLY
@@ -332,6 +333,8 @@ CRITICAL RULES:
     retain && reasoning ? { role: 'assistant', content, reasoning_content: reasoning } : { role: 'assistant', content };
   const toolCallSigCounts = {};
   const toolCallSigs = new Set();
+  let repairRounds = 0;
+  let forcedAnswerPrompt = 'You have used all available tool rounds. Provide your best answer now. Do NOT call any tools.';
 
   // Tracked for route logging only — this loop has no finance guard, unlike conversations.js:467.
   // Records where missingChains/fabricatedGreeks are true but the edge is 'end' ARE the drift.
@@ -524,6 +527,7 @@ CRITICAL RULES:
         }
 
         logRoute('tools');
+        repairRounds = 0;
         // Execute tools
         const context = buildToolContext(autorun, cite, conv, res);
         const results = await Promise.all(toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context)));
@@ -550,6 +554,14 @@ CRITICAL RULES:
         // both branches so they stay disjoint, and each defect gets the message that fits it.
         const hasApplet = /<applet[\s>]/i.test(result.content);
         const hasToolCallTag = /<tool_call/i.test(result.content);
+        const unparseable = !hasApplet && (hasToolCallTag || /\{"name"\s*:\s*"/.test(result.content));
+        if (unparseable && ++repairRounds > MAX_REPAIR_ROUNDS) {
+          console.warn(`[task-loop] ${MAX_REPAIR_ROUNDS} consecutive unparseable tool calls, giving up on tools for this step`);
+          logRoute('end', 'repair-limit');
+          llmMessages.push(asAssistant(result.content, result.reasoning));
+          forcedAnswerPrompt = `Your last ${repairRounds} tool calls could not be parsed and were never executed. Do NOT call any tools. Answer now using only the information already gathered, and say plainly which lookups did not happen.`;
+          break;
+        }
         if (!hasApplet && !hasToolCallTag && /\{"name"\s*:\s*"/.test(result.content)) {
           logRoute('repair', 'bare-json');
           llmMessages.push(asAssistant(result.content, result.reasoning));
@@ -570,7 +582,7 @@ CRITICAL RULES:
 
     // Force answer if loop exhausted
     if (!finalContent) {
-      llmMessages.push({ role: 'user', content: 'You have used all available tool rounds. Provide your best answer now. Do NOT call any tools.' });
+      llmMessages.push({ role: 'user', content: forcedAnswerPrompt });
       promptTokens = await countPromptTokens(llmMessages);
       const forced = await streamRound(llmMessages, true);
       if (forced.usage) lastUsage = forced.usage;
