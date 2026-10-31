@@ -5,7 +5,7 @@
 ![lumispec.ai](Screenshot1.png)
 
 <p align="center">
-  <img src="Screenshot3.png" width="700" alt="World News Dashboard applet built from eight outlets fetched through Browser Search">
+  <img src="Screenshot3.png" width="700" alt="LLM Workbench showing the World News Dashboard applet built from eight outlets fetched through Browser Search">
   <br><sub>A task pipeline fetches eight outlets through Browser Search (<code>web_fetch</code> in a hidden tab of your own Chrome), and the model renders all 115 stories as an inline HTML applet with source badges, topic tags and filter chips.</sub>
 </p>
 
