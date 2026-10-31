@@ -239,7 +239,7 @@ If Tavily fails but Keiro succeeds, the response contains Keiro's results and `s
 
 ### Output Limits
 
-- Max 4000 characters
+- Max 4000 characters by default — "Max chars per fetched page" on the Web Search & Fetch and Browser Search cards (`web.fetchMaxChars`, 1000–50000, configurable since 2026-10-31). Raise it for pipelines (steps are isolated); in chat every result stays in context until the old-tool-result trim
 - Truncated content appended with `[...truncated]`
 - Title extracted from `<title>` or Readability
 

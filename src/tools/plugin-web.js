@@ -236,7 +236,7 @@ const MIN_USEFUL_CHARS = 200;
 
 async function fetchTier(tier, url) {
   const fetcher = FETCHERS[tier] || fetchRegular;
-  const { markdown, title } = htmlToMarkdown(await fetcher(url), url);
+  const { markdown, title } = htmlToMarkdown(await fetcher(url), url, { maxChars: await getFetchMaxChars() });
   return { url, title, content: markdown, _tier: tier };
 }
 
@@ -289,6 +289,32 @@ async function fetchBrowser(url) {
 // (BBC, Guardian front, HN) kept 51-96% of their links. The share bound was 0.3 at first, and
 // Reuters sat on it: 0.31 on a light render, 0.24 once more summaries had loaded (0 of 90
 // headlines kept either way), so the same page flipped between the two renderings run to run.
+// Content handed to the model per fetch. 4000 since the March refactor. Configurable since
+// 2026-10-31, when a news-digest pipeline lost a headline per source to the cut: the saved value
+// lives on this group's card ("Max chars per fetched page") and the Browser Search card edits the
+// same entry; getFetchMaxChars() is what both fetch paths read. The default stays 4000: in chat
+// every fetch result sits in the prompt until the old-tool-result trim, so a bigger cap reaches
+// the context wind-down sooner; pipeline steps are isolated and can afford more.
+export const FETCH_MAX_CHARS = 4000;
+export const FETCH_MAX_CHARS_RANGE = [1000, 50000];
+let cardFetchMaxChars = FETCH_MAX_CHARS; // refreshed by beforeCard() for the (sync) card descriptor
+
+/** The configured per-fetch cap, clamped; the default when nothing is saved. */
+export async function getFetchMaxChars() {
+  const cfg = await readPluginConfig();
+  const n = Number(cfg.web?.fetchMaxChars);
+  if (!Number.isFinite(n)) return FETCH_MAX_CHARS;
+  return Math.min(FETCH_MAX_CHARS_RANGE[1], Math.max(FETCH_MAX_CHARS_RANGE[0], Math.round(n)));
+}
+
+/** Field descriptor for the cap, shared by the web and browser cards (`group` targets the stored entry). */
+export function fetchMaxCharsField(value) {
+  return {
+    key: 'fetchMaxChars', group: 'web', value, label: 'Max chars per fetched page', type: 'number',
+    min: FETCH_MAX_CHARS_RANGE[0], max: FETCH_MAX_CHARS_RANGE[1], step: 500,
+    note: '≈1 token per 4 chars, kept in context for the rest of the chat. Raise it for pipelines (steps are isolated); keep it modest for long chats. Shared by Web Search & Fetch and Browser Search.',
+  };
+}
 const INDEX_MIN_LINK_CHARS = 25;   // shorter anchors are nav, bylines, "Read more"
 const INDEX_MIN_LINK_SHARE = 0.2;
 const INDEX_MAX_LINKS_KEPT = 0.3;
@@ -338,7 +364,7 @@ function renderLinkIndex(html, baseUrl) {
   return lines;
 }
 
-export function htmlToMarkdown(html, baseUrl = 'http://localhost/') {
+export function htmlToMarkdown(html, baseUrl = 'http://localhost/', { maxChars = FETCH_MAX_CHARS } = {}) {
   const { document } = parseHTML(html);
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   turndown.remove(['script', 'style', 'noscript']);
@@ -381,9 +407,8 @@ export function htmlToMarkdown(html, baseUrl = 'http://localhost/') {
     title = title || doc2.querySelector('title')?.textContent || '';
   }
 
-  const maxLen = 4000;
-  if (markdown.length > maxLen) {
-    markdown = markdown.slice(0, maxLen) + '\n\n[...truncated]';
+  if (markdown.length > maxChars) {
+    markdown = markdown.slice(0, maxChars) + '\n\n[...truncated]';
   }
   return { markdown, title };
 }
@@ -472,9 +497,11 @@ export default {
   group: 'web',
   label: 'Web Search & Fetch',
   description: 'Web search and page fetching with configurable engines and fetch modes.',
-  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'] },
+  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'], fetchMaxChars: FETCH_MAX_CHARS },
   // Rendered by the Plugins panel as a mode dropdown + engine checkboxes
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); },
   configUi: () => ({
+    fields: [fetchMaxCharsField(cardFetchMaxChars)],
     modes: ['auto', 'regular', 'stealth', 'browser'],
     availableEngines: [
       { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },

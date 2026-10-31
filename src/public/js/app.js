@@ -3446,8 +3446,10 @@ function syncObsidianFlag(plugins) {
   }
 }
 
-// Generic per-plugin fields declared by configUi() → { fields: [{ key, label, type, options?, placeholder?, note?, disabled? }] }.
-// type: 'select' | 'text' | 'boolean'. Each change POSTs { config: { [key]: value } }.
+// Generic per-plugin fields declared by configUi() → { fields: [{ key, label, type, options?, placeholder?, note?, disabled?, min?, max?, step?, group?, value? }] }.
+// type: 'select' | 'text' | 'boolean' | 'number'. Each change POSTs { config: { [key]: value } } to the
+// card's own group, or to `group` when the field edits another group's entry (the fetch cap lives on
+// `web` and is also shown on the Browser Search card); `value` then supplies the current value.
 function renderPluginFields(p, container) {
   for (const f of p.config.fields) {
     const row = document.createElement('div');
@@ -3458,7 +3460,7 @@ function renderPluginFields(p, container) {
     lbl.textContent = f.label || f.key;
     row.appendChild(lbl);
     const save = async (value) => {
-      const res = await fetch(`/api/plugins/${p.group}/toggle`, {
+      const res = await fetch(`/api/plugins/${f.group || p.group}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: { [f.key]: value } }),
@@ -3467,7 +3469,7 @@ function renderPluginFields(p, container) {
       if (!res.ok && result.error) showPluginToast(result.error, true);
       refreshPluginConfig();
     };
-    const current = p.config[f.key];
+    const current = f.value !== undefined ? f.value : p.config[f.key];
     const ctlStyle = {
       fontSize: '12px', padding: '3px 8px', borderRadius: '6px',
       background: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', outline: 'none',
@@ -3495,10 +3497,16 @@ function renderPluginFields(p, container) {
       row.appendChild(cb);
     } else {
       const inp = document.createElement('input');
-      inp.type = 'text';
+      const isNumber = f.type === 'number';
+      inp.type = isNumber ? 'number' : 'text';
+      if (isNumber) {
+        if (f.min !== undefined) inp.min = f.min;
+        if (f.max !== undefined) inp.max = f.max;
+        if (f.step !== undefined) inp.step = f.step;
+      }
       inp.value = current ?? '';
       inp.placeholder = f.placeholder || '';
-      Object.assign(inp.style, { ...ctlStyle, width: '260px' });
+      Object.assign(inp.style, { ...ctlStyle, width: isNumber ? '110px' : '260px' });
       inp.disabled = !!f.disabled;
       const commit = () => { if (inp.value !== String(current ?? '')) save(inp.value.trim()); };
       inp.addEventListener('change', commit);

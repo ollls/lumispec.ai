@@ -25,7 +25,7 @@ import { parseHTML } from 'linkedom';
 import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
-import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml } from './plugin-web.js';
+import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField } from './plugin-web.js';
 
 // Version of the extension source shipped in this checkout. Compared with the version the
 // connected extension announces in `hello`, so an un-reloaded extension is called out.
@@ -143,6 +143,7 @@ async function runInstallAction(id) {
 }
 
 const DEFAULTS = { enabled: false, engines: ['duckduckgo'], dumpPages: false };
+let cardFetchMaxChars = FETCH_MAX_CHARS; // refreshed by beforeCard() for the (sync) card descriptor
 const RESULT_LIMIT = 8;
 const MIN_USEFUL_CHARS = 200;
 // Visible text Chrome itself reported, above which a page is real whatever the extractor made of
@@ -200,7 +201,7 @@ function pageText(page) {
  * article extractor finds nothing in a page the browser rendered: worse than markdown, far
  * better than a cookie-less re-fetch.
  */
-export function visibleText(html, cap = 4000) {
+export function visibleText(html, cap = FETCH_MAX_CHARS) {
   try {
     const broken = (html || '').replace(/<\/(p|div|li|tr|h[1-6]|section|article|header|footer|td|th|dd|dt|blockquote|pre|label)>|<br\s*\/?>/gi, '$&\n');
     const { document } = parseHTML(broken);
@@ -501,10 +502,14 @@ export default {
   description: 'Runs web_search and web_fetch in a hidden tab of your own Chrome via the Lumispec Browser Search extension. Replaces Web Search & Fetch while enabled; falls back to it when the extension is offline.',
   supersedes: ['web'],
   defaults: DEFAULTS,
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); },
   configUi: () => ({
     engineMode: 'single', // radio: one engine at a time
     availableEngines: Object.entries(ENGINES).map(([id, e]) => ({ id, label: e.label, available: true })),
     fields: [
+      // Same stored value as the Web Search & Fetch card (group: 'web'); shown here because this
+      // card is the one in use while the extension supersedes that group.
+      fetchMaxCharsField(cardFetchMaxChars),
       // Parser work needs the real markup the extension saw; the fetch-thin dump only covers pages
       // the extractor failed on outright, not pages it read badly (headlines missing, player junk).
       { key: 'dumpPages', label: 'Save every fetched page to logs/browser-debug/', type: 'boolean', note: 'For extractor debugging. Files are gitignored; turn off when done.' },
@@ -598,7 +603,8 @@ export default {
           }
           const walled = detectWall(page);
           if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page);
-          const { markdown, title } = htmlToMarkdown(page.html, page.url || url);
+          const maxChars = await getFetchMaxChars();
+          const { markdown, title } = htmlToMarkdown(page.html, page.url || url, { maxChars });
           const tier = `extension (${page.ms} ms${page.reads > 1 ? `, ${page.reads} reads` : ''})`;
           if ((markdown || '').trim().length >= MIN_USEFUL_CHARS) {
             return { url: page.url || url, title: title || page.title, content: markdown, _tier: tier };
@@ -607,7 +613,7 @@ export default {
           // problem and the reason alone cannot be debugged after the fact.
           const saved = dumpPage('fetch-thin', page);
           const detail = `page had ${page.textChars ?? '?'} chars of visible text${page.truncated ? ', HTML truncated at the extension cap' : ''}${saved ? `; saved to ${saved}` : ''}`;
-          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? visibleText(page.html) : '';
+          const text = (page.textChars || 0) >= REAL_PAGE_MIN_TEXT ? visibleText(page.html, maxChars) : '';
           if (text.length >= MIN_USEFUL_CHARS) {
             // Chrome saw a real page. Hand over its visible text; never swap the user's session
             // for a cookie-less re-fetch of a page that already loaded.

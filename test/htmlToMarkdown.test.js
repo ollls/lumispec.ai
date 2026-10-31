@@ -64,3 +64,15 @@ test('an article page with a few links still goes through Readability', () => {
   assert.ok(!markdown.includes('Index page:'), markdown.slice(0, 200));
   assert.ok(markdown.includes('Paragraph 11 of the article body'));
 });
+
+test('the per-fetch cap is an option, defaulting to FETCH_MAX_CHARS', async () => {
+  const { FETCH_MAX_CHARS } = await import('../src/tools/plugin-web.js');
+  const long = '<html><body><article>' + '<p>Paragraph of article text that is kept by Readability. </p>'.repeat(400) + '</article></body></html>';
+  const def = htmlToMarkdown(long, 'https://x.example/');
+  assert.ok(def.markdown.length <= FETCH_MAX_CHARS + 20, String(def.markdown.length));
+  assert.ok(def.markdown.endsWith('[...truncated]'));
+  const small = htmlToMarkdown(long, 'https://x.example/', { maxChars: 1500 });
+  assert.equal(FETCH_MAX_CHARS, 4000);
+  assert.ok(small.markdown.length <= 1520, String(small.markdown.length));
+  assert.ok(small.markdown.endsWith('[...truncated]'));
+});
