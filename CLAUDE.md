@@ -169,7 +169,9 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
   unreachable; the live slot `n_ctx` wins otherwise. Keep it at or below llama-server's
   `--ctx-size` — a value above the true window makes the tool loop skip its wind-down
 - `MAX_PREV_RESULT_CHARS` — chars of the previous step's output a task-pipeline step receives
-  (default: 32000). Absolute, not derived from `n_ctx` — raising `--ctx-size` does not raise it
+  (default: 32000). Absolute, not derived from `n_ctx` — raising `--ctx-size` does not raise it.
+  A subtask group's outputs are joined **before** the cap applies (head cut, not a window), so a
+  wide fan-out loses its last siblings whole — see **Hand-off truncation** under Task Pipeline
 - `SEARCH_ENGINE` — `keiro`, `tavily`, or `both` (default: `keiro`)
 - `TAVILY_API_KEY` — Tavily search API key
 - `KEIRO_API_KEY` — Keiro search API key
@@ -437,6 +439,16 @@ Key isolation rules:
 
 Each step also gets a pipeline-aware system prompt addition (step number, "complete ONLY the current task" rules). Previous output framed as user message with "Previous Step Output" header (max 32K chars).
 
+**Hand-off truncation:** `truncatePrevResult()` (`src/services/pipelineContext.js`, pure, tested in
+`test/pipelineContext.test.js`) clips the previous output to `MAX_PREV_RESULT_CHARS`. For a subtask
+group the merged string (`## <subtask>` headers) is clipped as a whole, so the cut lands inside one
+sibling and drops every later one. When it fires: the step logs a `[task-processor]` warning, streams
+`{context_truncated: { from, cap, cut, dropped, notice }}` (rendered as a persistent amber line in the
+step, live and on re-render from the stored `taskRun` entry's `contextTruncated`), and the model's
+previous-output block opens with a `> ⚠` notice naming the cut and dropped sections and asking it to say
+which are missing. 2026-11-03: 13 fetched outlets merged to 60K chars, the dashboard step saw 7½ and
+presented 8 as the whole set — the old tail-only `[...truncated]` marker went unmentioned.
+
 **Execution engine:** Each task/subtask runs through the same tool loop as regular chat (up to 20 tool rounds, repeat detection, parallel tool cap, context budget, confirmation flow, full SSE streaming).
 
 **Empty step = pipeline halt:** A step that produces no output (context exhausted, or content stripped as a bare tool call) returns a step error instead of an empty result — the run stops with `{task_error}` naming the token counts and any files the dead step saved. A step's output is the next step's only context, so passing an empty one through would make every downstream step invent from nothing. This is the one place the pipeline loop deliberately diverges from the chat loop, which only reports and ends the turn.
@@ -449,7 +461,7 @@ Each step also gets a pipeline-aware system prompt addition (step number, "compl
 
 **Storage:** Task runs stored as a single assistant message with `text` (backward-compatible markdown) and `taskRun` array (structured metadata with per-step results, tool uses, and reasoning). On re-render, `taskRun` drives structured display with per-step reasoning blocks, tool use details, and formatted content.
 
-**SSE events:** `{task_start}` → `{subtask_start}` → (streaming events) → `{subtask_complete}` → `{task_complete}` → `{task_review}` (if enabled) → `{task_error}` (on failure, pipeline stops) → `[DONE]`
+**SSE events:** `{task_start}` → `{subtask_start}` → `{context_truncated}` (if the hand-off was clipped) → (streaming events) → `{subtask_complete}` → `{task_complete}` → `{task_review}` (if enabled) → `{task_error}` (on failure, pipeline stops) → `[DONE]`
 
 **Task list persistence:** Saved task lists stored in `data/tasks.json` via `src/services/tasks.js`. CRUD + reorder via `/api/tasks` routes. Tasks menu in top bar dropdown (alongside Prompts, Sessions, Templates) with same drag/edit/delete UI pattern.
 
