@@ -294,13 +294,14 @@ export default {
 
 Safety mechanisms:
 - Max 3 identical tool call repeats (same name+args signature), then tool is disabled
-- Max 4 parallel tool calls per round (excess dropped)
+- Max 4 parallel tool calls per round. `capToolCalls()` first collapses identical calls (same name + arguments), then keeps the first 4; `droppedCallsNote()` names every dropped call in that round's results message so the model can re-issue it. Added 2026-11-04 after Claude Sonnet fired 11 calls in one round and 7 vanished unannounced
 - Bare/malformed JSON tool calls trigger retry prompts (skipped when response contains `<applet>` blocks). `MAX_REPAIR_ROUNDS` (3) caps consecutive retries: the loop then breaks to the forced answer with a "your last N tool calls were never executed" instruction instead of burning the remaining rounds (route log `end`/`repair-limit`)
+- Anthropic-style tool calls (`parseInvokeBlocks`): `<invoke name="tool"><parameter name="p">value</parameter></invoke>` parses like a `<tool_call>` block, values coerced to the declared parameter type; blank `<tool_call></tool_call>` blocks are skipped. Claude on the remote backend wrote this syntax on 2026-11-04 and burned a repair round. The malformed-tag repair message names `<invoke>` when that is what it sees, and `getSystemPrompt()` adds a "do not use `<invoke>`" rule **only while `config.llm.backend === 'claude'`**, so the llama prompt and its KV prefix are unchanged. Tests: `test/parseInvoke.test.js`
 - Parser key normalization (`normalizeToolCallKeys`): accepts `"function"`/`"tool_name"`/`"tool"` as the name key and re-quotes keys that lost their opening quote (`,\narguments": {`), both seen from Qwen3.8 on 2026-10-29
 - Safety net catches unparsed tool calls in final content (also skipped for applet responses)
 - Options-analysis continuation: forces optionchains call if LLM stops after fetching expiry data (finance group only)
 - Fabrication detector: catches LLM presenting Greeks/prices without fetching data (finance group only)
-- Tool call logging to `logs/` directory
+- Tool call logging to `logs/` directory. A tool with `logsItself: true` (`etrade_account`, which logs raw vs formatted output) skips the executor's generic entry — every E*TRADE call used to be logged twice
 - Queue-based command confirmation: parallel calls confirmed FIFO (not single-slot)
 - Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
 - run_python auto-fixes: Python booleans (`fixPythonBooleans`), backslash+newline double-escaping in string literals

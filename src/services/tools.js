@@ -6,6 +6,8 @@ export {
   getSystemPrompt,
   getDatetimeStamp,
   parseToolCalls,
+  capToolCalls,
+  droppedCallsNote,
   executeTool,
   requestConfirmation,
   resolveConfirmation,

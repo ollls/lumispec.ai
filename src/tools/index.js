@@ -858,6 +858,13 @@ export function getSystemPrompt({ applets = false, precision = false, cite = fal
     ? `\n## Tool Routing — match user intent to the RIGHT tool\n${routingLines.join('\n')}`
     : '';
 
+  // Claude writes its trained <invoke>/<parameter> syntax when not told otherwise (the parser now
+  // reads it, but the round still streams as raw XML). Only on that backend, so the llama prompt —
+  // and its KV prefix — stays byte-identical.
+  const claudeToolRule = config.llm.backend === 'claude'
+    ? '\n- Do NOT use <invoke>, <parameter>, <function_calls> or any native function-calling syntax. Only <tool_call> JSON blocks execute here.'
+    : '';
+
   return `You are a helpful, knowledgeable assistant.
 
 ## Core Behavior
@@ -915,7 +922,7 @@ Tool rules:
 - Output ONLY <tool_call> blocks when using tools, no other text before or after.
 - Wait for the tool result before answering.
 - Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
-- REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.
+- REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.${claudeToolRule}
 ${routingSection}
 
 ${precisionSection}
@@ -1153,6 +1160,7 @@ export function parseToolCalls(text) {
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
     const raw = match[1];
+    if (!raw.trim()) continue;   // empty block — Claude emitted one after its <invoke> blocks on 2026-11-04
     const normalized = normalizeToolCallKeys(raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null'));
     try {
       const parsed = JSON.parse(normalized);
@@ -1167,6 +1175,10 @@ export function parseToolCalls(text) {
       }
     }
   }
+  // Claude's native tool-use syntax. The Anthropic backend gets no `tools` in the request, so the
+  // model sometimes writes the format it was trained on instead of the <tool_call> JSON the prompt
+  // asks for (2026-11-04 16:39Z, run_python in <invoke>/<parameter> tags, then an empty <tool_call>).
+  calls.push(...parseInvokeBlocks(text));
   if (calls.length > 0) return calls;
 
   // Fallback: detect bare JSON tool calls without tags
@@ -1225,6 +1237,67 @@ export function parseToolCalls(text) {
   return calls;
 }
 
+// Anthropic-style blocks: <invoke name="tool"><parameter name="p">value</parameter>…</invoke>.
+// Values arrive as raw text, so each is coerced to the type the tool declares for that parameter
+// ("number (optional)" → Number, "boolean" → true/false, object/array → JSON); undeclared
+// parameters keep the text unless it is a JSON object or array. One leading and one trailing
+// newline are dropped (the model usually breaks the line after the opening tag) — indentation
+// inside the value is kept, which matters for run_python code.
+function parseInvokeBlocks(text) {
+  const calls = [];
+  for (const block of text.matchAll(/<invoke\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)<\/invoke>/gi)) {
+    const name = block[1].trim();
+    const declared = tools[name]?.parameters || {};
+    const args = {};
+    for (const param of block[2].matchAll(/<parameter\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)<\/parameter>/gi)) {
+      args[param[1].trim()] = coerceInvokeValue(param[2].replace(/^\r?\n/, '').replace(/\r?\n$/, ''), declared[param[1].trim()]);
+    }
+    calls.push({ name, arguments: args });
+  }
+  return calls;
+}
+
+function coerceInvokeValue(raw, declaredType) {
+  const type = String(declaredType || '').trim().toLowerCase();
+  const trimmed = raw.trim();
+  if (type.startsWith('number')) {
+    const n = Number(trimmed);
+    return trimmed !== '' && Number.isFinite(n) ? n : raw;
+  }
+  if (type.startsWith('boolean')) {
+    if (/^(true|yes|1)$/i.test(trimmed)) return true;
+    if (/^(false|no|0)$/i.test(trimmed)) return false;
+    return raw;
+  }
+  if (type.startsWith('object') || type.startsWith('array') || (!type.startsWith('string') && /^[\[{]/.test(trimmed))) {
+    try { return JSON.parse(trimmed); } catch { return raw; }
+  }
+  return raw;
+}
+
+// Per-round parallel cap shared by both tool loops. Identical calls (same name and arguments)
+// collapse to one — Claude fetched the same stockanalysis.com URL twice in one round on
+// 2026-11-04 — and anything past `max` is returned in `dropped` so the loop can tell the model
+// what did not run; the cap used to be silent, and a round of 11 calls lost 7 unannounced.
+export function capToolCalls(calls, max) {
+  const seen = new Set();
+  const unique = [];
+  for (const call of calls) {
+    const sig = call.name + ':' + JSON.stringify(call.arguments || {});
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    unique.push(call);
+  }
+  return { kept: unique.slice(0, max), dropped: unique.slice(max) };
+}
+
+// The results message line that discloses dropped calls, or '' when nothing was dropped.
+export function droppedCallsNote(dropped, max) {
+  if (!dropped.length) return '';
+  const list = dropped.map(tc => `${tc.name}(${JSON.stringify(tc.arguments || {}).slice(0, 120)})`).join('; ');
+  return `\n\n⚠ ${dropped.length} tool call(s) were NOT executed — at most ${max} run per round: ${list}. Call them again in your next round if you still need them.`;
+}
+
 // ── Execute a tool by name ──────────────────────────
 export async function executeTool(name, args, context) {
   if (disabledTools.has(name)) {
@@ -1257,7 +1330,9 @@ export async function executeTool(name, args, context) {
     if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.code && loggableArgs.code.length > 2000) loggableArgs.code = loggableArgs.code.slice(0, 2000) + '...[truncated]';
-    await logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
+    // A tool that logs its own raw-vs-formatted entry (etrade_account) skips the generic one —
+    // every E*TRADE call used to land in the log twice, a millisecond apart.
+    if (!tool.logsItself) await logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);

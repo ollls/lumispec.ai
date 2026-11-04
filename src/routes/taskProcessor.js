@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults } from '../services/llm.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
 import { truncatePrevResult } from '../services/pipelineContext.js';
@@ -529,10 +529,10 @@ CRITICAL RULES:
           break;
         }
 
-        // Cap parallel tool calls
-        if (toolCallsFound.length > MAX_PARALLEL_TOOLS) {
-          toolCallsFound.length = MAX_PARALLEL_TOOLS;
-        }
+        // Cap parallel tool calls — duplicates collapse, dropped calls are named in the results message
+        const { kept: cappedCalls, dropped: droppedCalls } = capToolCalls(toolCallsFound, MAX_PARALLEL_TOOLS);
+        toolCallsFound.length = 0;
+        toolCallsFound.push(...cappedCalls);
 
         logRoute('tools');
         repairRounds = 0;
@@ -555,13 +555,13 @@ CRITICAL RULES:
 
         llmMessages.push(asAssistant(result.content, result.reasoning));
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
-        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + `\n\nRounds left: ${roundsLeft}. REMINDER: tool calls MUST use <tool_call></tool_call> tags.` });
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + droppedCallsNote(droppedCalls, MAX_PARALLEL_TOOLS) + `\n\nRounds left: ${roundsLeft}. REMINDER: tool calls MUST use <tool_call></tool_call> tags.` });
 
       } else {
         // No tool calls — check for unparseable ones. Mirrors conversations.js: the tag test gates
         // both branches so they stay disjoint, and each defect gets the message that fits it.
         const hasApplet = /<applet[\s>]/i.test(result.content);
-        const hasToolCallTag = /<tool_call/i.test(result.content);
+        const hasToolCallTag = /<tool_call|<invoke[\s>]/i.test(result.content);
         const unparseable = !hasApplet && (hasToolCallTag || /\{"name"\s*:\s*"/.test(result.content));
         if (unparseable && ++repairRounds > MAX_REPAIR_ROUNDS) {
           console.warn(`[task-loop] ${MAX_REPAIR_ROUNDS} consecutive unparseable tool calls, giving up on tools for this step`);
@@ -579,7 +579,7 @@ CRITICAL RULES:
         if (!hasApplet && hasToolCallTag) {
           logRoute('repair', 'malformed-tag');
           llmMessages.push(asAssistant(result.content, result.reasoning));
-          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          llmMessages.push({ role: 'user', content: (/<invoke[\s>]/i.test(result.content) ? 'You used <invoke>/<parameter> syntax, which does not execute here. ' : 'Your <tool_call> JSON was malformed or truncated and could not be parsed. ') + 'Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         logRoute('end');
