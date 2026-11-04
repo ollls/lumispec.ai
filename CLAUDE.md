@@ -666,7 +666,7 @@ last save **renames** the note, matched by the `-<id8>.md` suffix). Off by defau
 - Large tool results: auto-saved to file, only summary sent to LLM context (markdown tables truncated to 30 rows)
 - Image data (`_images`), rate maps (`_rateMap`), and diff previews (`_diff`) stripped from LLM context but sent to frontend via SSE
 - Vision: images sent as base64 `image_url` parts in OpenAI multipart format
-- Template `[template: name]` expansion tells LLM to fetch fresh data first, update all dates/values, keep layout intact
+- Template `[template: name]` expansion (`src/services/templateExpansion.js`, pure, tested in `test/templateExpansion.test.js`) tells the LLM to fetch fresh data first, update all dates/values, keep layout intact — and, when the template names its own data sources, to fetch **every** one of them: the per-question web_search/web_fetch budget (see **Research limits**) does not apply to a template's sources. Added 2026-11-04 after the model, refreshing the eight-outlet World NEWS template, deliberated between fetching three outlets and substituting searches for front pages
 - Conversations auto-titled from first visible user message text (truncated to 60 chars); hidden session init prompts skipped
 - **Date/time is never in the system prompt.** `getDatetimeStamp(date)` (`src/tools/index.js`) renders a
   `[Now: ...]` line that is appended to every user message *as sent to the LLM*, never stored. Every

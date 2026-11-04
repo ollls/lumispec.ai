@@ -5,6 +5,7 @@ import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
+import { expandTemplateTags } from '../services/templateExpansion.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import { looksLikeChainQuote } from '../services/chainQuote.js';
@@ -156,25 +157,8 @@ router.post('/:id/messages', async (req, res) => {
     : displayContent;
   const userMsg = conversations.addMessage(conv.id, 'user', storedContent, { hidden: sessionInit });
 
-  // Expand [template: name] tags — inject saved applet HTML as context for the LLM
-  const templateRe = /\[template:\s*([^\]]+)\]/gi;
-  for (const match of [...content.matchAll(templateRe)]) {
-    const tplName = match[1].trim();
-    const tpl = getTemplateByName(tplName);
-    console.log(`[template] expanding "${tplName}" → ${tpl ? `found (${tpl.html.length} chars)` : 'NOT FOUND'}`);
-    if (tpl) {
-      content = content.replace(match[0],
-        `\n\nUse this saved HTML applet template as the EXACT base — output it as an <applet type="${tpl.type}"> block.
-Copy the template's HTML, CSS, and JavaScript VERBATIM. Only modify data values, dates, and dynamic content that need updating.
-If no fresh data is needed, output the template UNCHANGED.
-Do NOT redesign, restyle, or reimagine the template.
-Do NOT change colors, dimensions, font choices, CSS properties, class names, IDs, or DOM structure.
-If the user's message requests changes, apply ONLY those specific changes to the template.
-Fetch fresh data using the appropriate tools first if the content requires it, then populate the template with the new data.
-\`\`\`html\n${tpl.html}\n\`\`\``
-      );
-    }
-  }
+  // Expand [template: name] tags — inject saved applet HTML + instruction block (services/templateExpansion.js)
+  content = expandTemplateTags(content, getTemplateByName, (line) => console.log(line));
 
   // Resolve slot
   let slotId = slots.getSlotForConversation(conv.id);
