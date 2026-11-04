@@ -254,6 +254,7 @@ If Tavily fails but Keiro succeeds, the response contains Keiro's results and `s
 
 - Max 4000 characters by default — "Max chars per fetched page" on the Web Search & Fetch and Browser Search cards (`web.fetchMaxChars`, 1000–50000, configurable since 2026-10-31). Raise it for pipelines (steps are isolated); in chat every result stays in context until the old-tool-result trim
 - Truncated content appended with `[...truncated]`
+- The model is told a per-question call budget in the Web Research prompt section — "Maximum 3 web_search calls and 3 web_fetch calls per user question" by default — which it narrates back as "I have a budget of 3 web_fetch calls". Nothing enforces it; the tool loop's own limits are 20 rounds, 4 parallel calls, 3 identical repeats and the context wind-down. Configurable since 2026-11-04 as **Max searches per question** / **Max fetches per question** on both cards (`web.maxSearchesPerQuestion`, `web.maxFetchesPerQuestion`, 0–10; 0 removes that half of the sentence). One shared value: the budget bounds context spend (count × fetch cap), identical on either transport, and only one of the two prompts is live at a time. In a pipeline each step is its own "question", so a subtask-per-source fan-out never hits it
 - Title extracted from `<title>` or Readability
 
 ---
