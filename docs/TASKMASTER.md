@@ -33,18 +33,23 @@ Indentation = sibling isolation. Flat = sequential chaining. There is no per-tas
 
 ### What each step actually receives
 
-Each step's user message is built in `taskProcessor.js:283-303`:
+Each step's user message is built in `taskProcessor.js:305-330`:
 
 ```js
 const llmMessages = [{ role: 'system', content: systemPrompt + pipelinePreamble }];
 
 const contextParts = [];
+let contextTruncated = null;
 if (prevResult) {
-  // hard-capped at MAX_PREV_RESULT_CHARS = 32000
-  const truncated = prevResult.length > MAX_PREV_RESULT_CHARS
-    ? prevResult.slice(0, MAX_PREV_RESULT_CHARS) + `\n\n[...truncated from ${prevResult.length} chars]`
-    : prevResult;
-  contextParts.push(`## Previous Step Output\n\n${truncated}`);
+  // head cut at MAX_PREV_RESULT_CHARS (default 32000) — truncatePrevResult() is pure
+  const clip = truncatePrevResult(prevResult, MAX_PREV_RESULT_CHARS);
+  if (clip.truncated) {
+    contextTruncated = { from: clip.from, cap: clip.cap, cut: clip.cut, dropped: clip.dropped, notice: clip.notice };
+    console.warn(`[task-processor] ${stepLabel}: ${clip.notice} …`);
+    res.write(`data: ${JSON.stringify({ context_truncated: contextTruncated })}\n\n`);
+  }
+  // clip.text opens with a "> ⚠ Previous output truncated …" notice when cut
+  contextParts.push(`## Previous Step Output\n\n${clip.text}`);
 }
 if (savedFiles.length > 0) {
   contextParts.push(`## Available Data Files\n${...}`);
@@ -62,7 +67,7 @@ The system prompt is augmented with a `pipelinePreamble` (`taskProcessor.js:272-
 ### What this means for memory
 
 - Each step starts with a **fresh `llmMessages` array** (`taskProcessor.js:283`). There is no growing conversation buffer that gets "cleared between steps" — there is nothing to clear, because nothing accumulates across steps in the first place.
-- `prev.result` is **bounded at 32000 characters** (`MAX_PREV_RESULT_CHARS`, `taskProcessor.js:12`). Larger results are truncated with a note.
+- `prev.result` is **bounded at 32000 characters** (`MAX_PREV_RESULT_CHARS`, read from `.env` in `src/config.js:22`; `taskProcessor.js:19`). Larger results are **head-cut**: the first 32K chars survive, the rest is dropped. For a subtask group the merged string (`## <subtask>` headers) is clipped as a whole, so the cut lands inside one sibling and every later sibling is lost entirely — 13 fetched outlets merged to 60K chars and the next step saw 7½ (2026-11-03). Since v1.5.2 a clipped hand-off is never silent: `truncatePrevResult()` (`src/services/pipelineContext.js`) names the section the cut landed in and the sections dropped, the server logs a `[task-processor]` warning, a `{context_truncated}` SSE event draws a persistent amber line under the step (live and on re-render from `taskRun[].contextTruncated`), and the model's previous-output block opens with a `> ⚠` notice asking it to say which sections are missing instead of presenting a partial set as the whole.
 - Tool results during a single step's tool loop accumulate inside that step's local `llmMessages`, then are discarded when the step ends.
 - Per-step context is **bounded, not constant**. A step that receives a 32K-char prior result, has its own multi-K-char task prompt, runs through the system prompt, and executes several tool rounds will use far more than a few hundred tokens. The pipeline does not produce a "constant ~500 tokens per task" footprint.
 
@@ -110,7 +115,7 @@ This is "context isolation" only in the sense that each summarization call is a 
 | Where does TaskMaster live? | `src/routes/conversations.js:638` (`/decompose` route), prompt in `data/TASKMASTER.md` |
 | Where does the pipeline live? | `src/routes/taskProcessor.js` |
 | Does TaskMaster execute tasks? | No. It only rewrites a prompt as a bullet list. |
-| Does the pipeline give every task constant memory? | No. Per-step context is bounded (32K-char prior-result cap), but it scales with prior output. |
+| Does the pipeline give every task constant memory? | No. Per-step context is bounded (32K-char prior-result cap, head cut, clipped hand-offs flagged in the UI and to the model), but it scales with prior output. |
 | Are flat top-level tasks isolated from each other? | No. They chain via `prev.result` and `prev.files`. |
 | Are subtasks isolated from each other? | Yes. Sibling subtasks under the same parent each receive only the parent group's incoming context. |
 | Does wiki rebuild use the pipeline? | No. It's a tool loop inside a normal chat conversation. |

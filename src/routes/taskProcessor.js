@@ -5,6 +5,7 @@ import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolRes
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
+import { truncatePrevResult } from '../services/pipelineContext.js';
 
 const router = Router();
 
@@ -159,7 +160,7 @@ router.post('/:id/tasks', async (req, res) => {
             return;
           }
 
-          subtaskResults.push({ text: task.subtasks[si], result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
+          subtaskResults.push({ text: task.subtasks[si], result: result.content, toolUses: result.toolUses, reasoning: result.reasoning, contextTruncated: result.contextTruncated || undefined });
           addUsage(totalUsage, result.usage);
           trackContext(result);
           if (result.savedFiles) subtaskFiles.push(...result.savedFiles);
@@ -210,7 +211,7 @@ router.post('/:id/tasks', async (req, res) => {
           return;
         }
 
-        taskRunResults.push({ text: task.text, result: result.content, toolUses: result.toolUses, reasoning: result.reasoning });
+        taskRunResults.push({ text: task.text, result: result.content, toolUses: result.toolUses, reasoning: result.reasoning, contextTruncated: result.contextTruncated || undefined });
         addUsage(totalUsage, result.usage);
         trackContext(result);
         prev = { result: result.content, files: result.savedFiles || [] };
@@ -306,11 +307,18 @@ CRITICAL RULES:
 
   // Build context sections
   const contextParts = [];
+  // Set when the hand-off was clipped: { from, cap, cut, dropped, notice }. Logged, streamed
+  // as {context_truncated}, stored on the step's taskRun entry, and spelled out to the model
+  // at the top of its previous-output block — a tail marker alone went unnoticed (2026-11-03).
+  let contextTruncated = null;
   if (prevResult) {
-    const truncated = prevResult.length > MAX_PREV_RESULT_CHARS
-      ? prevResult.slice(0, MAX_PREV_RESULT_CHARS) + `\n\n[...truncated from ${prevResult.length} chars]`
-      : prevResult;
-    contextParts.push(`## Previous Step Output\n\n${truncated}`);
+    const clip = truncatePrevResult(prevResult, MAX_PREV_RESULT_CHARS);
+    if (clip.truncated) {
+      contextTruncated = { from: clip.from, cap: clip.cap, cut: clip.cut, dropped: clip.dropped, notice: clip.notice };
+      console.warn(`[task-processor] ${stepLabel}: ${clip.notice} (MAX_PREV_RESULT_CHARS=${MAX_PREV_RESULT_CHARS})`);
+      res.write(`data: ${JSON.stringify({ context_truncated: contextTruncated })}\n\n`);
+    }
+    contextParts.push(`## Previous Step Output\n\n${clip.text}`);
   }
   if (savedFiles.length > 0) {
     contextParts.push(`## Available Data Files\nThese files were saved by previous steps. Use run_python with pd.read_csv() to access them:\n${savedFiles.map(f => `- **${f.filename}** (from ${f.tool})`).join('\n')}`);
@@ -627,18 +635,18 @@ CRITICAL RULES:
         : 'the model returned no content';
       const errMsg = `Step produced no output after ${toolUses.length} tool call(s): ${detail}. The next step would have received nothing, so the pipeline stopped here.${stepFiles.length ? ` Files saved by this step are still on disk: ${stepFiles.map(f => f.filename).join(', ')}.` : ''}`;
       console.warn(`[task-processor] ${stepLabel}: ${errMsg}`);
-      return { error: errMsg, content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+      return { error: errMsg, content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning, contextTruncated };
     }
 
     // Stream final content for this step
     console.log(`[task-processor] step done: "${taskText.slice(0, 40)}" → ${finalContent.length} chars`);
     res.write(`data: ${JSON.stringify({ content: finalContent })}\n\n`);
 
-    return { content: finalContent, usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning };
+    return { content: finalContent, usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: stepFiles, reasoning: accumulatedReasoning, contextTruncated };
 
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    return { error: err.message || 'LLM request failed', content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: [] };
+    return { error: err.message || 'LLM request failed', content: '', usage: lastUsage, contextTokens: stepContext(), toolUses, savedFiles: [], contextTruncated };
   }
 
   // Context this step ended with: last measured prompt + tokens generated in that round.

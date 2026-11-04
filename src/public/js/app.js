@@ -1046,6 +1046,21 @@ function startBubbleEdit(wrapper, bubble, btnRow) {
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
+// Pipeline hand-off clipped to MAX_PREV_RESULT_CHARS: the step that ran on this context never
+// saw the sections named here. Rendered live from {context_truncated} and again from the
+// stored taskRun entry, so the gap stays visible after a reload.
+function contextTruncatedNote(info) {
+  const el = document.createElement('div');
+  el.className = 'context-truncated-note text-amber-400 text-xs mt-1 mb-2 ml-3';
+  const summary = `⚠ Previous output cut to ${info.cap.toLocaleString()} of ${info.from.toLocaleString()} chars (MAX_PREV_RESULT_CHARS).`;
+  const parts = [summary];
+  if (info.cut) parts.push(`Cut inside: ${info.cut}.`);
+  if (info.dropped && info.dropped.length) parts.push(`Not seen by this step (${info.dropped.length}): ${info.dropped.join(' · ')}.`);
+  el.textContent = parts.join(' ');
+  el.title = 'Raise MAX_PREV_RESULT_CHARS in .env, or make the subtasks terser.';
+  return el;
+}
+
 function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
@@ -1221,6 +1236,10 @@ function appendMessage(role, text, images, meta = {}) {
       bubble.appendChild(taskHeader);
 
       const renderStepBlocks = (step) => {
+        // Hand-off clipped to MAX_PREV_RESULT_CHARS — this step never saw the named sections
+        if (step.contextTruncated) {
+          bubble.appendChild(contextTruncatedNote(step.contextTruncated));
+        }
         // Reasoning (collapsed)
         if (step.reasoning) {
           const details = document.createElement('details');
@@ -1848,6 +1867,16 @@ async function sendTasks(tasks, displayText) {
               commentInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); respond('continue'); }
               });
+            }
+
+            if (data.context_truncated) {
+              const note = contextTruncatedNote(data.context_truncated);
+              if (currentSection) {
+                currentSection.section.appendChild(note);
+              } else {
+                bubble.appendChild(note);
+              }
+              responseArea.scrollTop = responseArea.scrollHeight;
             }
 
             if (data.task_error) {
