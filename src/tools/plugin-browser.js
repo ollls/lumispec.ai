@@ -25,7 +25,7 @@ import { parseHTML } from 'linkedom';
 import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
-import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField, visibleText, renderedText } from './plugin-web.js';
+import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField, getResearchLimits, cachedResearchLimits, researchLimitLine, researchLimitFields, visibleText, renderedText } from './plugin-web.js';
 export { visibleText } from './plugin-web.js'; // kept for callers/tests that import it from here
 
 // Version of the extension source shipped in this checkout. Compared with the version the
@@ -598,7 +598,7 @@ export default {
   description: 'Runs web_search and web_fetch in a hidden tab of your own Chrome via the Lumispec Browser Search extension. Replaces Web Search & Fetch while enabled; falls back to it when the extension is offline.',
   supersedes: ['web'],
   defaults: DEFAULTS,
-  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); await tabConfig(); },
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); await getResearchLimits(); await tabConfig(); },
   configUi: () => ({
     engineMode: 'single', // radio: one engine at a time
     availableEngines: Object.entries(ENGINES).map(([id, e]) => ({ id, label: e.label, available: true })),
@@ -606,6 +606,7 @@ export default {
       // Same stored value as the Web Search & Fetch card (group: 'web'); shown here because this
       // card is the one in use while the extension supersedes that group.
       fetchMaxCharsField(cardFetchMaxChars),
+      ...researchLimitFields(cachedResearchLimits()),
       // Parser work needs the real markup the extension saw; the fetch-thin dump only covers pages
       // the extractor failed on outright, not pages it read badly (headlines missing, player junk).
       { key: 'dumpPages', label: 'Save every fetched page to logs/browser-debug/', type: 'boolean', note: 'For extractor debugging. Files are gitignored; turn off when done.' },
@@ -653,19 +654,19 @@ export default {
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
     ...(tabCfgCache.readTabs ? ['- "look at this" / "my X tab" / "what I have open" / a site that needs the user\'s login → "browser_tabs", then "web_fetch" with "tab"'] : []),
   ],
-  prompt: () => `## Web Research (via browser extension)
+  prompt: () => (getResearchLimits().catch(() => {}), `## Web Research (via browser extension)
 - web_search and web_fetch run inside the user's own browser; when the extension is offline they transparently fall back to HTTP and the result says so in "fallback".
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (login wall, CAPTCHA, empty content), use the search snippet descriptions directly.
 - web_fetch "view": "article" (default) for articles and news fronts; "text" for web applications (mail, calendars, dashboards, boards) or when "article" returns repeated fragments and image links — it is the page exactly as it reads on screen in the user's browser. Page through an application with its own date or filter URLs; invented pagination parameters are ignored.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
-- Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks. \`site:\` is fine.
-- Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.${tabCfgCache.readTabs ? `
-- The user may already have the page open. When they say "look at this", "my X tab", "what I have open", or the site needs their login or something they did by hand (filters, scrolling, a CAPTCHA), call browser_tabs and read with web_fetch { tab }. "tab" is "active", a tab id, or a host/title fragment; exactly one tab must match — if several could, show them and ask which. Reading never navigates, clicks or closes the user's tab; if the information is on a page they have not opened, ask them to open it.${tabCfgCache.confirmTabReads ? ' Each tab read asks the user for approval; if they decline, do not retry.' : ''}` : ''}`,
+- Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks. \`site:\` is fine.${researchLimitLine(cachedResearchLimits())}${tabCfgCache.readTabs ? `
+- The user may already have the page open. When they say "look at this", "my X tab", "what I have open", or the site needs their login or something they did by hand (filters, scrolling, a CAPTCHA), call browser_tabs and read with web_fetch { tab }. "tab" is "active", a tab id, or a host/title fragment; exactly one tab must match — if several could, show them and ask which. Reading never navigates, clicks or closes the user's tab; if the information is on a page they have not opened, ask them to open it.${tabCfgCache.confirmTabReads ? ' Each tab read asks the user for approval; if they decline, do not retry.' : ''}` : ''}`),
   tools: {
     web_search: {
       description: 'Search the web through the user\'s browser (results page loaded in a hidden tab). Requires a "query" argument.',
       parameters: { query: 'string' },
       execute: async ({ query }) => {
+        getResearchLimits().catch(() => {});
         if (!query || !String(query).trim()) return { error: 'Empty query', results: [] };
         const offline = offlineReason();
         if (offline) return fallbackSearch(query, offline);
@@ -686,6 +687,7 @@ export default {
       description: 'Fetch a web page through the user\'s browser. Give a "url" to load the page in a hidden tab, OR a "tab" to read a tab the user already has open, in place: "tab" is "active" (the tab they are looking at), a tab id from browser_tabs, or a host/title fragment that matches exactly one open tab — use it when the user says "look at this", "my X tab", or when a site needs their login or something they did by hand (filters, scrolling, a CAPTCHA). Optional "view": "article" (default) extracts the article or, on a front page, the list of headline links as markdown; "text" returns the page exactly as it reads on screen in the user\'s browser, one line per visual row, hidden labels and images excluded — use it for web applications (mail, calendars, dashboards, boards) and whenever an "article" result comes back as repeated fragments and image links. ALWAYS use after web_search to read the most relevant result before answering.',
       parameters: { url: 'string', view: 'string', tab: 'string' },
       execute: async ({ url, view: viewArg, tab }, context) => {
+        getResearchLimits().catch(() => {});
         const view = viewArg === 'text' ? 'text' : 'article';
         const wantsTab = tab !== undefined && tab !== null && tab !== '' && tab !== false;
         if (wantsTab) return readUserTab({ spec: tab === true ? (url || 'active') : tab, url, view, context });

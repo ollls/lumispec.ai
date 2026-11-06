@@ -3,8 +3,9 @@ import conversations from '../services/conversations.js';
 import { replaceApplets } from '../services/applets.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
+import { expandTemplateTags } from '../services/templateExpansion.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import { looksLikeChainQuote } from '../services/chainQuote.js';
@@ -156,25 +157,8 @@ router.post('/:id/messages', async (req, res) => {
     : displayContent;
   const userMsg = conversations.addMessage(conv.id, 'user', storedContent, { hidden: sessionInit });
 
-  // Expand [template: name] tags — inject saved applet HTML as context for the LLM
-  const templateRe = /\[template:\s*([^\]]+)\]/gi;
-  for (const match of [...content.matchAll(templateRe)]) {
-    const tplName = match[1].trim();
-    const tpl = getTemplateByName(tplName);
-    console.log(`[template] expanding "${tplName}" → ${tpl ? `found (${tpl.html.length} chars)` : 'NOT FOUND'}`);
-    if (tpl) {
-      content = content.replace(match[0],
-        `\n\nUse this saved HTML applet template as the EXACT base — output it as an <applet type="${tpl.type}"> block.
-Copy the template's HTML, CSS, and JavaScript VERBATIM. Only modify data values, dates, and dynamic content that need updating.
-If no fresh data is needed, output the template UNCHANGED.
-Do NOT redesign, restyle, or reimagine the template.
-Do NOT change colors, dimensions, font choices, CSS properties, class names, IDs, or DOM structure.
-If the user's message requests changes, apply ONLY those specific changes to the template.
-Fetch fresh data using the appropriate tools first if the content requires it, then populate the template with the new data.
-\`\`\`html\n${tpl.html}\n\`\`\``
-      );
-    }
-  }
+  // Expand [template: name] tags — inject saved applet HTML + instruction block (services/templateExpansion.js)
+  content = expandTemplateTags(content, getTemplateByName, (line) => console.log(line));
 
   // Resolve slot
   let slotId = slots.getSlotForConversation(conv.id);
@@ -490,11 +474,14 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           break;
         }
 
-        // Cap parallel tool calls to prevent context blowup from massive combined results
-        if (toolCallsFound.length > MAX_PARALLEL_TOOLS) {
-          console.warn(`[tool-loop] round ${round + 1}: capping ${toolCallsFound.length} tool calls to ${MAX_PARALLEL_TOOLS} (dropped: ${toolCallsFound.slice(MAX_PARALLEL_TOOLS).map(tc => tc.name).join(', ')})`);
-          toolCallsFound.length = MAX_PARALLEL_TOOLS;
+        // Cap parallel tool calls to prevent context blowup from massive combined results.
+        // Duplicates collapse first; whatever is dropped is named in this round's results message.
+        const { kept: cappedCalls, dropped: droppedCalls } = capToolCalls(toolCallsFound, MAX_PARALLEL_TOOLS);
+        if (droppedCalls.length) {
+          console.warn(`[tool-loop] round ${round + 1}: capping ${toolCallsFound.length} tool calls to ${MAX_PARALLEL_TOOLS} (dropped: ${droppedCalls.map(tc => tc.name).join(', ')})`);
         }
+        toolCallsFound.length = 0;
+        toolCallsFound.push(...cappedCalls);
         logRoute('tools');
         repairRounds = 0;
         // Execute all tool calls in parallel
@@ -592,7 +579,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         }
 
         const toolReminder = `\n\nRounds left: ${roundsLeft}.${directive} REMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
-        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + toolReminder });
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + droppedCallsNote(droppedCalls, MAX_PARALLEL_TOOLS) + toolReminder });
       } else {
         // Final answer — no tool call found by parser
         // Finance-specific guards: chain continuation + fabrication detection (only when finance group enabled)
@@ -627,7 +614,8 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         // matched first and told the model "not wrapped" about calls that were wrapped.
         // Skip both if content contains applet blocks (HTML/JS may have {"name": patterns)
         const hasApplet = /<applet[\s>]/i.test(result.content);
-        const hasToolCallTag = /<tool_call/i.test(result.content);
+        // An <invoke> block the parser could not read (no name attribute) is a tool attempt too.
+        const hasToolCallTag = /<tool_call|<invoke[\s>]/i.test(result.content);
         const unparseable = !hasApplet && (hasToolCallTag || /\{"name"\s*:\s*"/.test(result.content));
         if (unparseable && ++repairRounds > MAX_REPAIR_ROUNDS) {
           console.warn(`[tool-loop] round ${round + 1}: ${MAX_REPAIR_ROUNDS} consecutive unparseable tool calls, giving up on tools for this turn`);
@@ -648,7 +636,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
           logRoute('repair', 'malformed-tag');
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push(asAssistant(result.content, result.reasoning));
-          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed or truncated and could not be parsed. Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          llmMessages.push({ role: 'user', content: (/<invoke[\s>]/i.test(result.content) ? 'You used <invoke>/<parameter> syntax, which does not execute here. ' : 'Your <tool_call> JSON was malformed or truncated and could not be parsed. ') + 'Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
         logRoute('end');

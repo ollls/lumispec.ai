@@ -359,6 +359,58 @@ export function fetchMaxCharsField(value) {
     note: '≈1 token per 4 chars, kept in context for the rest of the chat. Raise it for pipelines (steps are isolated); keep it modest for long chats. Shared by Web Search & Fetch and Browser Search.',
   };
 }
+
+// Per-question call budget the model is *told* in the Web Research prompt section. Nothing in the
+// tool loop enforces it (that loop bounds rounds, parallel calls, repeats and prompt tokens); the
+// model reads the sentence and narrates it back as "I have a budget of 3 web_fetch calls". It was
+// a fixed 3 + 3 from the monolithic tools.js until 2026-11-04. Stored once under `web` like the
+// fetch cap and shown on both cards: the cost it bounds is context spend (count × fetch cap), the
+// same on either transport, only one of the two prompts is live at a time (supersession), and
+// the HTTP fallback crosses plugins mid-call. 0 drops that half of the sentence; both 0 drop it.
+export const RESEARCH_LIMITS = { maxSearchesPerQuestion: 3, maxFetchesPerQuestion: 3 };
+export const RESEARCH_LIMIT_RANGE = [0, 10];
+let cardResearchLimits = { ...RESEARCH_LIMITS }; // refreshed by beforeCard() / the run functions for the (sync) prompt + descriptors
+
+/** Clamp a saved `web` entry (or anything) to the two limits. Pure. */
+export function clampResearchLimits(raw) {
+  const out = {};
+  for (const k of Object.keys(RESEARCH_LIMITS)) {
+    const n = Number(raw?.[k]);
+    out[k] = Number.isFinite(n)
+      ? Math.min(RESEARCH_LIMIT_RANGE[1], Math.max(RESEARCH_LIMIT_RANGE[0], Math.round(n)))
+      : RESEARCH_LIMITS[k];
+  }
+  return out;
+}
+
+/** The saved limits, clamped; also refreshes the cache the sync prompt builders read. */
+export async function getResearchLimits() {
+  const cfg = await readPluginConfig();
+  cardResearchLimits = clampResearchLimits(cfg.web);
+  return cardResearchLimits;
+}
+/** Last-read limits for the sync `prompt()` builders of both web plugins. */
+export function cachedResearchLimits() { return cardResearchLimits; }
+
+/** The prompt sentence for the limits; '' when both are 0. Pure. */
+export function researchLimitLine({ maxSearchesPerQuestion: s, maxFetchesPerQuestion: f } = RESEARCH_LIMITS) {
+  const parts = [];
+  if (s > 0) parts.push(`${s} web_search call${s === 1 ? '' : 's'}`);
+  if (f > 0) parts.push(`${f} web_fetch call${f === 1 ? '' : 's'}`);
+  if (!parts.length) return '';
+  return `\n- Maximum ${parts.join(' and ')} per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`;
+}
+
+/** Field descriptors for the two limits, shared by both cards (`group: 'web'` targets the stored entry). */
+export function researchLimitFields(limits = cardResearchLimits) {
+  const common = { group: 'web', type: 'number', min: RESEARCH_LIMIT_RANGE[0], max: RESEARCH_LIMIT_RANGE[1], step: 1 };
+  return [
+    { ...common, key: 'maxSearchesPerQuestion', value: limits.maxSearchesPerQuestion, label: 'Max searches per question',
+      note: 'What the model is told it may spend per question; not enforced by the tool loop. 0 removes the limit from the prompt.' },
+    { ...common, key: 'maxFetchesPerQuestion', value: limits.maxFetchesPerQuestion, label: 'Max fetches per question',
+      note: 'Each fetch keeps up to "Max chars per fetched page" in context (≈ count × cap ÷ 4 tokens). 0 removes the limit from the prompt. Pipeline steps are isolated and can afford more.' },
+  ];
+}
 const INDEX_MIN_LINK_CHARS = 25;   // shorter anchors are nav, bylines, "Read more"
 const INDEX_MIN_LINK_SHARE = 0.2;
 const INDEX_MAX_LINKS_KEPT = 0.3;
@@ -463,6 +515,7 @@ export function htmlToMarkdown(html, baseUrl = 'http://localhost/', { maxChars =
 
 /** Search with the saved engine selection; merges and dedupes when several are on. */
 export async function runWebSearch(query) {
+  getResearchLimits().catch(() => {});
   const { engines } = await getWebConfig();
   const active = engines.filter(e => !!SEARCH_BACKENDS[e]);
 
@@ -510,6 +563,7 @@ export async function runWebSearch(query) {
 
 /** Fetch a page with the saved fetch mode (auto = stealth, then browser if blocked). */
 export async function runWebFetch(url, { view = 'article' } = {}) {
+  getResearchLimits().catch(() => {});
   const { mode } = await getWebConfig();
   if (mode !== 'auto') return fetchTier(mode, url, view);
 
@@ -541,11 +595,11 @@ export default {
   group: 'web',
   label: 'Web Search & Fetch',
   description: 'Web search and page fetching with configurable engines and fetch modes.',
-  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'], fetchMaxChars: FETCH_MAX_CHARS },
+  defaults: { enabled: true, mode: 'stealth', engines: ['keiro'], fetchMaxChars: FETCH_MAX_CHARS, ...RESEARCH_LIMITS },
   // Rendered by the Plugins panel as a mode dropdown + engine checkboxes
-  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); },
+  beforeCard: async () => { cardFetchMaxChars = await getFetchMaxChars(); await getResearchLimits(); },
   configUi: () => ({
-    fields: [fetchMaxCharsField(cardFetchMaxChars)],
+    fields: [fetchMaxCharsField(cardFetchMaxChars), ...researchLimitFields()],
     modes: ['auto', 'regular', 'stealth', 'browser'],
     availableEngines: [
       { id: 'tavily', label: 'Tavily', available: !!config.tavily.apiKey },
@@ -556,12 +610,11 @@ export default {
   routing: [
     '- Web questions, current events, news → use "web_search" then "web_fetch"',
   ],
-  prompt: `## Web Research
+  prompt: () => (getResearchLimits().catch(() => {}), `## Web Research
 - After web_search, try web_fetch on the most relevant result URL to get full details. If web_fetch fails (Cloudflare block, login wall, "enable JavaScript", empty content), use the search snippet descriptions directly — they often contain the data you need.
 - Do NOT retry the same blocked site via proxy or alternate URL. Move on.
 - web_fetch "view": "article" (default) for articles and news fronts; "text" for web applications (mail, calendars, dashboards, boards) or when "article" returns repeated fragments and image links. Page through an application with its own date or filter URLs; invented pagination parameters are ignored.
-- Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks — the search backend returns no results for quoted phrases. \`site:\` is fine.
-- Maximum 3 web_search calls and 3 web_fetch calls per user question. If you still lack information after that, answer with what you have and tell the user what you could not retrieve.`,
+- Write web_search queries as plain keywords. Do NOT wrap phrases in quotation marks — the search backend returns no results for quoted phrases. \`site:\` is fine.${researchLimitLine(cardResearchLimits)}`),
   tools: {
     web_search: {
       description: 'Search the web. Requires a "query" argument.',

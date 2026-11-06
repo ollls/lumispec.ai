@@ -11,6 +11,12 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 🎚 v1.5.3 — The research budget is a setting; Claude tool rounds fixed
+
+- **Research budget on the card.** "Maximum 3 web_search calls and 3 web_fetch calls per user question" was a fixed sentence in the Web Research prompt that the model narrates back as its "budget" — nothing in the tool loop enforces it. It is now **Max searches per question** / **Max fetches per question** on both the Web Search & Fetch and Browser Search cards (0–10, default 3 / 3; `0` removes that half of the sentence). Defaults leave the system prompt byte-identical.
+- **Templates fetch every source they name.** A `[template: name]` refresh no longer weighs the budget against the template's own source list (the eight-outlet World NEWS template was about to be refilled from three); a failed source is reported, not filled from memory.
+- **Claude backend tool rounds.** Native `<invoke>`/`<parameter>` calls are parsed instead of burning a repair round; calls dropped by the 4-per-round cap are named to the model so it can re-issue them (11 calls used to lose 7 unannounced); `etrade_account` calls are logged once. No reload. See [`releases/1.5.3.md`](releases/1.5.3.md).
+
 ## 🐛 v1.5.2 — Clipped pipeline hand-offs are no longer silent
 
 - A task-pipeline step receives the previous step's output capped at 32K chars; a subtask group's outputs are merged **before** the cap, so a wide fan-out lost its last siblings whole and the model never said so (13 fetched outlets → 7½ received → "8 outlets" presented, 2026-11-03). The clip is now announced three ways: a server warning naming the cut and dropped sections, a persistent amber line under the step in the chat, and a `> ⚠` notice at the top of the model's context telling it to state what is missing. Cap unchanged (`MAX_PREV_RESULT_CHARS`, now in `.env.example`). Also ships the **World NEWS** dashboard template from the screenshot above. No reload. See [`releases/1.5.2.md`](releases/1.5.2.md).
@@ -61,7 +67,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.2.md`](releases/1.5.2.md) (latest) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.3.md`](releases/1.5.3.md) (latest) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -437,7 +443,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.5.2.md`](releases/1.5.2.md) | v1.5.2 release notes (latest) — clipped pipeline hand-offs flagged, World NEWS template |
+| [`releases/1.5.3.md`](releases/1.5.3.md) | v1.5.3 release notes (latest) — research budget setting, template sources exempt, Claude backend tool rounds |
+| [`releases/1.5.2.md`](releases/1.5.2.md) | v1.5.2 release notes — clipped pipeline hand-offs flagged, World NEWS template |
 | [`releases/1.5.1.md`](releases/1.5.1.md) | v1.5.1 release notes — Bing first-word fix |
 | [`releases/1.5.0.md`](releases/1.5.0.md) | v1.5.0 release notes — `web_fetch` text view, Tab Fetch, Browser Search extension 0.7.0 |
 | [`releases/1.4.2.md`](releases/1.4.2.md) | v1.4.2 release notes — web fetch fixes, Browser Search extension v0.5.0 |
