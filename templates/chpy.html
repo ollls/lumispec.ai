@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<!-- SERIES CONTRACT — this template compares exactly three instruments: CHPY, SMH, SOX.
+     It renders nothing else: columns outside the SERIES whitelist in the script are ignored and a
+     missing one is reported on screen.
+
+     ASSISTANT: BEFORE emitting this applet you MUST create its data files — they are never saved
+     with the template and may have been deleted since the last run. Do not look for or reuse any
+     other file (semi_compare*, etf_prices*, *_hist* …). Do not emit the applet until both exist:
+
+       chpy_smh_sox.csv        header exactly: date,chpy,smh,sox   (lowercase; one row per trading
+                               day, oldest first; ISO dates; daily closes; only days all three have)
+       chpy_smh_sox_meta.json  {"title":"CHPY vs SMH vs SOX","note":"<source + date range>",
+                               "series":{"chpy":{"label":"CHPY","desc":"YieldMax Semiconductor
+                               Portfolio Option Income ETF","color":"#ef4444"},"smh":{"label":"SMH",
+                               "desc":"VanEck Semiconductor ETF","color":"#4a9eff"},"sox":{"label":
+                               "SOX","desc":"PHLX Semiconductor Index","color":"#f59e0b"}}}
+                               — exactly these three series entries, no others.
+
+     Source: Yahoo Finance via run_python (urllib, User-Agent header), one call per symbol:
+       https://query1.finance.yahoo.com/v8/finance/chart/<SYM>?range=1y&interval=1d
+       with SYM = CHPY, SMH, %5ESOX (^SOX); closes are result[0].indicators.quote[0].close,
+       dates from result[0].timestamp (UTC). Write both files to the project root (cwd).
+     Fetch exactly these three symbols. Never add SOXX, NVDA, AMD, TSM, ASML, MU or any other
+     ticker, index or ETF. Never rename or reorder columns. Never change the file names.
+     Then output this template VERBATIM. -->
+<html><head>
+<script src="/lib/chart.min.js"></script>
+<style>
+  body { margin:0; padding:16px; background:#1a1a2e; color:#e0e0e0; font-family:system-ui, -apple-system, sans-serif; }
+  h1 { font-size:17px; margin:0 0 2px; font-weight:600; }
+  h2 { font-size:15px; margin:22px 0 2px; font-weight:600; }
+  .sub { font-size:12px; color:#8a8aa8; margin-bottom:12px; }
+  .controls { display:flex; gap:8px; margin-bottom:12px; }
+  .btn { background:#16213e; color:#e0e0e0; border:1px solid #2a2a4a; border-radius:6px; padding:6px 14px; font-size:13px; cursor:pointer; }
+  .btn.active { background:#4a9eff; color:#1a1a2e; border-color:#4a9eff; font-weight:600; }
+  .chartbox { height:420px; background:#16213e; border:1px solid #2a2a4a; border-radius:8px; padding:10px; }
+  .stats { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+  .card { flex:1; min-width:150px; background:#16213e; border:1px solid #2a2a4a; border-radius:8px; padding:10px 12px; }
+  .card .name { font-size:12px; display:flex; align-items:center; gap:6px; color:#8a8aa8; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .card .val { font-size:18px; font-weight:600; margin-top:4px; }
+  .card .ret { font-size:12px; margin-top:2px; }
+  .up { color:#10b981; }
+  .down { color:#ef4444; }
+  .note { font-size:11px; color:#8a8aa8; margin-top:10px; line-height:1.5; }
+  #err { color:#ef4444; font-size:14px; padding:10px; display:none; }
+</style>
+</head><body>
+<h1 id="title">Loading...</h1>
+<div class="sub" id="subtitle">Loading data...</div>
+<div id="err"></div>
+<div class="controls">
+  <button class="btn active" id="btnNorm">Normalized (indexed to 100)</button>
+  <button class="btn" id="btnPrice">Price</button>
+</div>
+<div class="chartbox"><canvas id="chart"></canvas></div>
+<div class="stats" id="stats"></div>
+<div id="sections"></div>
+<div class="note" id="note"></div>
+<script>
+const PALETTE = ['#4a9eff','#f59e0b','#ef4444','#10b981','#7c3aed','#ec4899','#06b6d4','#84cc16'];
+// The only instruments this template shows, in legend order. Extra CSV columns never render.
+const SERIES = ['chpy', 'smh', 'sox'];
+const DATA_MATCH = 'chpy_smh_sox';        // newest *.csv whose name contains this
+const META_MATCH = 'chpy_smh_sox_meta';   // newest *.json whose name contains this
+
+let mainChart = null;
+let cache = null;
+
+function showError(msg) {
+  const el = document.getElementById('err');
+  el.textContent = msg;
+  el.style.display = 'block';
+  window.parent.postMessage({ type:'resize', height: document.body.scrollHeight }, '*');
+}
+
+function fetchLatest(match, ext) {
+  return fetch('/api/files?match=' + match)
+    .then(r => r.json())
+    .then(files => {
+      files = (files || []).filter(f => f.toLowerCase().endsWith(ext));
+      if (files.length === 0) return null;
+      return files[files.length - 1];
+    });
+}
+
+function fetchText(filename) {
+  if (!filename) return Promise.resolve(null);
+  return fetch('/files/' + filename).then(r => {
+    if (!r.ok) throw new Error('Failed to load ' + filename);
+    return r.text();
+  });
+}
+
+function parseCSV(txt) {
+  const lines = txt.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const rows = lines.slice(1).map(l => l.split(','));
+  return { headers, rows };
+}
+
+function discover(headers) {
+  const dateIdx = headers.findIndex(h => h.includes('date'));
+  if (dateIdx === -1) throw new Error('Missing date column');
+  const suffix = new RegExp('(_n|_norm|_normalized|_idx)$');  // RegExp(), not a /…$/ literal: the model keeps adding a ')' after it
+  const map = {};
+  headers.forEach((h, i) => {
+    if (i === dateIdx) return;
+    const isNorm = suffix.test(h);
+    const key = isNorm ? h.replace(suffix, '') : h;
+    if (!map[key]) map[key] = { key };
+    if (isNorm) map[key].normIdx = i;
+    else map[key].rawIdx = i;
+  });
+  // Whitelist: only SERIES render, in that order; anything else in the file is ignored
+  const series = SERIES.map(k => map[k]).filter(s => s && s.rawIdx !== undefined);
+  const missing = SERIES.filter(k => !series.some(s => s.key === k));
+  if (missing.length) throw new Error('Data file is missing required column(s): ' + missing.join(', ').toUpperCase() + ' — expected date,chpy,smh,sox');
+  return { dateIdx, series };
+}
+
+function buildSeries(series, rows, meta) {
+  return series.map((s, i) => {
+    const raw = rows.map(r => +r[s.rawIdx]);
+    const norm = (s.normIdx !== undefined)
+      ? rows.map(r => +r[s.normIdx])
+      : raw.map(v => v / raw[0] * 100);
+    const m = (meta.series && meta.series[s.key]) || {};
+    return {
+      key: s.key,
+      label: m.label || s.key.toUpperCase(),
+      desc: m.desc || '',
+      color: m.color || PALETTE[i % PALETTE.length],
+      raw, norm
+    };
+  });
+}
+
+function fmtDate(d) {
+  return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function chartOpts(view) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: { ticks: { color: '#e0e0e0', maxTicksLimit: 9, maxRotation: 0, autoSkip: true }, grid: { color: '#2a2a4a' } },
+      y: { ticks: { color: '#e0e0e0' }, grid: { color: '#2a2a4a' },
+        title: { display: true, color: '#e0e0e0', text: view === 'norm' ? 'Indexed to 100' : 'Price / Level' } }
+    },
+    plugins: {
+      legend: { labels: { color: '#e0e0e0', usePointStyle: true, pointStyle: 'line', font: { size: 13 } } },
+      tooltip: { backgroundColor: '#16213e', borderColor: '#2a2a4a', borderWidth: 1, titleColor: '#e0e0e0', bodyColor: '#e0e0e0',
+        callbacks: { label: c => ' ' + c.dataset.label + ': ' + c.parsed.y.toFixed(2) } }
+    }
+  };
+}
+
+function makeDatasets(seriesList, view, getArr) {
+  return seriesList.map(s => ({
+    label: s.label,
+    data: getArr(s, view),
+    borderColor: s.color,
+    backgroundColor: s.color,
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    tension: 0
+  }));
+}
+
+function renderMain(data, view) {
+  const ctx = document.getElementById('chart');
+  if (mainChart) mainChart.destroy();
+  mainChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: data.labels, datasets: makeDatasets(data.series, view, (s) => view === 'norm' ? s.norm : s.raw) },
+    options: chartOpts(view)
+  });
+  document.getElementById('title').textContent = data.meta.title || 'CHPY vs SMH vs SOX';
+  document.getElementById('subtitle').textContent = 'Daily closes, ' + fmtDate(data.firstDate) + ' → ' + fmtDate(data.lastDate) + ' · ' + data.count + ' sessions';
+  const el = document.getElementById('stats');
+  el.innerHTML = '';
+  data.series.forEach(s => {
+    const arr = view === 'norm' ? s.norm : s.raw;
+    const ret = (arr[arr.length - 1] / arr[0] - 1) * 100;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<div class="name"><span class="dot" style="background:' + s.color + '"></span>' + s.label + (s.desc ? ' · ' + s.desc : '') + '</div>' +
+      '<div class="val">' + arr[arr.length - 1].toFixed(2) + '</div>' +
+      '<div class="ret ' + (ret >= 0 ? 'up' : 'down') + '">' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '% since ' + fmtDate(data.firstDate) + '</div>';
+    el.appendChild(card);
+  });
+  window.parent.postMessage({ type:'resize', height: document.body.scrollHeight }, '*');
+}
+
+function renderSections(data) {
+  const wrap = document.getElementById('sections');
+  wrap.innerHTML = '';
+  const sections = (data.meta.sections || []);
+  sections.forEach((sec, si) => {
+    const keys = sec.series || data.series.map(s => s.key);
+    const sel = data.series.filter(s => keys.includes(s.key));
+    if (sel.length === 0) return;
+    let labels = data.labels, from = 0;
+    if (sec.start) {
+      from = data.labels.findIndex(d => d >= sec.start);
+      if (from < 0) from = 0;
+      labels = data.labels.slice(from);
+    }
+    const base = (sel[0].norm[from] || 100);
+    const h2 = document.createElement('h2');
+    h2.textContent = sec.title || ('Chart ' + (si + 2));
+    wrap.appendChild(h2);
+    if (sec.subtitle) { const d = document.createElement('div'); d.className = 'sub'; d.textContent = sec.subtitle; wrap.appendChild(d); }
+    const box = document.createElement('div'); box.className = 'chartbox'; wrap.appendChild(box);
+    const canvas = document.createElement('canvas'); box.appendChild(canvas);
+    const normArr = sel.map(s => s.norm.slice(from).map(v => v / base * 100));
+    new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets: sel.map((s, i) => ({ label: s.label, data: normArr[i], borderColor: s.color, backgroundColor: s.color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0 })) },
+      options: chartOpts('norm')
+    });
+    const stats = document.createElement('div'); stats.className = 'stats'; wrap.appendChild(stats);
+    sel.forEach((s, i) => {
+      const arr = normArr[i];
+      const ret = (arr[arr.length - 1] / arr[0] - 1) * 100;
+      const card = document.createElement('div'); card.className = 'card';
+      card.innerHTML =
+        '<div class="name"><span class="dot" style="background:' + s.color + '"></span>' + s.label + (s.desc ? ' · ' + s.desc : '') + '</div>' +
+        '<div class="val">' + arr[arr.length - 1].toFixed(2) + '</div>' +
+        '<div class="ret ' + (ret >= 0 ? 'up' : 'down') + '">' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '% since ' + fmtDate(labels[0]) + '</div>';
+      stats.appendChild(card);
+    });
+    if (sec.note) { const d = document.createElement('div'); d.className = 'note'; d.textContent = sec.note; wrap.appendChild(d); }
+  });
+}
+
+function loadAndRender() {
+  Promise.all([fetchLatest(DATA_MATCH, '.csv'), fetchLatest(META_MATCH, '.json')])
+    .then(([dataFile, metaFile]) => {
+      if (!dataFile) throw new Error('No data file: ' + DATA_MATCH + '.csv (date,chpy,smh,sox) was not generated. The assistant must fetch CHPY, SMH and ^SOX and write it before rendering this template.');
+      return fetchText(dataFile).then(txt => fetchText(metaFile).then(metaTxt => ({ txt, metaTxt })));
+    })
+    .then(({ txt, metaTxt }) => {
+      const { headers, rows } = parseCSV(txt);
+      const meta = metaTxt ? JSON.parse(metaTxt) : {};
+      const disc = discover(headers);
+      const series = buildSeries(disc.series, rows, meta);
+      const labels = rows.map(r => r[disc.dateIdx]);
+      cache = { labels, series, meta, firstDate: labels[0], lastDate: labels[labels.length - 1], count: labels.length };
+      document.getElementById('note').textContent = meta.note || '';
+      renderMain(cache, 'norm');
+      renderSections(cache);
+      window.parent.postMessage({ type:'resize', height: document.body.scrollHeight }, '*');
+    })
+    .catch(err => showError(err.message || 'Failed to load data'));
+}
+
+document.getElementById('btnNorm').addEventListener('click', () => {
+  document.getElementById('btnNorm').classList.add('active');
+  document.getElementById('btnPrice').classList.remove('active');
+  if (cache) renderMain(cache, 'norm');
+});
+document.getElementById('btnPrice').addEventListener('click', () => {
+  document.getElementById('btnPrice').classList.add('active');
+  document.getElementById('btnNorm').classList.remove('active');
+  if (cache) renderMain(cache, 'price');
+});
+
+loadAndRender();
+</script>
+</body></html>

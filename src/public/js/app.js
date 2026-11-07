@@ -19,6 +19,7 @@ const state = {
   retainEnabled: localStorage.getItem('retainEnabled') === 'true', // send the model's reasoning back as context (default off)
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
   sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
+  sidebarQuery: '', // sidebar title filter (keyword, case-insensitive); composes with the color filter, not persisted
   sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
   obsidianEnabled: false, // Obsidian Export plugin on → sidebar rows get a "Save to Obsidian" button
 };
@@ -124,6 +125,8 @@ function requireSession() {
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
 const convFilter = document.getElementById('conv-filter');
+const convSearchInput = document.getElementById('conv-search-input');
+const convSearchClear = document.getElementById('conv-search-clear');
 const newChatButtons = document.querySelectorAll('.session-btn');
 const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
@@ -392,6 +395,25 @@ function setSidebarFilter(value) {
   renderSidebar();
 }
 
+// Title filter box under the color chips. The input lives outside #conversation-list, which
+// renderSidebar() wipes on every refresh, so typing is never interrupted by a title update.
+function setSidebarQuery(value) {
+  state.sidebarQuery = value;
+  if (convSearchInput.value !== value) convSearchInput.value = value;
+  convSearchClear.classList.toggle('hidden', !value);
+  renderSidebar();
+}
+convSearchInput.addEventListener('input', () => setSidebarQuery(convSearchInput.value));
+convSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); setSidebarQuery(''); convSearchInput.blur(); }
+});
+convSearchClear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
+
+function sidebarQueryMatches(conv) {
+  const q = state.sidebarQuery.trim().toLowerCase();
+  return !q || String(conv.title || '').toLowerCase().includes(q);
+}
+
 // Tab-like chip strip above the conversation list. Only colors that actually
 // have conversations get a chip, so the strip stays one row wide even though
 // ten session colors exist. Hidden entirely when there's nothing to filter.
@@ -468,19 +490,29 @@ function renderSidebar() {
   }
   renderConvFilter(counts);
 
-  const visible = state.sidebarFilter === 'all'
+  const byColor = state.sidebarFilter === 'all'
     ? state.conversations
     : state.conversations.filter(c => state.sessionColors[c.id] === state.sidebarFilter);
+  const query = state.sidebarQuery.trim();
+  const visible = query ? byColor.filter(sidebarQueryMatches) : byColor;
 
   sidebar.innerHTML = '';
-  if (!visible.length && state.sidebarFilter !== 'all') {
+  if (!visible.length && (state.sidebarFilter !== 'all' || query)) {
     const empty = document.createElement('div');
     empty.className = 'px-3 py-4 text-xs text-zinc-500';
-    empty.textContent = `No ${state.sidebarFilter} conversations. `;
+    const colorPart = state.sidebarFilter !== 'all' ? `${state.sidebarFilter} ` : '';
+    empty.textContent = query
+      ? `No ${colorPart}conversations with “${query}” in the title. `
+      : `No ${colorPart}conversations. `;
     const clear = document.createElement('button');
     clear.className = 'text-indigo-400 hover:underline cursor-pointer';
-    clear.textContent = 'Show all';
-    clear.addEventListener('click', () => setSidebarFilter('all'));
+    if (query) {
+      clear.textContent = 'Clear search';
+      clear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
+    } else {
+      clear.textContent = 'Show all';
+      clear.addEventListener('click', () => setSidebarFilter('all'));
+    }
     empty.appendChild(clear);
     sidebar.appendChild(empty);
     return;
@@ -791,16 +823,30 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving\u2026';
     try {
-      await fetch('/api/templates', {
+      const res = await fetch('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, type: applet.type, html: applet.html }),
       });
-      saveBtn.textContent = 'Saved \u2713';
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.error || res.statusText);
       saveBtn.className = 'bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded mt-1';
       refreshTemplates();
-    } catch {
+      if (saved.review?.status === 'pending') {
+        // The raw template is saved; the LLM review runs server-side and rewrites it in place.
+        saveBtn.textContent = 'Saved \u2713 \u00b7 reviewing\u2026';
+        saveBtn.classList.add('animate-pulse');
+        const review = await waitForTemplateReview(saved.id);
+        saveBtn.classList.remove('animate-pulse');
+        saveBtn.textContent = describeTemplateReview(review);
+        saveBtn.title = (review?.issues || []).concat(review?.reason ? ['Kept the original: ' + review.reason] : []).join('\n');
+        refreshTemplates();
+      } else {
+        saveBtn.textContent = 'Saved \u2713';
+      }
+    } catch (err) {
       saveBtn.textContent = 'Save failed';
+      saveBtn.title = err.message || '';
       saveBtn.disabled = false;
     }
   });
@@ -810,6 +856,33 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   wrapper.appendChild(iframe);
   wrapper.appendChild(saveBtn);
   return wrapper;
+}
+
+// Poll a saved template until its LLM review leaves 'pending' (a local model can take a few
+// minutes on a long template). Resolves to the review object, or null when polling gave up.
+async function waitForTemplateReview(id, { intervalMs = 2000, maxMs = 10 * 60 * 1000 } = {}) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    try {
+      const res = await fetch(`/api/templates/${id}`);
+      if (res.status === 404) return null;
+      const t = await res.json();
+      if (t.review && t.review.status !== 'pending') return t.review;
+    } catch {}
+  }
+  return null;
+}
+
+function describeTemplateReview(review) {
+  if (!review) return 'Saved ✓ · review still running';
+  if (review.status === 'done') {
+    if (!review.changed) return 'Saved ✓ · reviewed, no changes';
+    const n = review.issues?.length || 0;
+    return `Saved ✓ · reviewed, ${n ? `${n} issue${n === 1 ? '' : 's'} fixed` : 'improved'}`;
+  }
+  if (review.status === 'failed') return 'Saved ✓ · review failed, original kept';
+  return 'Saved ✓';
 }
 
 // Global resize listener for applet iframes (registered once)
@@ -3230,6 +3303,26 @@ function renderTemplates(templates) {
     typeSpan.className = 'text-zinc-600 text-xs shrink-0';
     typeSpan.textContent = t.type;
 
+    // LLM review state (see services/templateReview.js): ⏳ running, ✓ applied, ! kept original.
+    const reviewSpan = document.createElement('span');
+    reviewSpan.className = 'text-xs shrink-0 px-1';
+    const rv = t.review;
+    if (rv?.status === 'pending') {
+      reviewSpan.textContent = '⏳';
+      reviewSpan.className += ' text-amber-400 animate-pulse';
+      reviewSpan.title = 'LLM review running';
+    } else if (rv?.status === 'done') {
+      reviewSpan.textContent = rv.changed ? '✓' : '·';
+      reviewSpan.className += ' text-emerald-500';
+      reviewSpan.title = rv.changed
+        ? 'Reviewed — fixed:\n' + (rv.issues || []).join('\n')
+        : 'Reviewed — no changes needed';
+    } else if (rv?.status === 'failed') {
+      reviewSpan.textContent = '!';
+      reviewSpan.className += ' text-red-400';
+      reviewSpan.title = 'Review kept the original: ' + (rv.reason || 'unknown') + '\nClick ⚡ to retry';
+    }
+
     const editBtn = document.createElement('button');
     editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     editBtn.textContent = '✎';
@@ -3247,7 +3340,7 @@ function renderTemplates(templates) {
     const optBtn = document.createElement('button');
     optBtn.className = 'text-zinc-600 hover:text-amber-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     optBtn.textContent = '\u26A1';
-    optBtn.title = 'Optimize template with LLM';
+    optBtn.title = 'Review template with LLM (runs automatically on save; click to run again)';
     optBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       optBtn.textContent = '\u23F3';
@@ -3260,15 +3353,18 @@ function renderTemplates(templates) {
           optBtn.classList.remove('animate-pulse');
           optBtn.className = 'text-emerald-400 text-xs px-1 shrink-0';
           optBtn.disabled = true;
+          optBtn.title = data.template?.review?.changed ? 'Reviewed and updated' : 'Reviewed \u2014 no changes needed';
         } else {
           optBtn.textContent = '\u26A1';
           optBtn.classList.remove('animate-pulse');
-          console.error('Optimize failed:', data.error);
+          optBtn.title = 'Review kept the original: ' + (data.error || 'unknown');
+          console.error('Template review failed:', data.error);
         }
       } catch {
         optBtn.textContent = '\u26A1';
         optBtn.classList.remove('animate-pulse');
       }
+      refreshTemplates();
     });
 
     const delBtn = document.createElement('button');
@@ -3294,6 +3390,15 @@ function renderTemplates(templates) {
     item.appendChild(grip);
     item.appendChild(nameSpan);
     item.appendChild(typeSpan);
+    item.appendChild(reviewSpan);
+    // Author's notes to the assistant — kept out of the HTML the model copies (services/templates.js)
+    if (t.notes) {
+      const notesSpan = document.createElement('span');
+      notesSpan.className = 'text-xs shrink-0 px-1 text-zinc-500 cursor-help';
+      notesSpan.textContent = '☰';
+      notesSpan.title = 'Notes for the assistant:\n' + t.notes;
+      item.appendChild(notesSpan);
+    }
     item.appendChild(editBtn);
     item.appendChild(optBtn);
     item.appendChild(delBtn);
