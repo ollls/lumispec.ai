@@ -15,6 +15,10 @@ export default {
   llama: {
     baseUrl: process.env.LLAMA_URL || 'http://localhost:8080',
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
+    // Per-answer cap on generated tokens (reasoning + content) for every streaming completion.
+    // 0 disables. A single answer used to be allowed to run to the context wall: on 2026-11-07
+    // one round generated ~30K tokens over 3.5 minutes before its first tool call.
+    maxCompletionTokens: parseInt(process.env.LLAMA_MAX_COMPLETION_TOKENS || '24576', 10),
   },
   pipeline: {
     // Chars of the previous step's output a task-pipeline step is allowed to receive.

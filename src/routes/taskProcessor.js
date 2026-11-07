@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
@@ -610,8 +610,13 @@ CRITICAL RULES:
     // A "length" finish means the step ran out of context mid-sentence. Downstream steps read
     // this output as fact, so mark the seam rather than passing a sentence that just stops.
     if (finalContent && lastFinishReason === 'length') {
-      console.warn(`[task-processor] ${stepLabel}: output truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
-      finalContent += `\n\n---\n⚠ **Step output cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Anything the step had left to say is missing from this output.`;
+      if (hitCompletionCap(lastUsage)) {
+        console.warn(`[task-processor] ${stepLabel}: output truncated at the per-answer cap (${lastUsage.completion_tokens} generated, LLAMA_MAX_COMPLETION_TOKENS=${config.llama.maxCompletionTokens})`);
+        finalContent += `\n\n---\n⚠ **Step output cut off at the per-answer limit** (${lastUsage.completion_tokens} tokens generated, cap ${config.llama.maxCompletionTokens}). Anything the step had left to say is missing from this output.`;
+      } else {
+        console.warn(`[task-processor] ${stepLabel}: output truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
+        finalContent += `\n\n---\n⚠ **Step output cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Anything the step had left to say is missing from this output.`;
+      }
     }
 
     // Extract saved filenames from tool results

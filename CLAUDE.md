@@ -167,6 +167,12 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 ## Environment Variables (via .env, required)
 - `PORT` — server port (default: 3000)
 - `LLAMA_URL` — llama-server base URL (default: `http://localhost:8080`)
+- `LLAMA_MAX_COMPLETION_TOKENS` — per-answer cap on generated tokens (reasoning + content) sent as
+  `max_tokens` on every streaming completion (default: 24576 — a 16K reasoning budget plus an 8K
+  answer; `0` disables). Without it one answer could run to the context wall: on 2026-11-07 a round
+  generated ~30K tokens over 3.5 minutes before its first tool call. A round that hits the cap
+  finishes with `"length"`; `hitCompletionCap(usage)` (`services/llm.js`) tells both loops to label
+  the cut "per-answer limit" instead of "context limit"
 - `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 131072). Only used when `/slots` is
   unreachable; the live slot `n_ctx` wins otherwise. Keep it at or below llama-server's
   `--ctx-size` — a value above the true window makes the tool loop skip its wind-down

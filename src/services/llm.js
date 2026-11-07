@@ -110,6 +110,15 @@ export function trimOldToolResults(messages, keep = 3, cap = 400) {
 
 // ── Streaming ────────────────────────────────────────────
 
+/**
+ * Whether a "length" finish came from the per-answer cap (LLAMA_MAX_COMPLETION_TOKENS) rather
+ * than the context wall: the round generated at least the cap. Pure; `usage` is the normalized
+ * { completion_tokens } of that round.
+ */
+export function hitCompletionCap(usage, cap = config.llama.maxCompletionTokens) {
+  return cap > 0 && (usage?.completion_tokens || 0) >= cap;
+}
+
 export async function streamChatCompletion(messages, { slotId, signal } = {}) {
   if (config.llm.backend === 'claude') {
     return streamClaudeCompletion(messages, { signal });
@@ -120,6 +129,9 @@ export async function streamChatCompletion(messages, { slotId, signal } = {}) {
 async function streamLlamaCompletion(messages, { slotId, signal } = {}) {
   const body = { messages, stream: true };
   if (slotId != null) body.id_slot = slotId;
+  // Bound one answer (reasoning + content). Without it a runaway generation ends only at the
+  // context wall; with it, finish_reason "length" arrives after LLAMA_MAX_COMPLETION_TOKENS.
+  if (config.llama.maxCompletionTokens > 0) body.max_tokens = config.llama.maxCompletionTokens;
 
   const res = await fetch(`${config.llama.baseUrl}/v1/chat/completions`, {
     method: 'POST',
