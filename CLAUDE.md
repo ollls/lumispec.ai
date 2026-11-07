@@ -81,7 +81,7 @@ src/
     prompts.js             # Prompt library CRUD + reorder + LLM-generated titles
     sessions.js            # Session prompts CRUD (upsert by color, reorder, PATCH title, LLM-generated titles)
     tools.js               # List tools, toggle enable/disable (individual tool level)
-    templates.js           # Template CRUD, sanitizer, LLM optimize endpoint
+    templates.js           # Template CRUD, background LLM review on save, on-demand review endpoint
   services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser), prompt sizing + tool-result trimming
@@ -93,7 +93,8 @@ src/
     sessions.js            # Session prompts persistence (data/sessions.json), upsert by color
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
     liteapi.js             # LiteAPI hotel/travel client
-    templates.js           # Template persistence + reorder + update
+    templates.js           # Template persistence + reorder + update (+ per-template `review` state)
+    templateReview.js      # LLM review of saved templates: audit, prompt, output guard, orchestration (pure, tested)
     tasks.js               # Task pipeline persistence (data/tasks.json)
   views/index.html         # Main chat UI (full-width top bar, sidebar, slot panel)
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
@@ -141,8 +142,9 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 | `/api/sessions` | GET/POST | List/upsert session prompts (one per color, LLM titles) |
 | `/api/sessions/:id` | PATCH/DELETE | Update title/text / delete session prompt |
 | `/api/sessions/reorder` | PUT | Reorder sessions |
-| `/api/templates/:id` | PATCH/DELETE | Update name / delete template |
-| `/api/templates/:id/optimize` | POST | LLM-powered template optimization |
+| `/api/templates` | GET/POST | List / save template (POST returns at once with `review.status: 'pending'`; the LLM review runs in the background — `review: false` in the body skips it) |
+| `/api/templates/:id` | GET/PATCH/DELETE | Full template incl. `review` state (polled after save) / update name / delete |
+| `/api/templates/:id/optimize` | POST | Run the LLM review again on demand (⚡ button), awaited |
 | `/api/templates/reorder` | PUT | Reorder templates |
 | `/files/*` | GET | Serve project directory files (SOURCE_DIR) |
 | `/api/config` | GET | Public config (location) |
@@ -603,10 +605,14 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 
 **Security**: `sandbox="allow-scripts allow-same-origin"` allows JS execution and fetch to same-origin `/files/` endpoints. postMessage resize is the parent communication channel.
 
-### Template Sanitizer & Optimizer
-**Sanitizer** (`sanitizeTemplate()` in `src/routes/templates.js`): Runs automatically on POST and PATCH. Fixes Python-in-JS (None→null, True→true inside `<script>` blocks only), CDN→local Chart.js, stray semicolons. Deterministic, no LLM.
+### Template Sanitizer & LLM Review
+**Sanitizer** (`sanitizeTemplate()` in `src/services/templateReview.js`): Runs on POST and PATCH and on every LLM answer. Fixes Python-in-JS (None→null, True→true inside `<script>` blocks only), CDN→local Chart.js, stray semicolons. Deterministic, no LLM.
 
-**LLM Optimizer** (`POST /api/templates/:id/optimize`): Sends template HTML to LLM with optimization prompt. Fixes: hardcoded data → fetch from `/files/`, empty selects → dynamic population, missing error handling, missing resize postMessage. Frontend ⚡ button in Templates dropdown, disables after success.
+**LLM review on save** (`reviewTemplateHtml()` in `src/services/templateReview.js`, wired in `src/routes/templates.js`): every "Save as Template" saves the raw (sanitized) HTML first, answers immediately with `review.status: 'pending'`, and then reviews the template in the background with the active LLM backend; the Save button shows "Saved ✓ · reviewing…" and polls `GET /api/templates/:id` (2 s, up to 10 min) until the status settles. Added 2026-11-06 after the AMD intraday applet was saved with `const DATA = __DATA__;` (the data never injected), the date baked into the `<h2>`, no error path and no resize message, and needed a manual chat session with the source tools to rewrite. Flow:
+1. **Audit** (`auditTemplate()`, deterministic): unresolved placeholders (`__DATA__`, `{{rows}}`, "insert data here"), hardcoded datasets with no `/files/` fetch (outermost array literals with ≥ 6 numbers after stripping strings and call arguments such as `rgba(…)`), `fetch()` with no catch, no data loading at all, no resize postMessage, dates / dollar values written into the markup, Python literals, CDN scripts, empty `<select>`. The findings are stored on the template (`review.issues`) and shown as tooltips.
+2. **Prompt**: `REVIEW_SYSTEM_PROMPT` (the former optimizer rules plus: placeholders are the #1 defect, discover files with `/api/files?match=keyword` — lowercase, the filter is case-insensitive since 2026-11-06 — compute dates/values at render time, visible error for "no matching file") with the audit list ahead of the HTML in the user turn, `maxTokens` 8192, thinking off.
+3. **Guard** (`validateReviewed()`): the answer replaces the original only if it is still HTML, has no fence or prose lead-in, no placeholder left, keeps its `<script>`, `</html>`, `new Chart(` / `<svg>`, is 40–400% of the original size and has balanced script tags. Otherwise the raw save stands and `review.status` is `'failed'` with `reason`; the list shows a red `!` and ⚡ retries. An LLM transport error is handled the same way — a save never fails because llama-server is down.
+Measured on the AMD case: 10 s on Qwen3.8-27B, all four audit findings fixed, audit after: clean. `TEMPLATE_AUTO_REVIEW=0` in `.env` turns the automatic run off (saves get `review.status: 'skipped'`); the ⚡ button runs the same flow on demand and now also reports why an answer was rejected. One review per template id at a time (`inFlight` map); a review finishing after the template was deleted is dropped.
 
 ### File Serving
 Project directory files served at `/files/` via dynamic Express middleware (follows `source_project` switches). Applets fetch data from `/files/FILENAME`. run_python writes to cwd (SOURCE_DIR) — files are automatically available at `/files/`. `/files/` is a read URL, not a filesystem write path.

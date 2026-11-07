@@ -22,15 +22,21 @@ function save(templates) {
 }
 
 export function listTemplates() {
-  return load().map(({ id, name, type, createdAt }) => ({ id, name, type, createdAt }));
+  return load().map(({ id, name, type, createdAt, review }) => ({ id, name, type, createdAt, review }));
 }
 
-export function createTemplate(name, type, html) {
+/**
+ * `review` is the LLM review's state on this template (see services/templateReview.js):
+ * { status: 'pending' | 'done' | 'failed' | 'skipped', changed?, issues?, remaining?, reason?, at }.
+ * Absent on templates saved before the review existed.
+ */
+export function createTemplate(name, type, html, review) {
   const templates = load();
   const template = { id: randomUUID(), name, type, html, createdAt: new Date().toISOString() };
+  if (review) template.review = review;
   templates.unshift(template);
   save(templates);
-  return { id: template.id, name, type, createdAt: template.createdAt };
+  return { id: template.id, name, type, createdAt: template.createdAt, review: template.review };
 }
 
 export function reorderTemplates(ids) {
@@ -44,13 +50,14 @@ export function reorderTemplates(ids) {
   return reordered;
 }
 
-export function updateTemplate(id, { name, type, html } = {}) {
+export function updateTemplate(id, { name, type, html, review } = {}) {
   const templates = load();
   const template = templates.find(t => t.id === id);
   if (!template) return null;
   if (name !== undefined) template.name = name;
   if (type !== undefined) template.type = type;
   if (html !== undefined) template.html = html;
+  if (review !== undefined) template.review = review;
   save(templates);
   return template;
 }

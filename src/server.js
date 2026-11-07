@@ -61,8 +61,9 @@ app.get('/api/files', async (_req, res) => {
       const ext = f.slice(f.lastIndexOf('.'));
       return dataExts.has(ext);
     });
-    const match = _req.query.match;
-    if (match) files = files.filter(f => f.includes(match));
+    // Case-insensitive: templates ask for ?match=AMD while the files are amd_intraday.json (2026-11-06)
+    const match = String(_req.query.match || '').toLowerCase();
+    if (match) files = files.filter(f => f.toLowerCase().includes(match));
     res.json(files.sort());
   } catch (e) {
     res.status(500).json({ error: e.message });
