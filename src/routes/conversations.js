@@ -2,15 +2,29 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import { replaceApplets } from '../services/applets.js';
 import slots from '../services/slots.js';
-import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults } from '../services/llm.js';
+import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
-import { expandTemplateTags } from '../services/templateExpansion.js';
+import { expandTemplateTags, TEMPLATE_TAG_RE } from '../services/templateExpansion.js';
+import config from '../config.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import { looksLikeChainQuote } from '../services/chainQuote.js';
 
 const router = Router();
+
+/**
+ * Conversation title from the user's message as typed: the first sentence, 120 chars max. A
+ * message that is only template tags becomes "Template: <name>" (pure, tested in test/autoTitle.test.js).
+ */
+export function autoTitle(text) {
+  const t = String(text || '').trim();
+  if (!t) return '';
+  const tags = [...t.matchAll(TEMPLATE_TAG_RE)].map(m => m[1].trim());
+  if (tags.length && t.replace(TEMPLATE_TAG_RE, '').trim() === '') return `Template: ${tags.join(', ')}`;
+  const firstSentence = t.match(/^[^.!?\n]+[.!?]?/)?.[0]?.trim() || t;
+  return firstSentence.length > 120 ? firstSentence.slice(0, 120) + '…' : firstSentence;
+}
 
 // List conversation summaries
 router.get('/', (_req, res) => {
@@ -753,8 +767,13 @@ router.post('/:id/messages', async (req, res) => {
     // A "length" finish means the model ran out of context mid-sentence. Say so rather than
     // handing back a paragraph that just stops.
     if (finalContent && lastFinishReason === 'length') {
-      console.warn(`[tool-loop] answer truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
-      finalContent += `\n\n---\n⚠ **Answer cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Ask a narrower follow-up or start a fresh conversation to get the rest.`;
+      if (hitCompletionCap(lastUsage)) {
+        console.warn(`[tool-loop] answer truncated at the per-answer cap (${lastUsage.completion_tokens} generated, LLAMA_MAX_COMPLETION_TOKENS=${config.llama.maxCompletionTokens})`);
+        finalContent += `\n\n---\n⚠ **Answer cut off at the per-answer limit** (${lastUsage.completion_tokens} tokens generated, cap ${config.llama.maxCompletionTokens}). Ask for the rest, or raise \`LLAMA_MAX_COMPLETION_TOKENS\` in \`.env\`.`;
+      } else {
+        console.warn(`[tool-loop] answer truncated at the context limit (${promptTokens}/${ctxLimit} tokens)`);
+        finalContent += `\n\n---\n⚠ **Answer cut off at the context limit** (${promptTokens} of ${ctxLimit} tokens). Ask a narrower follow-up or start a fresh conversation to get the rest.`;
+      }
     }
 
     // Send final content as a single event
@@ -813,16 +832,14 @@ router.post('/:id/messages', async (req, res) => {
   res.write('data: [DONE]\n\n');
   res.end();
 
-  // Auto-title from first visible user message (skip session init prompts)
+  // Auto-title from the first visible user message as typed (skip session init prompts).
+  // `displayContent`, not `content`: after expansion a [template: X] message starts with the
+  // instruction block, and every template run used to be titled "Use this saved HTML applet…".
   if (!sessionInit) {
     const updated = conversations.get(conv.id);
     if (updated && updated.title === 'New conversation') {
-      const text = typeof content === 'string' ? content : content.text;
-      if (text) {
-        const firstSentence = text.match(/^[^.!?\n]+[.!?]?/)?.[0]?.trim() || text;
-        const title = firstSentence.length > 120 ? firstSentence.slice(0, 120) + '…' : firstSentence;
-        conversations.updateTitle(conv.id, title);
-      }
+      const title = autoTitle(displayContent);
+      if (title) conversations.updateTitle(conv.id, title);
     }
   }
 });
