@@ -12,6 +12,14 @@ test('a known tag becomes the instruction block with the template HTML inside', 
   assert.ok(out.endsWith('``` please'));
 });
 
+test('template HTML with replacement patterns like \'$\' + v is inserted literally', () => {
+  // String.replace treats $' $& $` $1 in a string replacement as patterns; the tag sat at the end
+  // of the message, so `'$' + v` collapsed to `' + v` and the copied applet had an unterminated string
+  const html = "const fmt$ = v => '$' + Number(v).toFixed(2); // $& $` $1 $$";
+  const out = expandTemplateTags('[template: AMD]', (n) => n === 'AMD' ? { type: 'chartjs', html } : null);
+  assert.ok(out.includes(html), out);
+});
+
 test('an unknown tag is left in place and logged', () => {
   const lines = [];
   const out = expandTemplateTags('[template: Nope]', lookup, (l) => lines.push(l));

@@ -34,7 +34,10 @@ export function expandTemplateTags(content, getTemplateByName, log = () => {}) {
     const tplName = match[1].trim();
     const tpl = getTemplateByName(tplName);
     log(`[template] expanding "${tplName}" → ${tpl ? `found (${tpl.html.length} chars)` : 'NOT FOUND'}`);
-    if (tpl) content = content.replace(match[0], templateInstruction(tpl));
+    // Replacement as a function: a string replacement interprets `$'`, `$&`, `` $` `` and `$n`
+    // as patterns, and a template with `'$' + v` in its script lost both dollar signs on
+    // 2026-11-07 — the model copied the result verbatim and the applet died on a SyntaxError.
+    if (tpl) content = content.replace(match[0], () => templateInstruction(tpl));
   }
   return content;
 }
