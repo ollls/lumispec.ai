@@ -19,6 +19,7 @@ const state = {
   retainEnabled: localStorage.getItem('retainEnabled') === 'true', // send the model's reasoning back as context (default off)
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
   sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
+  sidebarQuery: '', // sidebar title filter (keyword, case-insensitive); composes with the color filter, not persisted
   sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
   obsidianEnabled: false, // Obsidian Export plugin on → sidebar rows get a "Save to Obsidian" button
 };
@@ -124,6 +125,8 @@ function requireSession() {
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
 const convFilter = document.getElementById('conv-filter');
+const convSearchInput = document.getElementById('conv-search-input');
+const convSearchClear = document.getElementById('conv-search-clear');
 const newChatButtons = document.querySelectorAll('.session-btn');
 const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
@@ -392,6 +395,25 @@ function setSidebarFilter(value) {
   renderSidebar();
 }
 
+// Title filter box under the color chips. The input lives outside #conversation-list, which
+// renderSidebar() wipes on every refresh, so typing is never interrupted by a title update.
+function setSidebarQuery(value) {
+  state.sidebarQuery = value;
+  if (convSearchInput.value !== value) convSearchInput.value = value;
+  convSearchClear.classList.toggle('hidden', !value);
+  renderSidebar();
+}
+convSearchInput.addEventListener('input', () => setSidebarQuery(convSearchInput.value));
+convSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); setSidebarQuery(''); convSearchInput.blur(); }
+});
+convSearchClear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
+
+function sidebarQueryMatches(conv) {
+  const q = state.sidebarQuery.trim().toLowerCase();
+  return !q || String(conv.title || '').toLowerCase().includes(q);
+}
+
 // Tab-like chip strip above the conversation list. Only colors that actually
 // have conversations get a chip, so the strip stays one row wide even though
 // ten session colors exist. Hidden entirely when there's nothing to filter.
@@ -468,19 +490,29 @@ function renderSidebar() {
   }
   renderConvFilter(counts);
 
-  const visible = state.sidebarFilter === 'all'
+  const byColor = state.sidebarFilter === 'all'
     ? state.conversations
     : state.conversations.filter(c => state.sessionColors[c.id] === state.sidebarFilter);
+  const query = state.sidebarQuery.trim();
+  const visible = query ? byColor.filter(sidebarQueryMatches) : byColor;
 
   sidebar.innerHTML = '';
-  if (!visible.length && state.sidebarFilter !== 'all') {
+  if (!visible.length && (state.sidebarFilter !== 'all' || query)) {
     const empty = document.createElement('div');
     empty.className = 'px-3 py-4 text-xs text-zinc-500';
-    empty.textContent = `No ${state.sidebarFilter} conversations. `;
+    const colorPart = state.sidebarFilter !== 'all' ? `${state.sidebarFilter} ` : '';
+    empty.textContent = query
+      ? `No ${colorPart}conversations with “${query}” in the title. `
+      : `No ${colorPart}conversations. `;
     const clear = document.createElement('button');
     clear.className = 'text-indigo-400 hover:underline cursor-pointer';
-    clear.textContent = 'Show all';
-    clear.addEventListener('click', () => setSidebarFilter('all'));
+    if (query) {
+      clear.textContent = 'Clear search';
+      clear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
+    } else {
+      clear.textContent = 'Show all';
+      clear.addEventListener('click', () => setSidebarFilter('all'));
+    }
     empty.appendChild(clear);
     sidebar.appendChild(empty);
     return;
