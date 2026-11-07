@@ -100,7 +100,11 @@ export function auditTemplate(html, notes = '') {
   if (points >= 12 && !usesFiles) issues.push(`~${points} numbers hardcoded in array literals and no fetch from /files/ — the template will always show this one snapshot`);
 
   if (fetches && !/\.catch\(|catch\s*(?:\(|\{)/.test(js)) issues.push('fetch() without any catch — a missing file fails silently with an empty applet');
-  if (!fetches && !ph && points < 12 && !usesFiles) issues.push('no data loading at all — nothing in this template changes between runs');
+  // A clock, a timer or an animation changes every run without any data; the Beautiful Watch
+  // (2026-11-07) was told it was static and the model invented a fetch of "/api/files?match=watch"
+  // that parsed the first match as JSON — an error overlay the moment a watch.html existed.
+  const clockDriven = /new Date\(|Date\.now\(|setInterval\(|requestAnimationFrame\(/.test(js);
+  if (!fetches && !ph && points < 12 && !usesFiles && !clockDriven) issues.push('static: no data loading and nothing time-driven — the template shows the same thing every run; only add data loading if the markup clearly presents data that should refresh');
 
   if (!/postMessage\s*\(/.test(js)) issues.push("no resize postMessage — the host iframe cannot size itself to the content");
 
@@ -175,6 +179,7 @@ Rules:
 - Fix JavaScript bugs: None→null, True→true, False→false, undeclared variables
 - Replace CDN URLs with local: Chart.js → /lib/chart.min.js
 - Remove hardcoded stock symbols, dollar amounts, account names, or personal data from the markup — replace with data-driven rendering
+- Do NOT add a data source the template never had: a clock, a timer, a static layout or a self-contained visualization needs no fetch(). Only load data where the original rendered data (arrays, placeholders, values in the markup)
 - Do NOT add brand names, service names, or attribution text that was not in the original template
 - Preserve working logic: if existing code (event handlers, select population, data parsing) works correctly, keep it — only refactor what is broken or hardcoded
 - Keep the exact same visual design, CSS, layout, and color scheme

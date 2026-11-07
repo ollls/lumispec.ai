@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  auditTemplate, validateReviewed, stripFences, reviewUserMessage, reviewTemplateHtml, sanitizeTemplate, contractIssues, scriptSyntaxError,
+  auditTemplate, validateReviewed, stripFences, reviewUserMessage, reviewTemplateHtml, sanitizeTemplate, contractIssues, scriptSyntaxError, REVIEW_SYSTEM_PROMPT,
 } from '../src/services/templateReview.js';
 
 // The AMD intraday applet as it was saved on 2026-11-06 14:44 — data placeholder never filled,
@@ -271,4 +271,23 @@ test('reviewTemplateHtml keeps the original when the model breaks the JavaScript
   assert.equal(out.applied, false);
   assert.equal(out.html, CHPY_HTML);
   assert.match(out.reason, /script does not parse/);
+});
+
+// ── Clock-driven templates are not "static" (2026-11-07: Beautiful Watch got an invented fetch) ──
+
+const WATCH = `<!DOCTYPE html><html><body><div class="brand">Lumispec</div><div id="timeDisplay"></div><script>
+function updateWatch() { document.getElementById('timeDisplay').textContent = new Date().toLocaleTimeString(); }
+updateWatch();
+setInterval(updateWatch, 50);
+window.parent.postMessage({type:'resize',height:document.body.scrollHeight},'*');
+</script></body></html>`;
+
+test('a template driven by the clock is not audited as static', () => {
+  assert.deepEqual(auditTemplate(WATCH), []);
+  const still = '<html><body><p>Hello</p><script>document.body.style.color = "red"; window.parent.postMessage({type:"resize",height:1},"*");</script></body></html>';
+  assert.match(auditTemplate(still).join('\n'), /^static: no data loading and nothing time-driven/m);
+});
+
+test('the review rules forbid inventing a data source', () => {
+  assert.ok(REVIEW_SYSTEM_PROMPT.includes('Do NOT add a data source the template never had'));
 });
