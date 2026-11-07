@@ -184,7 +184,7 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 - `TAVILY_API_KEY` — Tavily search API key
 - `KEIRO_API_KEY` — Keiro search API key
 - `KEIRO_BASE_URL` — Keiro API base URL (default: `https://kierolabs.space/api`)
-- `PYTHON_VENV` — path to Python venv for `run_python` tool
+- `PYTHON_VENV` — optional; any directory with `bin/python` (venv, virtualenv, uv, pyenv, conda). `services/pythonEnv.js` probes it once (`getPythonEnv()`: interpreter, version, pip present, uv/conda markers) and derives the one install command that works there — `uv pip install --python <bin> <pkg>`, `<bin> -m pip install <pkg>`, `conda install -p <env> <pkg>`, or `python3 -m pip install --user <pkg>` when unset. The tools' subprocesses (`run_python`, `source_run`, `source_test`) run with the venv "activated" (`activatedEnv()`: its `bin` first on `PATH` + `VIRTUAL_ENV`, i.e. what `source activate` does); unset leaves the environment untouched. The Code Execution prompt section carries one line naming interpreter and install command; a `run_python` result whose stderr has `ModuleNotFoundError` gets a `hint` with that command (`missingModuleHint()`, import→package map for `cv2`/`PIL`/`yaml`/…); `source_run` refuses a `pip install` only when the venv has no pip of its own (`pipRedirect()`, the uv case — `pip` on PATH would be the system one) and answers with the right command. 2026-11-07: `pip install --break-system-packages reportlab` went to the user site and the uv venv never saw it. Tests: `test/pythonEnv.test.js`
 - `LITEAPI_KEY` — LiteAPI hotel/travel API key
 - `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` — E*TRADE OAuth credentials
 - `ETRADE_SANDBOX` — `true` for sandbox mode

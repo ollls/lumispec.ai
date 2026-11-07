@@ -321,7 +321,7 @@ PORT=3000
 ```bash
 SOURCE_DIR=/path/to/your/project
 SOURCE_TEST=npm test           # or pytest, cargo test, go test ./..., etc.
-PYTHON_VENV=~/finance_venv     # for run_python (any venv with pandas works)
+PYTHON_VENV=~/finance_venv     # optional: venv / uv / conda dir for run_python and source_run (unset = system python3)
 LOCATION=New York, NY          # default location for {$location}, weather, travel
 ```
 
