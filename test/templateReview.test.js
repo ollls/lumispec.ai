@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  auditTemplate, validateReviewed, stripFences, reviewUserMessage, reviewTemplateHtml, sanitizeTemplate,
+  auditTemplate, validateReviewed, stripFences, reviewUserMessage, reviewTemplateHtml, sanitizeTemplate, contractIssues, scriptSyntaxError,
 } from '../src/services/templateReview.js';
 
 // The AMD intraday applet as it was saved on 2026-11-06 14:44 — data placeholder never filled,
@@ -186,4 +186,89 @@ test('sanitizeTemplate still does its deterministic fixes', () => {
   assert.ok(html.includes('/lib/chart.min.js'));
   assert.ok(html.includes('x === null'));
   assert.ok(html.includes('y = true;'));
+});
+
+// ── Notes vs. markup (2026-11-07: the author's notes live apart from the HTML) ───────────────
+
+const CHPY_NOTES = `ASSISTANT: create the data files first. Do not emit the applet until both exist:
+  chpy_smh_sox.csv        header exactly: date,chpy,smh,sox   (lowercase; daily closes)
+  chpy_smh_sox_meta.json  {"title":"CHPY vs SMH vs SOX"}
+Fetch exactly these three symbols. Then output this template VERBATIM.`;
+
+const CHPY_HTML = `<!DOCTYPE html>\n<html><body><div id="err"></div><canvas id="chart"></canvas><script>
+const SERIES = ['chpy', 'smh', 'sox'];
+const DATA_MATCH = 'chpy_smh_sox';
+const META_MATCH = 'chpy_smh_sox_meta';
+fetch('/api/files?match=' + DATA_MATCH).then(r => r.json()).then(f => new Chart(1)).catch(e => { document.getElementById('err').textContent = e.message; });
+window.parent.postMessage({ type:'resize', height: document.body.scrollHeight }, '*');
+</script></body></html>`;
+
+test('contractIssues is quiet when the HTML selects every file and column the notes name', () => {
+  assert.deepEqual(contractIssues(CHPY_HTML, CHPY_NOTES), []);
+  assert.deepEqual(contractIssues(CHPY_HTML, ''), []);
+  assert.deepEqual(auditTemplate(CHPY_HTML, CHPY_NOTES), []);
+  // one noted file selected by a short keyword (the AMD template's ?match=amd) is a reference
+  assert.deepEqual(contractIssues("<script>fetch('/api/files?match=amd')</script>", 'write amd_intraday.json first'), []);
+});
+
+test('contractIssues flags a noted file the HTML never looks for, and a promised column it never mentions', () => {
+  const drifted = CHPY_HTML.replace("'chpy_smh_sox_meta'", "'semi_meta'").replace("'sox'", "'soxx'");
+  const text = contractIssues(drifted, CHPY_NOTES).join('\n');
+  assert.match(text, /"chpy_smh_sox_meta\.json" but the HTML never references it/);
+  assert.match(text, /column\(s\) sox but the HTML never mentions them/);
+  assert.ok(!text.includes('chpy_smh_sox.csv'), 'the CSV is still selected by its match keyword');
+  // the audit carries the same findings
+  assert.ok(auditTemplate(drifted, CHPY_NOTES).some(i => i.includes('chpy_smh_sox_meta.json')));
+});
+
+test('the user message puts the notes first, as context only, ahead of the audit and the HTML', () => {
+  const msg = reviewUserMessage('<html></html>', ['a'], 'build x.csv first');
+  assert.ok(msg.startsWith('Template notes — '));
+  assert.ok(msg.includes('must NOT appear in your output'));
+  assert.ok(msg.indexOf('build x.csv first') < msg.indexOf('Automatic audit of this template found:\n- a'));
+  assert.ok(msg.endsWith('<html></html>'));
+  // no notes, no audit → bare HTML, as before
+  assert.equal(reviewUserMessage('<html></html>', [], ''), '<html></html>');
+  assert.equal(reviewUserMessage('<html></html>', [], undefined), '<html></html>');
+});
+
+test('reviewTemplateHtml hands the notes to the model and strips them if they come back as a comment', async () => {
+  let seen;
+  const echoed = '<!DOCTYPE html>\n<!-- ' + CHPY_NOTES + ' -->' + CHPY_HTML.replace('<!DOCTYPE html>', '');
+  const out = await reviewTemplateHtml(CHPY_HTML, 'html', { notes: CHPY_NOTES, complete: async (messages) => { seen = messages; return { content: echoed }; } });
+  assert.ok(seen[1].content.startsWith('Template notes — '));
+  assert.ok(seen[1].content.includes('chpy_smh_sox_meta.json'));
+  assert.equal(out.applied, true);
+  assert.ok(!out.html.includes('<!--'), 'echoed notes stripped from the answer');
+  assert.equal(out.html, CHPY_HTML);
+  assert.equal(out.changed, false);
+  assert.deepEqual(out.remaining, []);
+});
+
+// ── Script parse guard (2026-11-07: the review wrote `$/);` into a working regex literal) ─────
+
+test('scriptSyntaxError names the first script that does not parse and is quiet on working code', () => {
+  assert.equal(scriptSyntaxError(CHPY_HTML), null);
+  assert.equal(scriptSyntaxError('<div>no script</div>'), null);
+  const broken = CHPY_HTML.replace("const SERIES = ['chpy', 'smh', 'sox'];", "const suffix = /(_n|_norm|_normalized|_idx)$/);");
+  assert.match(scriptSyntaxError(broken), /^line 2: Unexpected token '\)'/);
+  // external scripts are not parsed, only inline ones
+  assert.equal(scriptSyntaxError('<script src="/lib/chart.min.js"></script><script>ok()</script>'), null);
+});
+
+test('validateReviewed rejects an answer whose script no longer parses, unless the original never did', () => {
+  const broken = CHPY_HTML.replace("const SERIES = ['chpy', 'smh', 'sox'];", "const suffix = /(_n|_norm|_normalized|_idx)$/);");
+  const v = validateReviewed(CHPY_HTML, broken, 'html');
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /^script does not parse \(line 2: Unexpected token '\)'\)/);
+  assert.equal(validateReviewed(CHPY_HTML, CHPY_HTML, 'html').ok, true);
+  assert.equal(validateReviewed(broken, broken, 'html').ok, true, 'a broken original is not held to the parse check');
+});
+
+test('reviewTemplateHtml keeps the original when the model breaks the JavaScript', async () => {
+  const broken = CHPY_HTML.replace("const SERIES = ['chpy', 'smh', 'sox'];", "const suffix = /(_n|_norm|_normalized|_idx)$/);");
+  const out = await reviewTemplateHtml(CHPY_HTML, 'html', { notes: CHPY_NOTES, complete: fakeLLM(broken) });
+  assert.equal(out.applied, false);
+  assert.equal(out.html, CHPY_HTML);
+  assert.match(out.reason, /script does not parse/);
 });

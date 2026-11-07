@@ -2,6 +2,7 @@ import { mkdir, writeFile, readFile, stat, unlink } from 'fs/promises';
 import { join, resolve, basename, extname } from 'path';
 import config from '../config.js';
 import { listTemplates, getTemplateByName } from '../services/templates.js';
+import { renderTemplateFile } from '../services/templateExpansion.js';
 import { fixPythonBooleans, tagLineCount, extractAddedLines, detectUncitedClaims, validateCitations } from './index.js';
 
 // Single source of truth for "what counts as source": used by the tree action
@@ -354,7 +355,8 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
         const full = resolve(sourceRoot, filePath);
         if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
 
-        const content = tpl.html;
+        // Notes go back in as the leading comment, so the file re-saves through the same split.
+        const content = renderTemplateFile(tpl);
         let oldContent = '';
         try { oldContent = await readFile(full, 'utf-8'); } catch {}
         const diff = simpleDiff(oldContent, content, filePath);

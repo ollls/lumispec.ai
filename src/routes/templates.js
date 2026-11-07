@@ -21,6 +21,7 @@ function reviewTemplate(id) {
     const result = await reviewTemplateHtml(template.html, template.type, {
       complete: collectChatCompletion,
       log: (line) => console.log(line),
+      notes: template.notes, // context only; the reviewer's answer is markup, the notes stay on the record
     });
     const review = {
       status: result.applied ? 'done' : 'failed',
@@ -68,13 +69,16 @@ router.post('/', (req, res) => {
   }
 });
 
+// `notes` (author's instructions to the assistant, see services/templates.js) may be set on its own;
+// an empty string clears them. A leading HTML comment in `html` sets them too.
 router.patch('/:id', (req, res) => {
-  const { name, type, html } = req.body;
-  if (!name?.trim() && !html?.trim()) return res.status(400).json({ error: 'name or html required' });
+  const { name, type, html, notes } = req.body;
+  if (!name?.trim() && !html?.trim() && typeof notes !== 'string') return res.status(400).json({ error: 'name, html or notes required' });
   const updates = {};
   if (name?.trim()) updates.name = name.trim();
   if (type?.trim()) updates.type = type.trim();
   if (html?.trim()) updates.html = sanitizeTemplate(html.trim());
+  if (typeof notes === 'string') updates.notes = notes;
   const template = updateTemplate(req.params.id, updates);
   if (!template) return res.status(404).json({ error: 'not found' });
   res.json(template);

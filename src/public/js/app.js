@@ -3391,6 +3391,14 @@ function renderTemplates(templates) {
     item.appendChild(nameSpan);
     item.appendChild(typeSpan);
     item.appendChild(reviewSpan);
+    // Author's notes to the assistant — kept out of the HTML the model copies (services/templates.js)
+    if (t.notes) {
+      const notesSpan = document.createElement('span');
+      notesSpan.className = 'text-xs shrink-0 px-1 text-zinc-500 cursor-help';
+      notesSpan.textContent = '☰';
+      notesSpan.title = 'Notes for the assistant:\n' + t.notes;
+      item.appendChild(notesSpan);
+    }
     item.appendChild(editBtn);
     item.appendChild(optBtn);
     item.appendChild(delBtn);

@@ -8,6 +8,9 @@
 // the source tools to rewrite it to discover its files via /api/files?match=amd and fetch them at
 // render time. `reviewTemplateHtml()` is that fix, run automatically on "Save as Template".
 
+import { Script } from 'vm';
+import { splitTemplateNotes } from './templateExpansion.js';
+
 // ── Deterministic sanitizer (ran on POST/PATCH since before the review existed) ──────────────
 
 export function sanitizeTemplate(html) {
@@ -81,7 +84,8 @@ function literalDataPoints(js) {
  * Deterministic findings about a template, as short strings the model (and the UI) can read.
  * Empty means nothing we know how to detect — the LLM still looks, but with a lighter touch.
  */
-export function auditTemplate(html) {
+/** `notes` are the template's author notes (context the HTML must agree with), see `contractIssues`. */
+export function auditTemplate(html, notes = '') {
   const issues = [];
   const src = String(html);
   const js = scriptBlocks(src).join('\n');
@@ -113,6 +117,45 @@ export function auditTemplate(html) {
     issues.push('empty <select> that nothing populates');
   }
 
+  issues.push(...contractIssues(src, notes));
+  return issues;
+}
+
+// ── Notes vs. markup ────────────────────────────────────────────────────────────────────────
+// The author's notes (tpl.notes, see services/templates.js) tell the assistant which files to
+// build and with which columns; the HTML has to look for exactly those. Since 2026-11-07 the two
+// live apart, so the audit checks that every file and every column the notes name is something the
+// markup references — the only place a drift between contract and template is caught.
+
+const NOTED_FILE_RE = /\b[\w][\w.-]*\.(?:csv|json)\b/g;
+/** "header exactly: date,chpy,smh,sox", "columns: date, open, close" — the first comma list after such a word. */
+const NOTED_HEADER_RE = /\b(?:header|columns?|fields)\b[^:\n]{0,20}:\s*([a-z][a-z0-9_]*(?:\s*,\s*[a-z][a-z0-9_]*)+)/i;
+
+export function contractIssues(html, notes = '') {
+  const text = String(notes || '');
+  if (!text.trim()) return [];
+  const src = String(html || '');
+  const lower = src.toLowerCase();
+  // Quoted strings, plus the keyword of any inline `?match=amd` (a literal that holds the whole URL)
+  const literals = [...src.matchAll(/'([^'\n]{3,})'|"([^"\n]{3,})"/g)].map(m => (m[1] ?? m[2]).toLowerCase())
+    .concat([...src.matchAll(/match=([\w.-]+)/gi)].map(m => m[1].toLowerCase()));
+  const issues = [];
+
+  const files = [...new Set(text.match(NOTED_FILE_RE) || [])].map(f => ({ file: f, name: f.toLowerCase(), stem: f.toLowerCase().replace(/\.(csv|json)$/, '') }));
+  for (const { file, name, stem } of files) {
+    // Referenced by name, by a literal holding the whole stem, or by a match keyword that is a prefix of
+    // this stem and of no other noted file's (`chpy_smh_sox` selects chpy_smh_sox.csv AND
+    // chpy_smh_sox_meta.json, so the meta file needs a keyword of its own — `?match=amd` for one file is fine).
+    const referenced = lower.includes(name) || literals.some(l =>
+      l.includes(stem) || (l.length >= 3 && stem.startsWith(l) && !files.some(o => o.stem !== stem && o.stem.startsWith(l))));
+    if (!referenced) issues.push(`notes name the data file "${file}" but the HTML never references it (no filename or match keyword)`);
+  }
+
+  const header = text.match(NOTED_HEADER_RE);
+  if (header) {
+    const missing = header[1].split(',').map(c => c.trim().toLowerCase()).filter(c => c && c !== 'date' && !new RegExp(`\\b${c}\\b`, 'i').test(src));
+    if (missing.length) issues.push(`notes promise the column(s) ${missing.join(', ')} but the HTML never mentions them`);
+  }
   return issues;
 }
 
@@ -138,13 +181,42 @@ Rules:
 - Keep it concise — do not add comments or expand minified code
 - When outputting minified JS, ensure all statement terminators (semicolons) are preserved`;
 
-/** The user turn: the template plus the audit, so the model fixes what we already know is wrong. */
-export function reviewUserMessage(html, issues = []) {
-  if (!issues.length) return html;
-  return `Automatic audit of this template found:\n${issues.map(i => `- ${i}`).join('\n')}\n\nFix these (and anything else the rules cover) and return the complete HTML.\n\n${html}`;
+/**
+ * The user turn: the author's notes (context only — they are stored apart from the HTML and must
+ * not come back in it), then the audit so the model fixes what we already know is wrong, then the
+ * template. With neither, it is the bare HTML.
+ */
+export function reviewUserMessage(html, issues = [], notes = '') {
+  const parts = [];
+  if (notes && String(notes).trim()) {
+    parts.push(`Template notes — the author's instructions to the assistant that renders this template (which files it builds, which columns and series they carry). CONTEXT ONLY: they are stored separately, are NOT part of the HTML and must NOT appear in your output. Keep the HTML consistent with them — file names, match keywords, column names, series.\n${String(notes).trim()}`);
+  }
+  if (issues.length) {
+    parts.push(`Automatic audit of this template found:\n${issues.map(i => `- ${i}`).join('\n')}\n\nFix these (and anything else the rules cover) and return the complete HTML.`);
+  }
+  parts.push(html);
+  return parts.join('\n\n');
 }
 
 // ── Guard ───────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The first inline <script> that does not parse, as "line N: message", or null. Parse only — the
+ * code never runs. 2026-11-07: the review model rewrote `/(_n|_norm)$/;` as `/(_n|_norm)$/);`
+ * in the CHPY template (the chat model had made the same slip copying it that morning); nothing
+ * checked the JavaScript, the record was replaced, and every later run copied the SyntaxError.
+ */
+export function scriptSyntaxError(html) {
+  for (const js of scriptBlocks(html)) {
+    try {
+      new Script(js, { filename: 'template.js' });
+    } catch (err) {
+      const line = (err.stack || '').match(/template\.js:(\d+)/);
+      return `${line ? `line ${line[1]}: ` : ''}${err.message}`;
+    }
+  }
+  return null;
+}
 
 /** Markdown fences the model may wrap the answer in, plus a leading "Here is…" line. */
 export function stripFences(content) {
@@ -178,6 +250,9 @@ export function validateReviewed(original, reviewed, type = 'html') {
   const openScripts = (out.match(/<script[\s>]/gi) || []).length;
   const closeScripts = (out.match(/<\/script>/gi) || []).length;
   if (openScripts !== closeScripts) return { ok: false, reason: 'unbalanced <script> tags' };
+  // Working code may only be replaced by code that parses (an original that never parsed is not held to this)
+  const syntax = scriptSyntaxError(out);
+  if (syntax && !scriptSyntaxError(src)) return { ok: false, reason: `script does not parse (${syntax})` };
   return { ok: true };
 }
 
@@ -190,28 +265,30 @@ export function validateReviewed(original, reviewed, type = 'html') {
  *   { html: original, changed: false, issues, applied: false, reason } — kept the original, and why
  * Never throws for a bad model answer; a transport error surfaces as `reason` too.
  */
-export async function reviewTemplateHtml(html, type, { complete, maxTokens = 8192, log = () => {} } = {}) {
+export async function reviewTemplateHtml(html, type, { complete, maxTokens = 8192, log = () => {}, notes = '' } = {}) {
   const original = String(html || '');
-  const issues = auditTemplate(original);
+  const issues = auditTemplate(original, notes);
   log(`[template-review] audit: ${issues.length ? issues.join(' | ') : 'nothing flagged'}`);
   let content;
   try {
     ({ content } = await complete([
       { role: 'system', content: REVIEW_SYSTEM_PROMPT },
-      { role: 'user', content: reviewUserMessage(original, issues) },
+      { role: 'user', content: reviewUserMessage(original, issues, notes) },
     ], { maxTokens }));
   } catch (err) {
     log(`[template-review] LLM call failed: ${err.message}`);
     return { html: original, changed: false, issues, applied: false, reason: `LLM call failed: ${err.message}` };
   }
-  const reviewed = sanitizeTemplate(stripFences(content));
+  // The notes are context, not markup: a model that echoes them as a leading comment gets them
+  // stripped here, so the guard's size ratio and `changed` compare markup with markup.
+  const reviewed = sanitizeTemplate(splitTemplateNotes(stripFences(content)).html.trim());
   const verdict = validateReviewed(original, reviewed, type);
   if (!verdict.ok) {
     log(`[template-review] rejected model output: ${verdict.reason}`);
     return { html: original, changed: false, issues, applied: false, reason: verdict.reason };
   }
   const changed = reviewed !== original.trim();
-  const remaining = auditTemplate(reviewed);
+  const remaining = auditTemplate(reviewed, notes);
   log(`[template-review] applied (${changed ? 'changed' : 'identical'}); audit after: ${remaining.length ? remaining.join(' | ') : 'clean'}`);
   return { html: reviewed, changed, issues, remaining, applied: true };
 }
