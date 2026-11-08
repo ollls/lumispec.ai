@@ -11,6 +11,10 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 🧱 v1.5.6 — One tool result can no longer sink a turn
+
+- **Tool result limits.** `tree` is summarized over 300 files (layout with counts, first 300 paths, optional `path` for one subdirectory); every tool result is capped at 50K chars; and the context wind-down now cuts the newest results too until the prompt fits. A 7,000-file tree used to make the next request 131K tokens against a 64K slot. See [`releases/1.5.6.md`](releases/1.5.6.md).
+
 ## 🐍 v1.5.5 — Python environment detected, per-answer token cap
 
 - **Python environment.** `PYTHON_VENV` may be a venv, uv, pyenv or conda directory, or unset. The app detects which, activates it for `run_python` and `source_run`, and tells the model the install command that works there — a `pip install` aimed at the system Python is refused with the right one.
@@ -79,7 +83,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.5.md`](releases/1.5.5.md) (latest) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.6.md`](releases/1.5.6.md) (latest) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -455,7 +459,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes (latest) — Python environment detection, per-answer token cap, template titles |
+| [`releases/1.5.6.md`](releases/1.5.6.md) | v1.5.6 release notes (latest) — tool result limits: tree summary, executor ceiling, wind-down fit |
+| [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes — Python environment detection, per-answer token cap, template titles |
 | [`releases/1.5.4.md`](releases/1.5.4.md) | v1.5.4 release notes — template review on save, notes apart from the HTML, parse guard |
 | [`releases/1.5.3.md`](releases/1.5.3.md) | v1.5.3 release notes — research budget setting, template sources exempt, Claude backend tool rounds |
 | [`releases/1.5.2.md`](releases/1.5.2.md) | v1.5.2 release notes — clipped pipeline hand-offs flagged, World NEWS template |
