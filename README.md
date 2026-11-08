@@ -11,6 +11,12 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 🐍 v1.5.5 — Python environment detected, per-answer token cap
+
+- **Python environment.** `PYTHON_VENV` may be a venv, uv, pyenv or conda directory, or unset. The app detects which, activates it for `run_python` and `source_run`, and tells the model the install command that works there — a `pip install` aimed at the system Python is refused with the right one.
+- **Per-answer token cap.** `LLAMA_MAX_COMPLETION_TOKENS` (default 24576) bounds every streaming answer so a runaway ends in minutes, not at the context wall.
+- Template runs are titled "Template: name"; the template review no longer calls a clock static. See [`releases/1.5.5.md`](releases/1.5.5.md).
+
 ## 📄 v1.5.4 — Templates reviewed on save, notes apart from the HTML, parse guard
 
 - **LLM review on save.** Every saved template is audited and reviewed in the background; ⚡ runs it again. A review answer must still parse — the model broke the same regex literal twice in a day, and the guard kept the original.
@@ -73,7 +79,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.4.md`](releases/1.5.4.md) (latest) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.5.md`](releases/1.5.5.md) (latest) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -449,7 +455,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.5.4.md`](releases/1.5.4.md) | v1.5.4 release notes (latest) — template review on save, notes apart from the HTML, parse guard |
+| [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes (latest) — Python environment detection, per-answer token cap, template titles |
+| [`releases/1.5.4.md`](releases/1.5.4.md) | v1.5.4 release notes — template review on save, notes apart from the HTML, parse guard |
 | [`releases/1.5.3.md`](releases/1.5.3.md) | v1.5.3 release notes — research budget setting, template sources exempt, Claude backend tool rounds |
 | [`releases/1.5.2.md`](releases/1.5.2.md) | v1.5.2 release notes — clipped pipeline hand-offs flagged, World NEWS template |
 | [`releases/1.5.1.md`](releases/1.5.1.md) | v1.5.1 release notes — Bing first-word fix |
