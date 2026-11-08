@@ -1,16 +1,14 @@
 import { writeFile, unlink } from 'fs/promises';
 import { join, resolve } from 'path';
-import { homedir } from 'os';
 import { spawn } from 'child_process';
 import config from '../config.js';
 import { fixPythonBooleans, tagLineCount } from './index.js';
+import { getPythonEnv, toolEnv, missingModuleHint, pythonEnvPromptLine } from '../services/pythonEnv.js';
 
-const PYTHON_VENV = (config.python.venvPath || '').replace(/^~/, homedir());
+// Which Python (services/pythonEnv.js): PYTHON_VENV's interpreter, or python3 on PATH. Probed once.
+const pythonEnv = () => getPythonEnv(config.python.venvPath);
 
-export default {
-  group: 'execution',
-  routing: [],
-  prompt: `## Code Execution
+const PROMPT = `## Code Execution
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the source_run tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use source_run. NEVER say you cannot run commands or don't have access to the user's system.
 - run_python code quality — MANDATORY rules:
   1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum(). Any script using iterrows WILL FAIL.
@@ -18,7 +16,13 @@ export default {
   3. Pick ONE output: print() a short summary OR save a file. Not both.
   4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
 - run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
-- WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.`,
+- WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.`;
+
+export default {
+  group: 'execution',
+  routing: [],
+  // The interpreter line is resolved per prompt build from the cached probe (first build probes).
+  prompt: () => `${PROMPT}\n${pythonEnvPromptLine(pythonEnv())}`,
   tools: {
     run_python: {
       description: 'Execute a Python script in the source project directory. Requires user approval. Requires "code" (Python source). The script runs in the current source project directory (same as source_read/source_write).\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → print() a summary.\n- ALWAYS print() something so the user sees immediate feedback.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
@@ -49,7 +53,9 @@ export default {
         const tmpFile = join(projectDir, '.tmp_script.py');
         await writeFile(tmpFile, code, 'utf-8');
 
-        const pythonBin = PYTHON_VENV ? join(PYTHON_VENV, 'bin', 'python') : 'python3';
+        const env = pythonEnv();
+        if (env.kind === 'missing') { await unlink(tmpFile).catch(() => {}); return { error: `No Python interpreter: ${env.note}` }; }
+        const pythonBin = env.bin;
         console.log(`[run_python] spawning: ${pythonBin} ${tmpFile} cwd=${projectDir} (timeout=120s) (${elapsed()})`);
         const TIMEOUT_MS = 120000;
         const { exitCode, stdout, stderr, timedOut } = await new Promise((resolve) => {
@@ -57,6 +63,7 @@ export default {
           const finish = (result) => { if (!resolved) { resolved = true; resolve(result); } };
           const proc = spawn(pythonBin, [tmpFile], {
             cwd: projectDir,
+            env: toolEnv(env), // the venv "activated": PATH + VIRTUAL_ENV, so subprocess calls see it too
             stdio: ['ignore', 'pipe', 'pipe'],
           });
           const killTimer = setTimeout(() => {
@@ -75,6 +82,9 @@ export default {
         const result = { exitCode, stdout: tagLineCount(stdout, 8000) };
         if (timedOut) result.timedOut = true;
         if (stderr) result.stderr = stderr.slice(0, 4000);
+        // A missing module gets the install command for THIS interpreter, so the model does not guess at pip
+        const hint = missingModuleHint(stderr, env);
+        if (hint) result.hint = hint;
         console.log(`[run_python] done (${elapsed()})`);
         return result;
       },

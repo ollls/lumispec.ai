@@ -3,6 +3,7 @@ import { join, resolve, basename, extname } from 'path';
 import config from '../config.js';
 import { listTemplates, getTemplateByName } from '../services/templates.js';
 import { renderTemplateFile } from '../services/templateExpansion.js';
+import { getPythonEnv, toolEnv, pipRedirect } from '../services/pythonEnv.js';
 import { fixPythonBooleans, tagLineCount, extractAddedLines, detectUncitedClaims, validateCitations } from './index.js';
 
 // Single source of truth for "what counts as source": used by the tree action
@@ -696,6 +697,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
     source_run: {
       description: 'Run a shell command in the source project directory. Unlike run_python (which runs in the saved files directory), this runs in the source project directory.\n\n'
         + 'Examples: "python3 colorful_text.py", "npm run build", "make", "go run main.go"\n\n'
+        + 'python3 here is the same interpreter run_python uses (PYTHON_VENV when set). To add a Python package use the install command given in the Code Execution section, not a bare pip install.\n\n'
         + 'Requires user approval unless autorun is enabled.',
       parameters: {
         command: 'string (shell command to run in the source project directory)',
@@ -703,6 +705,11 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
       execute: async ({ command }, context) => {
         if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
         if (!command?.trim()) return { error: 'command is required' };
+        // A `pip install` that cannot reach run_python's interpreter (venv without pip → system pip)
+        // is answered with the right command instead of modifying the system Python (2026-11-07).
+        const pyEnv = getPythonEnv(config.python.venvPath);
+        const redirect = pipRedirect(command, pyEnv);
+        if (redirect) return redirect;
         if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
         const sourceRoot = resolve(config.sourceDir);
@@ -719,6 +726,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
         return new Promise((res) => {
           exec(command, {
             cwd: sourceRoot,
+            env: toolEnv(pyEnv), // PYTHON_VENV "activated" for the shell: python3 is run_python's interpreter
             encoding: 'utf-8',
             timeout: 120000,
             maxBuffer: 2 * 1024 * 1024,
@@ -751,6 +759,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
         return new Promise((res) => {
           exec(config.sourceTest, {
             cwd: sourceRoot,
+            env: toolEnv(getPythonEnv(config.python.venvPath)),
             encoding: 'utf-8',
             timeout: 120000,
             maxBuffer: 2 * 1024 * 1024,
