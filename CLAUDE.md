@@ -313,6 +313,7 @@ Safety mechanisms:
 - Queue-based command confirmation: parallel calls confirmed FIFO (not single-slot)
 - Truncated tool call repair: extracts partial code/command from incomplete JSON instead of failing
 - run_python auto-fixes: Python booleans (`fixPythonBooleans`), backslash+newline double-escaping in string literals
+- Tool result ceiling: `executeTool()` caps every serialized result at `MAX_TOOL_RESULT_CHARS` (50,000; `capToolResult()` in `services/toolResultLimits.js` returns `{ _truncated, originalChars, head, note }`), so no single call can carry more than ~12K tokens into the prompt. 2026-11-08: a `tree` of ~/llama.cpp (7,087 paths, 428K chars) made the next request 131K tokens and llama-server answered 400
 - Context budget: `MAX_TOOL_ROUNDS` bounds rounds, this bounds tokens — see **Context Budget** below
 
 #### Context Budget
@@ -324,6 +325,10 @@ with the whole turn discarded (see `OVERFLOW.md`).
 Both tool loops (`conversations.js`, `taskProcessor.js`) now measure the real prompt at the top of
 every round via `countPromptTokens()` and wind down at 80% of the slot's `n_ctx`:
 - `trimOldToolResults()` shrinks the oldest tool results to 400 chars, keeping the newest 3 intact
+- if the prompt is still over 90% of the slot — the newest results are what blew the budget —
+  `fitToolResultsToContext()` (`services/toolResultLimits.js`) cuts **every** tool result to 4000,
+  then 1500, then 400 chars, re-measuring after each pass, until it fits. Before 2026-11-08 the
+  wind-down request itself could exceed the slot and llama-server answered 400 `exceed_context_size_error`
 - a `{tool_status}` SSE event announces the wind-down
 - an "answer now, no tools" instruction is injected and **that round becomes terminal** — tool calls
   in it are logged and ignored, since there is no room to feed results back in
@@ -360,7 +365,7 @@ is why the bar used to show 84K on a 64K slot.
 | `web_fetch` | Fetch URL. `view: "article"` (default) extracts the article or, on a front page, the headline-link list as markdown (Readability + Turndown); `view: "text"` returns the page as it reads on screen, one line per visual row — Chrome's `innerText` via the Browser Search extension (hidden labels and images excluded), approximated from markup on the HTTP tier (`note` says so). For web apps: mail, calendars, dashboards, boards. `tab: "active" | <id> | <host/title fragment>` reads one of the user's **open** tabs in place instead of loading a URL (Tab Fetch, Browser Search only; off by default) |
 | `browser_tabs` | Lists the user's open web tabs (id, title, host, URL, current). Browser Search only, available while "Let the assistant read my open tabs" is on; the model calls it before `web_fetch { tab }`. One match reads; several → it must ask |
 | `run_python` | Execute Python script in venv, cwd=SOURCE_DIR, 120s timeout. Auto-fixes Python booleans and newline escaping |
-| `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
+| `source_read` | Read app's own source code: tree (list files; optional `path` = one subdirectory; over 300 files → top-level layout with counts + first 300 paths, `summarizeTree()`), read (file contents, 15K chars), grep (search, 50 matches). Scoped to SOURCE_DIR |
 | `source_write` | Write/create source files. Path-escape protected, confirmation required. Scoped to SOURCE_DIR |
 | `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
 | `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |

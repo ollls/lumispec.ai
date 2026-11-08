@@ -2,6 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
+import { fitToolResultsToContext } from '../services/toolResultLimits.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
@@ -423,8 +424,13 @@ CRITICAL RULES:
       promptTokens = await countPromptTokens(llmMessages);
       if (!ctxWindDown && promptTokens > ctxLimit * CTX_WIND_DOWN) {
         ctxWindDown = true;
-        const freed = trimOldToolResults(llmMessages);
-        promptTokens = await countPromptTokens(llmMessages);
+        // Pass 1 trims results older than the newest three; if the newest are what blew the budget
+        // (one 428K-char tree, 2026-11-08) every result is cut to descending caps until the prompt
+        // fits under 90% of the slot — otherwise llama-server answers 400 to the wind-down request.
+        const fit = await fitToolResultsToContext(llmMessages, { count: countPromptTokens, target: ctxLimit * 0.9, trimOld: trimOldToolResults });
+        const freed = fit.freed;
+        promptTokens = fit.promptTokens;
+        if (fit.passes) console.warn(`[task-processor] round ${round + 1}: newest tool results cut too (${fit.passes} pass(es)) to fit the context`);
         console.warn(`[task-processor] ${stepLabel}: prompt hit the context budget — trimmed ${freed} chars of old tool results, now ${promptTokens}/${ctxLimit} tokens, forcing step output`);
         res.write(`data: ${JSON.stringify({ tool_status: '⚠ Context nearly full — wrapping up this step with the data gathered so far' })}\n\n`);
         llmMessages.push({
