@@ -3,6 +3,7 @@ import conversations from '../services/conversations.js';
 import { replaceApplets } from '../services/applets.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
+import { fitToolResultsToContext } from '../services/toolResultLimits.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { expandTemplateTags, TEMPLATE_TAG_RE } from '../services/templateExpansion.js';
@@ -358,8 +359,13 @@ router.post('/:id/messages', async (req, res) => {
       promptTokens = await countPromptTokens(llmMessages);
       if (!ctxWindDown && promptTokens > ctxLimit * CTX_WIND_DOWN) {
         ctxWindDown = true;
-        const freed = trimOldToolResults(llmMessages);
-        promptTokens = await countPromptTokens(llmMessages);
+        // Pass 1 trims results older than the newest three; if the newest are what blew the budget
+        // (one 428K-char tree, 2026-11-08) every result is cut to descending caps until the prompt
+        // fits under 90% of the slot — otherwise llama-server answers 400 to the wind-down request.
+        const fit = await fitToolResultsToContext(llmMessages, { count: countPromptTokens, target: ctxLimit * 0.9, trimOld: trimOldToolResults });
+        const freed = fit.freed;
+        promptTokens = fit.promptTokens;
+        if (fit.passes) console.warn(`[tool-loop] round ${round + 1}: newest tool results cut too (${fit.passes} pass(es)) to fit the context`);
         console.warn(`[tool-loop] round ${round + 1}: prompt hit the context budget — trimmed ${freed} chars of old tool results, now ${promptTokens}/${ctxLimit} tokens, forcing final answer`);
         res.write(`data: ${JSON.stringify({ tool_status: '⚠ Context nearly full — wrapping up with the data gathered so far' })}\n\n`);
         llmMessages.push({

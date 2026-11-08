@@ -2,6 +2,7 @@ import { mkdir, appendFile, readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { readdir } from 'fs/promises';
 import config from '../config.js';
+import { capToolResult } from '../services/toolResultLimits.js';
 
 import { fileURLToPath } from 'url';
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
@@ -1333,7 +1334,12 @@ export async function executeTool(name, args, context) {
     // A tool that logs its own raw-vs-formatted entry (etrade_account) skips the generic one —
     // every E*TRADE call used to land in the log twice, a millisecond apart.
     if (!tool.logsItself) await logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
-    return JSON.stringify(result);
+    // Ceiling: no single result may carry more than MAX_TOOL_RESULT_CHARS into the prompt
+    // (a 7,087-path tree was 428K chars / ~110K tokens on 2026-11-08 — services/toolResultLimits.js)
+    const serialized = JSON.stringify(result);
+    const capped = capToolResult(serialized);
+    if (capped !== serialized) console.warn(`[tools] "${name}" result capped: ${serialized.length} → ${capped.length} chars`);
+    return capped;
   } catch (err) {
     console.error(`[tools] "${name}" error: ${err.message}`);
     await logToolCall(name, args?.action || 'error', { args, rawResult: { error: err.message }, formattedResult: { error: err.message } });

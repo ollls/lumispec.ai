@@ -4,6 +4,7 @@ import config from '../config.js';
 import { listTemplates, getTemplateByName } from '../services/templates.js';
 import { renderTemplateFile } from '../services/templateExpansion.js';
 import { getPythonEnv, toolEnv, pipRedirect } from '../services/pythonEnv.js';
+import { summarizeTree } from '../services/toolResultLimits.js';
 import { fixPythonBooleans, tagLineCount, extractAddedLines, detectUncitedClaims, validateCitations } from './index.js';
 
 // Single source of truth for "what counts as source": used by the tree action
@@ -195,7 +196,7 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
                 { cwd: treeRoot, encoding: 'utf-8', timeout: 5000 }
               );
               const files = output.trim().split('\n').filter(Boolean);
-              return { root: treeRoot, fileCount: files.length, files };
+              return summarizeTree(files, { root: treeRoot });
             } catch (err) {
               return { error: err.message };
             }
@@ -209,12 +210,12 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
     source_read: {
       description: 'Read this application\'s own source code. This is YOUR source code — use it to understand how you work, review your own implementation, or help the user modify you.\n\n'
         + 'Actions:\n'
-        + '- "tree": list all source files (respects .gitignore, excludes node_modules/data/logs)\n'
+        + '- "tree": list source files (excludes node_modules/.git/data/logs). Optional "path" lists one subdirectory. A tree over 300 files comes back summarized: top-level layout with counts plus the first 300 paths — then narrow with "path" or use grep\n'
         + '- "read": read a file. Requires "path" (relative to project root, e.g. "src/server.js")\n'
         + '- "grep": search source code. Requires "pattern" (extended regex). Optional "glob" to filter files: no "/" matches file names (e.g. "*.js"), with "/" matches the path from project root (e.g. "src/tools/*.js", "**/plugin-etrade.js"). node_modules/.git/data/logs are always excluded',
       parameters: {
         action: 'string (tree, read, grep)',
-        path: 'string (optional, relative file path for read)',
+        path: 'string (optional: file path for read; subdirectory for tree)',
         pattern: 'string (optional, regex for grep)',
         glob: 'string (optional, file glob for grep: "*.js" matches names, "src/**/*.js" matches paths)',
       },
@@ -229,14 +230,19 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
         switch (action) {
           case 'tree': {
             const { execSync } = await import('child_process');
+            // Optional subdirectory: lets the model walk a large repository one folder at a time
+            const subdir = (filePath || '').trim().replace(/^\.\/|\/$/g, '');
+            const treeRoot = subdir ? resolve(sourceRoot, subdir) : sourceRoot;
+            if (!treeRoot.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
             try {
               const output = execSync(
                 TREE_FIND_CMD,
-                { cwd: sourceRoot, encoding: 'utf-8', timeout: 5000 }
+                { cwd: treeRoot, encoding: 'utf-8', timeout: 5000 }
               );
-              const files = output.trim().split('\n').filter(Boolean);
-              return { root: sourceRoot, fileCount: files.length, files };
+              const files = output.trim().split('\n').filter(Boolean).map(f => subdir ? `${subdir}/${f.replace(/^\.\//, '')}` : f);
+              return summarizeTree(files, { root: sourceRoot, subdir });
             } catch (err) {
+              if (err.code === 'ENOENT' || /No such file/.test(err.message)) return { error: `Directory not found: ${subdir}` };
               return { error: err.message };
             }
           }
