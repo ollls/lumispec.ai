@@ -132,6 +132,18 @@ const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
 const input = document.getElementById('prompt-input');
+
+// Size the prompt textarea to its content (capped at 200px) — unless the user has
+// dragged the pane to a fixed height, in which case the textarea just fills it.
+// Without that guard every input event pinned a tall pane's textarea to 200px.
+function autosizeInput() {
+  if (form.style.height) {
+    input.style.height = '100%';
+    return;
+  }
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const llmDot = document.getElementById('llm-dot');
@@ -234,8 +246,7 @@ function addRefineButton(details, getPrompt, getReasoning) {
       const { refined, changed } = await res.json();
       if (changed) {
         input.value = refined;
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
         btn.textContent = 'Loaded';
       } else {
@@ -2659,8 +2670,7 @@ form.addEventListener('submit', async (e) => {
 
 // Auto-resize textarea + list mode auto-detection
 input.addEventListener('input', () => {
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  autosizeInput();
   if (state.listMode) {
     // Exit list mode if textarea no longer has any bullets
     if (!input.value.includes('- ')) toggleListMode(false);
@@ -2875,8 +2885,7 @@ taskmasterBtn.addEventListener('click', async () => {
     if (data.error) throw new Error(data.error);
     if (data.single) return; // too simple to decompose
     input.value = data.tasks;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    autosizeInput();
     if (!state.listMode) toggleListMode(true);
     input.focus();
   } catch (err) {
@@ -3071,8 +3080,7 @@ function renderCompacts(compacts) {
       compactsDropdown.classList.add('hidden');
       if (!requireSession()) return;
       input.value = c.text;
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      autosizeInput();
       input.focus();
     });
 
@@ -3208,8 +3216,7 @@ function renderSessions(sessions) {
         showPromptVarsModal(s.text, vars);
       } else {
         input.value = expandPromptMacros(s.text);
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
       }
     });
@@ -3381,8 +3388,7 @@ function renderTemplates(templates) {
       const tag = `[template: ${t.name}]`;
       const pos = input.selectionStart || input.value.length;
       input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      autosizeInput();
       input.focus();
       templatesDropdown.classList.add('hidden');
     });
@@ -4159,8 +4165,7 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
     });
   } else if (state.currentConversationId && state.sessionType) {
     input.value = text;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    autosizeInput();
     input.focus();
   }
 });
@@ -4274,8 +4279,7 @@ function renderPrompts(prompts) {
         showPromptVarsModal(p.text, vars);
       } else {
         input.value = expandPromptMacros(p.text);
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
       }
     });
@@ -4377,10 +4381,15 @@ function renderTasks(tasks) {
       input.value = t.text;
       const trimmed = t.text.trimStart();
       if (trimmed.includes('- ') && !state.listMode) toggleListMode(true);
-      // Keep current height — only grow if content needs more space, never shrink
-      input.style.height = 'auto';
-      const needed = input.scrollHeight;
-      input.style.height = Math.max(prevHeight, needed) + 'px';
+      // Keep current height — only grow if content needs more space, never shrink.
+      // A user-sized pane is left alone: the textarea fills it and scrolls.
+      if (form.style.height) {
+        autosizeInput();
+      } else {
+        input.style.height = 'auto';
+        const needed = input.scrollHeight;
+        input.style.height = Math.max(prevHeight, needed) + 'px';
+      }
       input.focus();
       tasksDropdown.classList.add('hidden');
     });
@@ -4554,6 +4563,7 @@ saveCompactBtn.addEventListener('click', async () => {
     const delta = startY - e.clientY;
     const newH = Math.max(80, Math.min(window.innerHeight * 0.6, startH + delta));
     form.style.height = newH + 'px';
+    input.style.height = '100%'; // drop any content-sized pixel height so the textarea follows the pane
   });
   document.addEventListener('mouseup', () => {
     if (!dragging) return;
