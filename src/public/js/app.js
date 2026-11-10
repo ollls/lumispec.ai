@@ -787,8 +787,18 @@ function createAppletIframe(applet) {
     }
   }
 
+  // Fit cap: the tallest a chart, SVG or image may render, from the visible chat area's height
+  // (applet-fit.js). 2026-11-10: a Chart.js canvas with height="340" rendered 1,763px tall in a
+  // 625px chat area, because responsive mode scaled the canvas's own 300×340 ratio to the bubble
+  // width. SVGs and images get a max-height; Chart.js gets a plugin that wraps an oversized
+  // chart in a fixed-height box before its first resize.
+  const fit = window.AppletFit;
+  const fitCap = fit ? fit.capFor(document.getElementById('response-area')?.clientHeight) : 0;
+  const fitStyle = fitCap ? fit.styleFor(fitCap) : '';
+  const fitScript = fitCap && html.includes('/lib/chart.min.js') ? fit.chartScriptFor(fitCap) : '';
+
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + '</style>' + fitScript;
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {

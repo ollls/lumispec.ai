@@ -985,7 +985,8 @@ For type="svg" applets:
 
 For type="chartjs" applets:
 - Chart.js is available at /lib/chart.min.js — include via <script src="/lib/chart.min.js"></script>
-- Create a <canvas id="chart"></canvas> in the body
+- Put <canvas id="chart"></canvas> inside <div style="position:relative;height:420px"> and set options.maintainAspectRatio: false — the chart fills that box. Use 320–480px for one chart; the chat area is about one screen tall
+- NEVER put width or height attributes on the canvas: with responsive: true, Chart.js reads them as an aspect ratio and scales the chart to the full chat width (height="340" rendered 1,760px tall — three screens)
 - Instantiate with: new Chart(document.getElementById('chart'), config)
 - Use dark theme defaults: grid color '#2a2a4a', tick color '#e0e0e0'
 - Plugin.legend.labels.color = '#e0e0e0'
@@ -997,7 +998,7 @@ Example — complete working applet:
 <script src="/lib/chart.min.js"></script>
 <style>body { margin: 0; padding: 16px; background: #1a1a2e; }</style>
 </head><body>
-<canvas id="chart"></canvas>
+<div style="position:relative;height:420px"><canvas id="chart"></canvas></div>
 <script>
 const DATA = [
   { label: 'AAPL', value: 42 },
@@ -1013,6 +1014,7 @@ new Chart(document.getElementById('chart'), {
   },
   options: {
     responsive: true,
+    maintainAspectRatio: false,
     scales: { y: { ticks: { color: '#e0e0e0' }, grid: { color: '#2a2a4a' } },
               x: { ticks: { color: '#e0e0e0' }, grid: { color: '#2a2a4a' } } },
     plugins: { legend: { labels: { color: '#e0e0e0' } } }
