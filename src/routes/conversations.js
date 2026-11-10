@@ -832,6 +832,16 @@ router.post('/:id/messages', async (req, res) => {
       console.warn(`[tool-loop] request failed after ${toolUses.length} tool call(s): ${errMsg}`);
       conversations.updateMessageContent(conv.id, msgIndex, stored);
       res.write(`data: ${JSON.stringify({ error: detail })}\n\n`);
+    } else {
+      // Stopped (Stop button, page reload, dropped connection). The placeholder used to stay an
+      // empty string: every tool result and the reasoning were lost, and the empty assistant turn
+      // was replayed in the history of later requests. Keep the work, mark the turn as stopped.
+      const kept = toolUses.length ? ` ${toolUses.length} tool result(s) gathered before the stop are kept.` : '';
+      const stored = { text: `[Stopped before an answer was written.${kept}]` };
+      if (accumulatedReasoning) stored.reasoning = accumulatedReasoning;
+      if (toolUses.length > 0) stored.toolUses = toolUses;
+      console.warn(`[tool-loop] turn stopped after ${toolUses.length} tool call(s)`);
+      conversations.updateMessageContent(conv.id, msgIndex, stored);
     }
   }
 
