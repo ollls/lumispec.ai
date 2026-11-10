@@ -821,6 +821,72 @@ function extractApplets(text, { partial = false } = {}) {
   return { cleaned, applets };
 }
 
+// ── Applet diagnostics (Troubleshoot button) ──────────
+// What goes wrong inside an applet happens in the browser, where the model can never look: a
+// SyntaxError leaves it on "Loading…", a /files/ fetch 404s, a chart renders three screens tall.
+// Every applet iframe gets this reporter first in its <head>; it posts uncaught errors, rejected
+// promises, console.error, failed resource loads and non-OK fetches to the page (20 at most).
+// The page keeps them per iframe and the Troubleshoot button puts them in the prompt.
+const APPLET_DIAG_SCRIPT = `<script>(function(){var n=0;function send(k,m){if(n++>=20)return;try{parent.postMessage({type:'applet-diag',kind:k,message:String(m).slice(0,300)},'*');}catch(e){}}
+window.addEventListener('error',function(e){var t=e.target;if(t&&t!==window&&(t.src||t.href)){send('load failed',(t.tagName||'').toLowerCase()+' '+(t.src||t.href));}else{send('error',e.message||'unknown error');}},true);
+window.addEventListener('unhandledrejection',function(e){send('unhandled rejection',(e.reason&&e.reason.message)||e.reason);});
+var ce=console.error;console.error=function(){send('console.error',[].slice.call(arguments).join(' '));return ce.apply(console,arguments);};
+var f=window.fetch;if(f)window.fetch=function(u){var url=typeof u==='string'?u:(u&&u.url)||'';return f.apply(this,arguments).then(function(r){if(!r.ok)send('fetch',r.status+' '+url);return r;},function(err){send('fetch','failed '+url+': '+(err&&err.message));throw err;});};
+})();<\/script>`;
+const _appletDiag = new WeakMap(); // iframe → ['kind: message', …]
+
+window.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'applet-diag') return;
+  document.querySelectorAll('.applet-iframe').forEach((iframe) => {
+    if (iframe.contentWindow !== e.source) return;
+    const list = _appletDiag.get(iframe) || [];
+    const line = `${String(e.data.kind).slice(0, 40)}: ${String(e.data.message).slice(0, 300)}`;
+    if (list.length < 20 && !list.includes(line)) list.push(line);
+    _appletDiag.set(iframe, list);
+  });
+});
+
+// Fill the prompt with a troubleshooting request for one applet: what the browser saw, and the
+// conversation_read call that shows the model the code it wrote (history only carries
+// "[Applet: TYPE visualization]"). Text already typed in the prompt becomes the problem line.
+function troubleshootApplet(iframe) {
+  const row = iframe.closest('[data-msg-index]');
+  const bubbleFrames = row ? [...row.querySelectorAll('.applet-iframe')] : [iframe];
+  const call = { what: 'applet' };
+  if (row) call.message = Number(row.dataset.msgIndex);
+  if (bubbleFrames.length > 1) call.applet = bubbleFrames.indexOf(iframe);
+
+  const report = (_appletDiag.get(iframe) || []).map((l) => `- ${l}`);
+  if (report.length === 0) report.push('- no JavaScript errors or failed requests reported');
+  const height = Math.round(iframe.getBoundingClientRect().height);
+  report.push(`- rendered ${height}px tall`);
+  try {
+    const doc = iframe.contentDocument;
+    const text = (doc.body.innerText || '').trim().replace(/\s+/g, ' ');
+    report.push(`- visible text: ${text.length} chars${text ? ` — starts "${text.slice(0, 120)}"` : ''}`);
+    const canvases = doc.querySelectorAll('canvas').length;
+    if (canvases) report.push(`- ${canvases} canvas element(s)`);
+  } catch {}
+
+  const problem = input.value.trim();
+  if (state.listMode) toggleListMode(false); // the report's "- " lines are not a task list
+  // An empty problem line gets a placeholder (selected, so typing replaces it) and the model is
+  // told to ask rather than guess. 2026-11-10: sent with "Problem:" blank, the model took the
+  // only number in the report — 6,338px tall in a 652px chat area — for the defect and rebuilt a
+  // working dashboard as a fixed 620px box, which the host then clipped.
+  const PLACEHOLDER = '<describe what is wrong>';
+  const lead = 'Troubleshoot the applet in your earlier answer.\n\nProblem: ';
+  const rules = [
+    'How applets are hosted: the iframe grows to the full height of its content and the chat scrolls, so a tall applet is normal. html/body are forced to height:auto with no scrolling of their own — never give the page a fixed height or an inner scroll region.',
+    `First call conversation_read ${JSON.stringify(call)} to see the exact code you wrote. Fix only the problem described above and change nothing else; if no problem is described, ask me what is wrong instead of guessing from the report. Then output the complete corrected applet.`,
+  ];
+  input.value = `${lead}${problem || PLACEHOLDER}\n\nBrowser report (facts, not necessarily defects):\n${report.join('\n')}\n\n${rules.join('\n\n')}`;
+  autosizeInput();
+  input.focus();
+  if (problem) input.setSelectionRange(lead.length + problem.length, lead.length + problem.length);
+  else input.setSelectionRange(lead.length, lead.length + PLACEHOLDER.length);
+}
+
 function createAppletIframe(applet) {
   let html = applet.html;
 
@@ -862,7 +928,7 @@ function createAppletIframe(applet) {
   const fitScript = fitCap && html.includes('/lib/chart.min.js') ? fit.chartScriptFor(fitCap) : '';
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + '</style>' + fitScript;
+  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + '</style>' + APPLET_DIAG_SCRIPT + fitScript;
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -938,8 +1004,16 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
 
   const wrapper = document.createElement('div');
   wrapper.className = 'applet-wrapper';
+  // Troubleshoot: hands the model the browser's view of this applet plus the way to read its code
+  const fixBtn = document.createElement('button');
+  fixBtn.className = 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-xs font-bold px-3 py-1 rounded mt-1 ml-2 transition-colors';
+  fixBtn.textContent = 'Troubleshoot';
+  fixBtn.title = 'Fill the prompt with a fix request: the errors the browser saw in this applet, and an instruction to read its code back. Describe what is wrong, then send.';
+  fixBtn.addEventListener('click', () => troubleshootApplet(iframe));
+
   wrapper.appendChild(iframe);
   wrapper.appendChild(saveBtn);
+  wrapper.appendChild(fixBtn);
   return wrapper;
 }
 
@@ -975,16 +1049,23 @@ const _iframeResizeTimers = new WeakMap();
 window.addEventListener('message', (e) => {
   if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
   const MAX_IFRAME_H = 20000;
-  const height = Math.max(100, Math.min(MAX_IFRAME_H, e.data.height));
   document.querySelectorAll('.applet-iframe').forEach(iframe => {
     if (iframe.contentWindow !== e.source) return;
+    // Never size the iframe below its content. The style reset forces html/body to
+    // height:auto and overflow-y:hidden, so an applet that posts less than it renders is
+    // clipped with no scrollbar. 2026-11-10: a "fixed" dashboard set body{height:620px} with
+    // an inner scroll region and posted 620 — the reset undid the height, the content stayed
+    // 6,338px, and the iframe showed the first 620px of it.
+    let wanted = e.data.height;
+    try { wanted = Math.max(wanted, iframe.contentDocument.body.scrollHeight + 2); } catch {}
+    const height = Math.max(100, Math.min(MAX_IFRAME_H, wanted));
     const current = parseInt(iframe.style.height) || 0;
     if (Math.abs(current - height) < 2) return;
     // Debounce per-iframe to batch rapid resize messages
     clearTimeout(_iframeResizeTimers.get(iframe));
     _iframeResizeTimers.set(iframe, setTimeout(() => {
       iframe.style.height = height + 'px';
-      iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
+      iframe.style.overflow = wanted > MAX_IFRAME_H ? 'auto' : 'hidden';
     }, 30));
   });
 });

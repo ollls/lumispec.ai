@@ -63,7 +63,7 @@ src/
   server.js                # Express server, entry point, calls loadPlugins() before listen, starts slot polling
   tools/
     index.js               # Core: plugin loader, registry, executor, parser, logging, confirmation, system prompt assembly, precision rules, plugin config
-    plugin-core.js         # current_datetime
+    plugin-core.js         # current_datetime, conversation_read
     plugin-web.js          # web_search, web_fetch + Tavily/Keiro search backends
     plugin-execution.js    # run_python
     plugin-source.js       # source_read/write/edit/delete/git/run/test/project, template_save + file locks, diff helpers
@@ -281,7 +281,7 @@ export default {
 
 | Group | Plugin | Tools | Condition | Dependencies |
 |---|---|---|---|---|
-| `core` | plugin-core.js | `current_datetime` | — | — |
+| `core` | plugin-core.js | `current_datetime`, `conversation_read` | — | — |
 | `web` | plugin-web.js | `web_search`, `web_fetch` | — | — |
 | `execution` | plugin-execution.js | `run_python` | — | — |
 | `source` | plugin-source.js | 8 source tools + `template_save` | `config.sourceDir` set | — |
@@ -361,6 +361,7 @@ is why the bar used to show 84K on a 64K slot.
 | Tool | Description |
 |---|---|
 | `current_datetime` | Returns UTC, local time, IANA timezone, UTC offset |
+| `conversation_read` | Reads back what the model produced earlier in the same conversation and cannot see in its history: `what: "applet"` (default; full applet source), `"tools"` (stored tool results, newest 12, 3,000 chars each), `"reasoning"` (last 12,000 chars). Optional `message` (index; default = newest answer that has it) and `applet` (index). Troubleshooting only — see **Troubleshoot** |
 | `web_search` | Web search via Keiro and/or Tavily (configurable) |
 | `web_fetch` | Fetch URL. `view: "article"` (default) extracts the article or, on a front page, the headline-link list as markdown (Readability + Turndown); `view: "text"` returns the page as it reads on screen, one line per visual row — Chrome's `innerText` via the Browser Search extension (hidden labels and images excluded), approximated from markup on the HTTP tier (`note` says so). For web apps: mail, calendars, dashboards, boards. `tab: "active" | <id> | <host/title fragment>` reads one of the user's **open** tabs in place instead of loading a URL (Tab Fetch, Browser Search only; off by default) |
 | `browser_tabs` | Lists the user's open web tabs (id, title, host, URL, current). Browser Search only, available while "Let the assistant read my open tabs" is on; the model calls it before `web_fetch { tab }`. One match reads; several → it must ask |
@@ -410,6 +411,15 @@ Red square icon button in the input area button column (below Send). Hidden by d
 A turn belongs to its conversation, not to the screen. `liveStreams` (app.js, `Map<convId, { controller, startedAt, nodes }>`) holds one entry per conversation with a turn in flight; `sendMessage()` / `sendTasks()` capture `convId` at start and use it for every request (messages, confirm, task-review). Switching conversations or creating a new chat **does not abort** — the server cancels a turn when its connection closes, so the fetch is simply left running. The turn's bubbles (`nodes`) keep filling off-screen and `showConversation()` re-attaches them on return in place of the server's stored pair (user message + empty assistant placeholder). Shared UI is touched only by the stream of the conversation on screen: `syncStreamUi()` points Send / Stop / the elapsed timer at the current conversation (called from `updateInputLock()` and at stream start/end), and scrolling, the context bar, the Enter-to-approve shortcut and the end-of-turn re-render are guarded by `visible()`. Stop aborts the current conversation's stream only; deleting a conversation aborts its stream. Running conversations show a pulsing dot in the sidebar. `scheduleRender()` throttles per container (`_renderState` WeakMap). `settleConversation()` re-renders from the server after a turn and keeps the live bubbles while the server still holds the empty placeholder (a stopped turn is stored a moment after the connection closes). Limit: a page reload still closes the connections and stops every running turn. Before 2026-11-10 a single `state.abortController` meant switching aborted the turn and a second stream's start or end reset the first one's controls and wiped its bubble.
 
 **Stopped turns keep their work**: on abort the chat loop stores `[Stopped before an answer was written. …]` with the turn's `reasoning` and `toolUses` (the placeholder used to stay `''`, losing them and replaying an empty assistant turn in later history); the pipeline records the task that was running as `{ text, error: 'Stopped before this task finished.' }` after the completed ones.
+
+### Troubleshoot (applet diagnostics + `conversation_read`)
+The model cannot see its own earlier applets: the history rebuild replaces each with `[Applet: TYPE visualization]`, tool rounds are not replayed, and reasoning only travels with Retain. Asked to fix a broken applet it used to rewrite from memory of the request. Three pieces close that gap:
+- **`conversation_read`** (`plugin-core.js`, always on; logic in `src/services/conversationRead.js`, pure, tested in `test/conversationRead.test.js`): returns one slice of a stored assistant message — applet source (`APPLET_RE`/`appletBody()` from `services/applets.js`; several applets over 40K chars total are listed without source until one is requested by index), tool results (chat `toolUses` or a pipeline run's per-step ones), or reasoning. The empty placeholder of the turn in flight is never picked. A core `routing` line tells the model to call it before fixing something the user reports as broken.
+- **Applet diagnostics** (`APPLET_DIAG_SCRIPT` in app.js): injected first in every applet iframe's `<head>`; posts uncaught errors, unhandled rejections, `console.error`, failed resource loads and non-OK `fetch` responses to the page as `{type:'applet-diag', kind, message}` (20 per applet, 300 chars each). The page keeps them per iframe in `_appletDiag` (WeakMap); they are regathered whenever the applet is re-rendered.
+- **Troubleshoot button** (next to Save as Template): `troubleshootApplet(iframe)` fills the prompt with "Problem: <whatever was already typed>", a browser report headed "facts, not necessarily defects" (the diagnostics, rendered height, visible text length and first 120 chars, canvas count), a paragraph on how applets are hosted (the iframe grows to its content and the chat scrolls; never a fixed page height or inner scroll region), and the exact `conversation_read {"what":"applet","message":N[,"applet":i]}` call with "fix only the problem described; if none is described, ask". An empty problem line gets a selected `<describe what is wrong>` placeholder. Nothing is sent until the user submits. 2026-11-10: sent with the problem blank and "6338px tall (chat area is 652px)" in the report, the model took the height for the defect and rebuilt a working dashboard as a fixed 620px box.
+- **The host never clips an applet**: the `resize` message handler sizes the iframe to `max(posted height, body.scrollHeight + 2)`. The style reset forces html/body to `height:auto; overflow-y:hidden`, so an applet posting less than it renders (that 620px "fix": content still 6,338px) used to show its first 620px with no scrollbar.
+
+Measured 2026-11-10 on an applet stuck on "Loading…": the report carried `fetch: 404 /files/…`, the model called `conversation_read` (627 chars back) and answered with a corrected applet.
 
 ### Refine Button
 Small "Refine" button on thinking/reasoning `<details>` blocks. Sends the original user prompt + reasoning trace to the LLM via `POST /api/conversations/:id/refine`. The LLM analyzes where it struggled or made assumptions and returns an improved prompt (max 3x original length). Result loaded into the input textarea for user review. Shows "Already optimal" if the prompt doesn't need improvement.
