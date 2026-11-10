@@ -11,6 +11,11 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 🔀 v1.5.7 — A running answer survives leaving its conversation
+
+- **Conversations keep running.** Switching to another conversation or starting a new chat no longer aborts the turn in flight: it keeps going on its own slot, its live bubble is back when you return, and a pulsing dot in the sidebar marks every conversation that is working. Send, Stop and the timer follow the conversation on screen. A stopped turn is now stored with its reasoning and tool results instead of an empty message.
+- **Applets fit the chat area.** Charts, SVGs and images are capped to the visible chat height (a Chart.js canvas used to render 1,763px tall in a 625px area), and the prompt box keeps the height you dragged it to. See [`releases/1.5.7.md`](releases/1.5.7.md).
+
 ## 🧱 v1.5.6 — One tool result can no longer sink a turn
 
 - **Tool result limits.** `tree` is summarized over 300 files (layout with counts, first 300 paths, optional `path` for one subdirectory); every tool result is capped at 50K chars; and the context wind-down now cuts the newest results too until the prompt fits. A 7,000-file tree used to make the next request 131K tokens against a 64K slot. See [`releases/1.5.6.md`](releases/1.5.6.md).
@@ -83,7 +88,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.6.md`](releases/1.5.6.md) (latest) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.7.md`](releases/1.5.7.md) (latest) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -459,7 +464,9 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
-| [`releases/1.5.6.md`](releases/1.5.6.md) | v1.5.6 release notes (latest) — tool result limits: tree summary, executor ceiling, wind-down fit |
+| [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
+| [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes (latest) — concurrent conversations, stopped turns keep their work, applet fit |
+| [`releases/1.5.6.md`](releases/1.5.6.md) | v1.5.6 release notes — tool result limits: tree summary, executor ceiling, wind-down fit |
 | [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes — Python environment detection, per-answer token cap, template titles |
 | [`releases/1.5.4.md`](releases/1.5.4.md) | v1.5.4 release notes — template review on save, notes apart from the HTML, parse guard |
 | [`releases/1.5.3.md`](releases/1.5.3.md) | v1.5.3 release notes — research budget setting, template sources exempt, Claude backend tool rounds |

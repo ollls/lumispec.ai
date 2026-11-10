@@ -2,7 +2,6 @@
 const state = {
   currentConversationId: localStorage.getItem('activeConversationId') || null,
   conversations: [],
-  abortController: null,
   healthy: false,
   maxContext: 131072,
   pendingImages: [], // { dataUrl, mimeType, name }
@@ -67,19 +66,79 @@ function textSafeColor(color) {
 }
 
 let _elapsedInterval = null;
-function startElapsedTimer() {
-  const t0 = Date.now();
-  elapsedTimer.classList.remove('hidden');
-  elapsedTimer.textContent = '0s';
-  clearInterval(_elapsedInterval);
-  _elapsedInterval = setInterval(() => {
+function startElapsedTimer(t0 = Date.now()) {
+  const tick = () => {
     const s = Math.floor((Date.now() - t0) / 1000);
     elapsedTimer.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-  }, 1000);
+  };
+  elapsedTimer.classList.remove('hidden');
+  tick();
+  clearInterval(_elapsedInterval);
+  _elapsedInterval = setInterval(tick, 1000);
 }
 function stopElapsedTimer() {
   clearInterval(_elapsedInterval);
   _elapsedInterval = null;
+}
+
+// ── Live streams ──────────────────────────────────────
+// One entry per conversation with a turn in flight: convId → { controller, startedAt, nodes }.
+// A stream belongs to its conversation, not to the screen: switching away or starting a new chat
+// leaves it running (the server cancels a turn when its connection closes), its bubbles (`nodes`)
+// keep filling off-screen and showConversation() puts them back on return. Everything shared —
+// Send/Stop, the elapsed timer, the context bar, scrolling, re-renders — is touched only by the
+// stream of the conversation on screen. Before 2026-11-10 there was a single
+// state.abortController: switching aborted the turn (answer and tool results lost), and a second
+// stream's start or end reset the first one's controls and wiped its bubble.
+const liveStreams = new Map();
+
+function beginStream(convId, nodes) {
+  const stream = { controller: new AbortController(), startedAt: Date.now(), nodes };
+  liveStreams.set(convId, stream);
+  syncStreamUi();
+  renderSidebar();
+  return stream;
+}
+
+// Point Send / Stop / the elapsed timer at the conversation on screen.
+function syncStreamUi() {
+  const live = liveStreams.get(state.currentConversationId);
+  const locked = !state.currentConversationId || !state.sessionType;
+  sendBtn.disabled = locked || !!live;
+  stopBtn.classList.toggle('hidden', !live);
+  if (live) startElapsedTimer(live.startedAt);
+  else stopElapsedTimer();
+}
+
+// After a turn ends, replace its live bubbles with the stored messages. A stopped turn is stored
+// a moment after its connection closes (later still when a tool was mid-run), so while the server
+// still holds the empty placeholder the live bubbles stay on screen and we ask again.
+async function settleConversation(convId) {
+  try {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const conv = await api.getConversation(convId);
+      if (state.currentConversationId !== convId || liveStreams.has(convId) || !conv?.messages) return;
+      const last = conv.messages[conv.messages.length - 1];
+      if (!(last && last.role === 'assistant' && last.content === '')) {
+        renderMessages(conv.messages);
+        updateContextBar(conv.tokenCount);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch {}
+}
+
+// Render a conversation's stored messages. If it has a turn in flight, that turn's live bubbles
+// replace the server's stored pair (user message + empty assistant placeholder).
+function showConversation(convId, messages) {
+  const live = liveStreams.get(convId);
+  if (!live) { renderMessages(messages); return; }
+  const last = messages[messages.length - 1];
+  const hasPlaceholder = last && last.role === 'assistant' && last.content === '';
+  renderMessages(hasPlaceholder ? messages.slice(0, -2) : messages);
+  for (const node of live.nodes) responseArea.appendChild(node);
+  responseArea.scrollTop = responseArea.scrollHeight;
 }
 
 function flashMsg(text) {
@@ -132,6 +191,18 @@ const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
 const input = document.getElementById('prompt-input');
+
+// Size the prompt textarea to its content (capped at 200px) — unless the user has
+// dragged the pane to a fixed height, in which case the textarea just fills it.
+// Without that guard every input event pinned a tall pane's textarea to 200px.
+function autosizeInput() {
+  if (form.style.height) {
+    input.style.height = '100%';
+    return;
+  }
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const llmDot = document.getElementById('llm-dot');
@@ -234,8 +305,7 @@ function addRefineButton(details, getPrompt, getReasoning) {
       const { refined, changed } = await res.json();
       if (changed) {
         input.value = refined;
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
         btn.textContent = 'Loaded';
       } else {
@@ -253,10 +323,7 @@ function addRefineButton(details, getPrompt, getReasoning) {
 
 // ── Stop button ─────────────────────────────────────
 stopBtn.addEventListener('click', () => {
-  if (state.abortController) {
-    state.abortController.abort();
-    state.abortController = null;
-  }
+  liveStreams.get(state.currentConversationId)?.controller.abort();
 });
 
 // ── Click-to-copy word from assistant messages ───────
@@ -538,6 +605,13 @@ function renderSidebar() {
     const title = document.createElement('span');
     title.className = 'flex-1 text-sm truncate pl-3 ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
     title.textContent = conv.title;
+    if (liveStreams.has(conv.id)) {
+      const dot = document.createElement('span');
+      dot.className = 'animate-pulse';
+      dot.title = 'Working…';
+      dot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:#818cf8;margin-right:6px;vertical-align:middle';
+      title.prepend(dot);
+    }
     if (convSession) {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
       if (c) title.style.color = textSafeColor(c);
@@ -602,7 +676,7 @@ function renderSidebar() {
           await api.compactConversation(conv.id);
           if (conv.id === state.currentConversationId) {
             const updated = await api.getConversation(conv.id);
-            renderMessages(updated.messages);
+            showConversation(conv.id, updated.messages);
             updateContextBar(updated.tokenCount);
           }
           await refreshSidebar();
@@ -651,8 +725,7 @@ function renderSidebar() {
 
 async function switchConversation(id) {
   if (id === state.currentConversationId) return;
-  // Abort any in-flight stream
-  if (state.abortController) state.abortController.abort();
+  // A turn in flight in the conversation being left keeps running — see liveStreams.
 
   state.currentConversationId = id;
   persistActiveConversation();
@@ -665,11 +738,13 @@ async function switchConversation(id) {
   renderSidebar();
 
   const conv = await api.getConversation(id);
-  renderMessages(conv.messages);
+  if (state.currentConversationId !== id) return; // switched again while loading
+  showConversation(id, conv.messages);
   updateContextBar(conv.tokenCount);
 }
 
 async function deleteConversation(id) {
+  liveStreams.get(id)?.controller.abort();
   await api.deleteConversation(id);
   delete state.sessionColors[id];
   localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
@@ -776,8 +851,18 @@ function createAppletIframe(applet) {
     }
   }
 
+  // Fit cap: the tallest a chart, SVG or image may render, from the visible chat area's height
+  // (applet-fit.js). 2026-11-10: a Chart.js canvas with height="340" rendered 1,763px tall in a
+  // 625px chat area, because responsive mode scaled the canvas's own 300×340 ratio to the bubble
+  // width. SVGs and images get a max-height; Chart.js gets a plugin that wraps an oversized
+  // chart in a fixed-height box before its first resize.
+  const fit = window.AppletFit;
+  const fitCap = fit ? fit.capFor(document.getElementById('response-area')?.clientHeight) : 0;
+  const fitStyle = fitCap ? fit.styleFor(fitCap) : '';
+  const fitScript = fitCap && html.includes('/lib/chart.min.js') ? fit.chartScriptFor(fitCap) : '';
+
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + '</style>' + fitScript;
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -962,8 +1047,8 @@ function renderFormattedContent(text, container, { renderMermaid = false, partia
   }
 }
 
-let _renderTimer = null;
-let _lastRenderTime = 0;
+// Throttle state per container: two conversations can stream at once.
+const _renderState = new WeakMap(); // container → { timer, last }
 const RENDER_INTERVAL = 80;
 
 // Fold a completed step's output into a collapsed <details>, in place.
@@ -987,17 +1072,19 @@ function foldStepOutput(parent, span, label = 'Output') {
 
 // Streaming renders: the text is still growing, so only fully closed applets become iframes.
 function scheduleRender(text, container) {
+  let rs = _renderState.get(container);
+  if (!rs) _renderState.set(container, rs = { timer: null, last: 0 });
   const now = Date.now();
-  if (now - _lastRenderTime >= RENDER_INTERVAL) {
-    _lastRenderTime = now;
+  clearTimeout(rs.timer);
+  if (now - rs.last >= RENDER_INTERVAL) {
+    rs.last = now;
     renderFormattedContent(text, container, { partial: true });
     return;
   }
-  clearTimeout(_renderTimer);
-  _renderTimer = setTimeout(() => {
-    _lastRenderTime = Date.now();
+  rs.timer = setTimeout(() => {
+    rs.last = Date.now();
     renderFormattedContent(text, container, { partial: true });
-  }, RENDER_INTERVAL - (now - _lastRenderTime));
+  }, RENDER_INTERVAL - (now - rs.last));
 }
 
 // ── Extract image URLs from tool results ──────────────
@@ -1063,7 +1150,7 @@ async function regenerateFrom(wrapper, overrideText) {
   }
   // Re-render with proper msgIndex on all bubbles
   const updated = await api.getConversation(convId);
-  renderMessages(updated.messages);
+  if (state.currentConversationId === convId) showConversation(convId, updated.messages);
 }
 
 // Turn a user bubble into an inline editor; Enter regenerates with the edited text
@@ -1399,13 +1486,15 @@ function appendMessage(role, text, images, meta = {}) {
 
 // ── Streaming ─────────────────────────────────────────
 async function sendMessage(content, images, { sessionInit = false } = {}) {
-  if (!state.currentConversationId) return;
+  const convId = state.currentConversationId;
+  if (!convId || liveStreams.has(convId)) return;
 
+  const firstNode = responseArea.children.length;
   appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
-  sendBtn.disabled = true;
-  stopBtn.classList.remove('hidden');
-  startElapsedTimer();
+  const stream = beginStream(convId, [...responseArea.children].slice(firstNode));
+  const visible = () => state.currentConversationId === convId;
+  const scrollDown = () => { if (visible()) responseArea.scrollTop = responseArea.scrollHeight; };
 
   // Create a collapsed reasoning block inside the bubble
   const reasoningDetails = document.createElement('details');
@@ -1429,14 +1518,11 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
   let hasReasoning = false;
   let hasToolUse = false;
 
-  state.abortController = new AbortController();
   let accumulated = '';
   let accumulatedReasoning = '';
-  _lastRenderTime = 0;
-  clearTimeout(_renderTimer);
 
   try {
-    const res = await fetch(`/api/conversations/${state.currentConversationId}/messages`, {
+    const res = await fetch(`/api/conversations/${convId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1449,7 +1535,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
         retain: state.retainEnabled,
         sessionInit: sessionInit || false,
       }),
-      signal: state.abortController.signal,
+      signal: stream.controller.signal,
     });
 
     // sessionInit flag consumed by POST body above
@@ -1483,7 +1569,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               }
               accumulatedReasoning += data.reasoning;
               reasoningBody.textContent = accumulatedReasoning;
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
             if (data.tool_content && state.thinkEnabled) {
               // Show LLM's text during tool rounds so user knows it's not hung
@@ -1503,7 +1589,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                 toolUseContainer._thinkingEl = body;
               }
               toolUseContainer._thinkingEl.textContent += data.tool_content;
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
             if (data.tool_status && state.thinkEnabled) {
               // Show inline status for slow operations (prebook, book, cancel)
@@ -1518,7 +1604,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               statusEl.className = 'tool-status-msg text-xs text-indigo-400 py-1 animate-pulse';
               statusEl.textContent = data.tool_status;
               toolUseContainer.appendChild(statusEl);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
             if (data.tool_use) {
               // Update source dir label when project is switched
@@ -1648,7 +1734,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
 
               toolUseContainer.appendChild(detail);
 
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             } // end else (thinkEnabled)
             } // end if (data.tool_use)
             if (data.confirm_command) {
@@ -1669,15 +1755,16 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                   <button class="cmd-deny px-3 py-1 rounded font-medium" style="color:#f87171">✕ Deny</button>
                 </div>`;
               toolUseContainer.appendChild(confirmDiv);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
 
               const approveBtn = confirmDiv.querySelector('.cmd-approve');
               const denyBtn = confirmDiv.querySelector('.cmd-deny');
               const respond = async (approved) => {
+                document.removeEventListener('keydown', onEnter);
                 approveBtn.disabled = true;
                 denyBtn.disabled = true;
                 confirmDiv.querySelector('.flex').innerHTML = `<span class="${approved ? 'text-green-400' : 'text-red-400'}">${approved ? 'Approved' : 'Denied'}</span>`;
-                await fetch(`/api/conversations/${state.currentConversationId}/confirm`, {
+                await fetch(`/api/conversations/${convId}/confirm`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ approved }),
@@ -1686,7 +1773,8 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               approveBtn.addEventListener('click', () => respond(true));
               denyBtn.addEventListener('click', () => respond(false));
               const onEnter = (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); document.removeEventListener('keydown', onEnter); respond(true); }
+                // Enter approves only while this conversation is the one on screen
+                if (e.key === 'Enter' && visible()) { e.preventDefault(); respond(true); }
               };
               document.addEventListener('keydown', onEnter);
             }
@@ -1704,12 +1792,12 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               }
               accumulated += data.content;
               scheduleRender(accumulated, contentSpan);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
             if (data.usage) {
               // context_tokens = measured prompt + last completion (what the slot holds); total_tokens is a fallback
               const total = data.usage.context_tokens || data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
-              updateContextBar(total);
+              if (visible()) updateContextBar(total);
             }
             if (data.error) {
               bubble.textContent = `[Error: ${data.error}]`;
@@ -1725,18 +1813,15 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
       bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
-    clearTimeout(_renderTimer);
-    stopElapsedTimer();
-    if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
-    state.abortController = null;
-    sendBtn.disabled = false;
-    stopBtn.classList.add('hidden');
-    input.focus();
-    // Re-render from server data so regen buttons appear on user messages
-    try {
-      const conv = await api.getConversation(state.currentConversationId);
-      if (conv?.messages) renderMessages(conv.messages);
-    } catch {}
+    liveStreams.delete(convId);
+    syncStreamUi();
+    renderSidebar(); // drop the "working" dot now; the stored turn may take a moment to settle
+    if (visible()) {
+      if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
+      input.focus();
+      // Re-render from server data so regen buttons appear on user messages
+      await settleConversation(convId);
+    }
     // Refresh sidebar to pick up auto-title, slots to clear active state
     refreshSidebar();
     refreshSlots();
@@ -1763,25 +1848,24 @@ function parseTaskList(text) {
 }
 
 async function sendTasks(tasks, displayText) {
-  if (!state.currentConversationId) return;
+  const convId = state.currentConversationId;
+  if (!convId || liveStreams.has(convId)) return;
 
+  const firstNode = responseArea.children.length;
   appendMessage('user', displayText);
   const bubble = appendMessage('assistant', '');
-  sendBtn.disabled = true;
-  stopBtn.classList.remove('hidden');
-  startElapsedTimer();
+  const stream = beginStream(convId, [...responseArea.children].slice(firstNode));
+  const visible = () => state.currentConversationId === convId;
+  const scrollDown = () => { if (visible()) responseArea.scrollTop = responseArea.scrollHeight; };
 
   bubble.textContent = '';
   const taskSections = new Map(); // index → { header, toolContainer, contentSpan }
   let currentSection = null;
   let lastOutputFold = null; // most recently folded step — re-opened at the end, it is the answer
 
-  state.abortController = new AbortController();
-  _lastRenderTime = 0;
-  clearTimeout(_renderTimer);
 
   try {
-    const res = await fetch(`/api/conversations/${state.currentConversationId}/tasks`, {
+    const res = await fetch(`/api/conversations/${convId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1793,7 +1877,7 @@ async function sendTasks(tasks, displayText) {
         retain: state.retainEnabled,
         review: state.reviewEnabled,
       }),
-      signal: state.abortController.signal,
+      signal: stream.controller.signal,
     });
 
     setTimeout(refreshSlots, 500);
@@ -1841,7 +1925,7 @@ async function sendTasks(tasks, displayText) {
               bubble.appendChild(section);
               currentSection = { section, header, toolContainer, contentSpan, accumulated: '', accumulatedReasoning: '', hasReasoning: false, reasoningDetails: null, reasoningBody: null };
               taskSections.set(index, currentSection);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.subtask_start && currentSection) {
@@ -1861,7 +1945,7 @@ async function sendTasks(tasks, displayText) {
               newContentSpan.className = 'ml-3 block max-h-60 overflow-y-auto slim-scrollbar';
               currentSection.section.appendChild(newContentSpan);
               currentSection.contentSpan = newContentSpan;
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.subtask_complete) {
@@ -1924,12 +2008,12 @@ async function sendTasks(tasks, displayText) {
               reviewDiv.appendChild(commentInput);
               reviewDiv.appendChild(btnRow);
               bubble.appendChild(reviewDiv);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
               commentInput.focus();
               const respond = async (action) => {
                 const comment = commentInput.value.trim();
                 reviewDiv.remove();
-                await fetch(`/api/conversations/${state.currentConversationId}/task-review`, {
+                await fetch(`/api/conversations/${convId}/task-review`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ action, comment: action === 'continue' ? comment : '' }),
@@ -1949,7 +2033,7 @@ async function sendTasks(tasks, displayText) {
               } else {
                 bubble.appendChild(note);
               }
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.task_error) {
@@ -1983,7 +2067,7 @@ async function sendTasks(tasks, displayText) {
               }
               currentSection.accumulatedReasoning += data.reasoning;
               currentSection.reasoningBody.textContent = currentSection.accumulatedReasoning;
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.tool_content && currentSection && state.thinkEnabled) {
@@ -1999,7 +2083,7 @@ async function sendTasks(tasks, displayText) {
                 currentSection.toolContainer._thinkingEl = body;
               }
               currentSection.toolContainer._thinkingEl.textContent += data.tool_content;
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.tool_status && currentSection && state.thinkEnabled) {
@@ -2009,7 +2093,7 @@ async function sendTasks(tasks, displayText) {
               statusEl.className = 'tool-status-msg text-xs text-indigo-400 py-1 animate-pulse';
               statusEl.textContent = data.tool_status;
               currentSection.toolContainer.appendChild(statusEl);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.tool_use && currentSection) {
@@ -2050,7 +2134,7 @@ async function sendTasks(tasks, displayText) {
                 detail.appendChild(pre);
                 currentSection.toolContainer.appendChild(detail);
               }
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.confirm_command && currentSection) {
@@ -2070,7 +2154,7 @@ async function sendTasks(tasks, displayText) {
               confirmDiv.appendChild(btnRow);
               currentSection.section.insertBefore(confirmDiv, currentSection.contentSpan);
               const respond = async (approved) => {
-                await fetch(`/api/conversations/${state.currentConversationId}/confirm`, {
+                await fetch(`/api/conversations/${convId}/confirm`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ approved }),
@@ -2099,12 +2183,12 @@ async function sendTasks(tasks, displayText) {
               }
               currentSection.accumulated += data.content;
               scheduleRender(currentSection.accumulated, currentSection.contentSpan);
-              responseArea.scrollTop = responseArea.scrollHeight;
+              scrollDown();
             }
 
             if (data.usage) {
               const total = data.usage.context_tokens || data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
-              updateContextBar(total);
+              if (visible()) updateContextBar(total);
             }
 
             if (data.error) {
@@ -2124,8 +2208,6 @@ async function sendTasks(tasks, displayText) {
       bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
-    clearTimeout(_renderTimer);
-    stopElapsedTimer();
     // Final render pass for any remaining section
     for (const [, sec] of taskSections) {
       // Skip folded steps — contentSpan points at the <details>, already rendered
@@ -2135,14 +2217,13 @@ async function sendTasks(tasks, displayText) {
     }
     // The last step's output is the actual answer — leave it open
     if (lastOutputFold) lastOutputFold.open = true;
-    state.abortController = null;
-    sendBtn.disabled = false;
-    stopBtn.classList.add('hidden');
-    input.focus();
-    try {
-      const conv = await api.getConversation(state.currentConversationId);
-      if (conv?.messages) renderMessages(conv.messages);
-    } catch {}
+    liveStreams.delete(convId);
+    syncStreamUi();
+    renderSidebar(); // drop the "working" dot now; the stored turn may take a moment to settle
+    if (visible()) {
+      input.focus();
+      await settleConversation(convId);
+    }
     refreshSidebar();
     refreshSlots();
   }
@@ -2591,8 +2672,10 @@ function persistActiveConversation() {
 function updateInputLock() {
   const locked = !state.currentConversationId || !state.sessionType;
   input.disabled = locked;
-  sendBtn.disabled = locked;
   input.placeholder = locked ? 'Select or create a session to start…' : 'Type your message…';
+  syncStreamUi();
+  // The timer belongs to a turn; don't leave another conversation's time on screen
+  if (!liveStreams.has(state.currentConversationId)) elapsedTimer.classList.add('hidden');
 }
 
 // ── Event handlers ────────────────────────────────────
@@ -2639,6 +2722,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   // Must have an active session to send
   if (!requireSession()) return;
+  if (liveStreams.has(state.currentConversationId)) return; // this conversation is still answering
   const content = input.value.trim();
   const images = state.pendingImages.length > 0 ? [...state.pendingImages] : null;
   if (!content && !images) return;
@@ -2659,8 +2743,7 @@ form.addEventListener('submit', async (e) => {
 
 // Auto-resize textarea + list mode auto-detection
 input.addEventListener('input', () => {
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  autosizeInput();
   if (state.listMode) {
     // Exit list mode if textarea no longer has any bullets
     if (!input.value.includes('- ')) toggleListMode(false);
@@ -2875,8 +2958,7 @@ taskmasterBtn.addEventListener('click', async () => {
     if (data.error) throw new Error(data.error);
     if (data.single) return; // too simple to decompose
     input.value = data.tasks;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    autosizeInput();
     if (!state.listMode) toggleListMode(true);
     input.focus();
   } catch (err) {
@@ -3071,8 +3153,7 @@ function renderCompacts(compacts) {
       compactsDropdown.classList.add('hidden');
       if (!requireSession()) return;
       input.value = c.text;
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      autosizeInput();
       input.focus();
     });
 
@@ -3208,8 +3289,7 @@ function renderSessions(sessions) {
         showPromptVarsModal(s.text, vars);
       } else {
         input.value = expandPromptMacros(s.text);
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
       }
     });
@@ -3381,8 +3461,7 @@ function renderTemplates(templates) {
       const tag = `[template: ${t.name}]`;
       const pos = input.selectionStart || input.value.length;
       input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      autosizeInput();
       input.focus();
       templatesDropdown.classList.add('hidden');
     });
@@ -4159,8 +4238,7 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
     });
   } else if (state.currentConversationId && state.sessionType) {
     input.value = text;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    autosizeInput();
     input.focus();
   }
 });
@@ -4274,8 +4352,7 @@ function renderPrompts(prompts) {
         showPromptVarsModal(p.text, vars);
       } else {
         input.value = expandPromptMacros(p.text);
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        autosizeInput();
         input.focus();
       }
     });
@@ -4377,10 +4454,15 @@ function renderTasks(tasks) {
       input.value = t.text;
       const trimmed = t.text.trimStart();
       if (trimmed.includes('- ') && !state.listMode) toggleListMode(true);
-      // Keep current height — only grow if content needs more space, never shrink
-      input.style.height = 'auto';
-      const needed = input.scrollHeight;
-      input.style.height = Math.max(prevHeight, needed) + 'px';
+      // Keep current height — only grow if content needs more space, never shrink.
+      // A user-sized pane is left alone: the textarea fills it and scrolls.
+      if (form.style.height) {
+        autosizeInput();
+      } else {
+        input.style.height = 'auto';
+        const needed = input.scrollHeight;
+        input.style.height = Math.max(prevHeight, needed) + 'px';
+      }
       input.focus();
       tasksDropdown.classList.add('hidden');
     });
@@ -4554,6 +4636,7 @@ saveCompactBtn.addEventListener('click', async () => {
     const delta = startY - e.clientY;
     const newH = Math.max(80, Math.min(window.innerHeight * 0.6, startH + delta));
     form.style.height = newH + 'px';
+    input.style.height = '100%'; // drop any content-sized pixel height so the textarea follows the pane
   });
   document.addEventListener('mouseup', () => {
     if (!dragging) return;

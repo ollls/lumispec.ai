@@ -1,5 +1,17 @@
 [
   {
+    "id": "3d19b93a-22b2-4570-abc1-37dce15327ca",
+    "title": "System Monitoring Dashboard Applet",
+    "text": "Build a system monitoring dashboard as a single self-contained HTML applet.\n\nShow the overall health of the computer at a glance, with live panels for:\n\nCPU – total usage %, per-core usage, temperature, and clock speed\nRAM – used vs. total, usage %, and a short usage-over-time graph\nGPU – utilization %, temperature, and clock speed\nGPU memory (VRAM) – used vs. total and usage %\n\nRequirements:\n\nFollow dashboard best practices: clear hierarchy, readable typography, consistent colors, and a dark theme.\nInclude the metrics most users expect to see, but keep the layout clean and uncluttered — avoid overloading it with data.\nUse gauges or stat tiles for current values and small line charts for recent history. NEVER FABRICATE DATA.",
+    "createdAt": "2026-11-09T21:56:45.432Z"
+  },
+  {
+    "id": "87a8cb70-5032-441f-a270-09c9a1e27c4a",
+    "title": "Market Tape Analysis Prompt",
+    "text": "You are a market-tape analyst. Today is {DATE} {TIME} ET. First search the web for LIVE data — S&P 500, VIX, VVIX, VIX3M, SOX/NVDA/AMD, Dow, Russell 2000, HYG, Sunday-night futures, Asia closes (Taiwan, Kospi, Nikkei). Never use remembered prices.\n\nContext: Panic day {PANIC_DATE}: S&P closing low {SPX_LOW}, 200-day MA ≈ {MA200}. VIX closed {VIX_CLOSE} (intraday high {VIX_HIGH}) from {VIX_PRIOR} the day before. Next catalyst: {CATALYST}.\nIf a level is missing, derive it from the most recent VIX spike day (one-day gain ≥40% or close ≥25).\n\nScore each signal ✅/⚠️/❌ with the current number and a one-line reason.\n\nRED — crash starting\n1. S&P closes below {SPX_LOW}; worse if below the 200-day.\n2. VIX closes above {VIX_HIGH} (new high in fear + new low in price).\n3. Chips give back their bounce. Separate stock-specific news from sector moves.\n4. Broad selling: decliners ≥3:1, all sectors red.\n5. Credit stress: HYG falling.\n\nGREEN — bottom in\n1. S&P holds {SPX_LOW}, or breaks it and closes back above (failed breakdown).\n2. VIX <22 and falling even on red days; or price retests the low while VIX stays below {VIX_CLOSE} (divergence).\n3. Chips lead, up more than the index.\n4. Advancers > decliners; Dow and small caps participating.\n5. VIX3M/VIX back above 1, VVIX falling.\n\nTiming: note the Sunday 6pm ET futures open and Asia closes. A gap down not recovered by midday outranks everything.\n\nOutput ≤300 words, mobile-friendly:\n1. One-line verdict: Crash risk rising / Unconfirmed / Bottom likely in.\n2. Scorecard, red then green.\n3. Comment: closest analog (one-day event spike like Dec 2024 or Aug 2024; grinding correction like Mar 2026; crash like Apr 2025) and why.\n4. Still open: ≤3 things that could flip the verdict, and when to re-check.\nCite sources. No trading advice.",
+    "createdAt": "2026-11-09T15:28:40.900Z"
+  },
+  {
     "id": "f59f128e-63fe-4dab-9788-18c7202fb3e2",
     "title": "SVG Solar System Diagram",
     "text": "Draw an SVG of a solar system with the sun in the center and 4 planets orbiting it. Use circles with different colors and sizes. Add labels. Use applet SVG.",

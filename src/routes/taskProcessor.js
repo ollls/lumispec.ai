@@ -252,6 +252,13 @@ router.post('/:id/tasks', async (req, res) => {
   storeAndFinish();
 
   function storeAndFinish() {
+    // Stopped mid-run (Stop button, reload, dropped connection): completed tasks are stored as
+    // usual, and the task that was running is recorded as stopped — the same shape as a step
+    // error — instead of leaving an empty or silently short message.
+    if (abortController.signal.aborted && taskRunResults.length < normalizedTasks.length) {
+      taskRunResults.push({ text: normalizedTasks[taskRunResults.length].text, error: 'Stopped before this task finished.' });
+    }
+
     // Build combined text for backward-compatible rendering
     const textParts = [];
     for (let i = 0; i < taskRunResults.length; i++) {
