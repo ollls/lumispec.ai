@@ -11,6 +11,11 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 🛠 v1.5.8 — The model can troubleshoot its own applets
+
+- **Troubleshoot button.** Under every applet: it fills the prompt with your problem line, what the browser saw inside the applet (JavaScript errors, failed fetches, rendered height, visible text) and the call that lets the model read back the code it wrote — earlier applets reach it only as `[Applet: html visualization]`, so a "fix" used to be a rewrite from memory. The new always-on `conversation_read` tool returns an earlier answer's applet source, tool results or reasoning.
+- **An applet is never clipped.** The frame is sized to the larger of what the applet asks for and what it renders. See [`releases/1.5.8.md`](releases/1.5.8.md).
+
 ## 🔀 v1.5.7 — A running answer survives leaving its conversation
 
 - **Conversations keep running.** Switching to another conversation or starting a new chat no longer aborts the turn in flight: it keeps going on its own slot, its live bubble is back when you return, and a pulsing dot in the sidebar marks every conversation that is working. Send, Stop and the timer follow the conversation on screen. A stopped turn is now stored with its reasoning and tool results instead of an empty message.
@@ -88,7 +93,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.7.md`](releases/1.5.7.md) (latest) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.5.8.md`](releases/1.5.8.md) (latest) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -465,7 +470,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
-| [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes (latest) — concurrent conversations, stopped turns keep their work, applet fit |
+| [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes (latest) — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
+| [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes — concurrent conversations, stopped turns keep their work, applet fit |
 | [`releases/1.5.6.md`](releases/1.5.6.md) | v1.5.6 release notes — tool result limits: tree summary, executor ceiling, wind-down fit |
 | [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes — Python environment detection, per-answer token cap, template titles |
 | [`releases/1.5.4.md`](releases/1.5.4.md) | v1.5.4 release notes — template review on save, notes apart from the HTML, parse guard |
