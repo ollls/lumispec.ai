@@ -280,6 +280,7 @@ const pluginConfigClose = document.getElementById('plugin-config-close');
 function addRefineButton(details, getPrompt, getReasoning) {
   const btn = document.createElement('button');
   btn.textContent = 'Refine';
+  btn.title = 'Improve your prompt, not the answer: the AI reads its thought process for this turn, finds where your request left it guessing or struggling, and puts a sharper version of your prompt in the input box for you to review. Nothing is sent. Shows "Already optimal" when there is nothing to improve.';
   Object.assign(btn.style, {
     fontSize: '10px', padding: '1px 8px', borderRadius: '4px', marginLeft: '8px',
     background: '#3f3f46', color: '#a1a1aa', border: 'none', cursor: 'pointer',
