@@ -1,5 +1,7 @@
 # Troubleshoot — revise an answer against its own evidence
 
+**Revise an answer against its own evidence instead of rerunning it.**
+
 > **In one line:** with `conversation_read` the model can read its own earlier output back — the
 > tool results, the applet code, the reasoning — so you ask it to correct that answer instead of
 > rerunning the original prompt.
@@ -107,6 +109,14 @@ applet itself. Its report comes from the browser — JavaScript errors, failed r
 height, visible text — and its call is `conversation_read {"what":"applet", …}`, which returns the
 applet's exact source. Use that one when the chart is blank or broken; use the answer-level one
 when the content is wrong.
+
+**Charts are where this started.** An HTML or SVG chart the model drew is the one piece of its
+own output it could never read again: in later turns the whole applet is replaced by
+`[Applet: html visualization]`, to keep thousands of characters of markup out of the context.
+Asked to move a legend, fix an axis or explain a blank chart, it had no code to look at and drew
+a new chart from memory of the request — often different data, a different layout, and the same
+bug. With the read-back it gets the exact HTML, SVG or Chart.js source it wrote, plus what the
+browser saw when it ran, and changes only the broken part.
 
 ## `conversation_read` — the tool underneath
 

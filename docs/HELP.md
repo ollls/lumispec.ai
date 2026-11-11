@@ -104,7 +104,7 @@ The AI normally sees its earlier answers as text only — not the searches, page
 - The prompt box fills with a request for that answer. Type what to check or correct over the highlighted placeholder, then send — nothing is sent before that
 - The correction appears as a new answer; the original stays so you can compare
 
-It works on good answers too: "verify the numbers", "you missed two sources", "recompute the total". Charts and dashboards have their own Troubleshoot button underneath, which reports what went wrong inside the chart.
+It works on good answers too: "verify the numbers", "you missed two sources", "recompute the total". Charts and dashboards have their own Troubleshoot button underneath, which reports what went wrong inside the chart. The AI could not read a chart it had drawn before — now it gets the chart's exact code back and fixes that, instead of drawing a new one.
 
 You can also just ask, without the button: "show the tool results of your last answer", "read back what you fetched and list any figure that isn't in it", "read your reasoning — why did you skip that?", "read the chart you made and explain how it calculates the average".
 
