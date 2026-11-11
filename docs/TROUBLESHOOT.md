@@ -1,5 +1,9 @@
 # Troubleshoot — revise an answer against its own evidence
 
+> **In one line:** with `conversation_read` the model can read its own earlier output back — the
+> tool results, the applet code, the reasoning — so you ask it to correct that answer instead of
+> rerunning the original prompt.
+
 Most chat tools give you two ways to deal with an answer you doubt: ask again and get a fresh
 guess, or argue with the model about something it can no longer see. Troubleshoot is a third way.
 It points the model at **one specific earlier answer**, hands it the facts recorded about that turn,
@@ -105,6 +109,10 @@ applet's exact source. Use that one when the chart is blank or broken; use the a
 when the content is wrong.
 
 ## `conversation_read` — the tool underneath
+
+**Read the output back and correct it, instead of running the prompt again.** A rerun repeats
+every search, fetch and calculation and may land somewhere else; a read-back keeps the data the
+answer was built on and changes only what was wrong.
 
 Always on (core plugin). It returns one slice of an earlier answer **in the same conversation**.
 The model calls it; you can ask for it in plain words at any time, without the button.

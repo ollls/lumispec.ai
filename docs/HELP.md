@@ -95,6 +95,8 @@ Diffs are always shown — even with Autorun enabled — so you can see exactly 
 With Applets enabled, ask for visualizations. Example: "Create a pie chart of my monthly expenses" or "Build a weather dashboard for my location"
 
 ### Checking & Correcting an Answer (Troubleshoot)
+**The AI can read its own earlier output back and correct it — you don't have to run the original prompt again.**
+
 The AI normally sees its earlier answers as text only — not the searches, pages, quotes or code output they were built from. **Troubleshoot** gives it that evidence back, so it checks an answer instead of guessing again.
 
 - Hover any answer and click the red **Troubleshoot** at its bottom right (it stays visible on answers that failed or were cut off)
