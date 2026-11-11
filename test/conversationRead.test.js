@@ -56,7 +56,7 @@ test('tools: stored results come back, long ones cut with their original size', 
   const r = readConversationPart(c, { what: 'tools' });
   assert.equal(r.message, 1);
   assert.equal(r.count, 2);
-  assert.deepEqual(r.toolUses[0], { name: 'run_python', result: '{"ok":true}' });
+  assert.deepEqual(r.toolUses[0], { tool: 0, name: 'run_python', result: '{"ok":true}' });
   assert.equal(r.toolUses[1].result.length, MAX_TOOL_RESULT_CHARS);
   assert.equal(r.toolUses[1].truncatedFrom, MAX_TOOL_RESULT_CHARS + 500);
 });

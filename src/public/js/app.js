@@ -887,6 +887,32 @@ function troubleshootApplet(iframe) {
   else input.setSelectionRange(lead.length, lead.length + PLACEHOLDER.length);
 }
 
+// Troubleshoot button on an assistant bubble: same flow as troubleshootApplet() for any answer,
+// good runs included. The prompt text is built by troubleshoot.js (window.Troubleshoot): the
+// message index, the text selected in the bubble, a turn report and the conversation_read call.
+// A saved prompt titled "Troubleshoot" (Prompts menu) replaces the closing guidance paragraph,
+// so the wording can be tuned without touching code. Nothing is sent until the user submits.
+async function troubleshootMessage(wrapper, bubble, turn) {
+  const sel = window.getSelection();
+  const selection = sel && sel.rangeCount && bubble.contains(sel.anchorNode) && bubble.contains(sel.focusNode)
+    ? sel.toString().trim() : '';
+  const problem = input.value.trim();
+  let guidance = '';
+  try {
+    const prompts = await (await fetch('/api/prompts')).json();
+    const custom = prompts.find((p) => (p.title || '').trim().toLowerCase() === 'troubleshoot');
+    if (custom) guidance = custom.text || '';
+  } catch {}
+  if (state.listMode) toggleListMode(false); // the report's "- " lines are not a task list
+  const built = window.Troubleshoot.buildPrompt({
+    message: Number(wrapper.dataset.msgIndex), problem, selection, turn, guidance,
+  });
+  input.value = built.text;
+  autosizeInput();
+  input.focus();
+  input.setSelectionRange(built.selectStart, built.selectEnd);
+}
+
 function createAppletIframe(applet) {
   let html = applet.html;
 
@@ -1314,7 +1340,7 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'group max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Edit + regenerate buttons on user bubbles
@@ -1558,6 +1584,25 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
+  }
+  // Troubleshoot (any answer): shown on hover, always shown on a failed turn
+  if (role === 'assistant' && meta.msgIndex !== undefined && (text || (meta.taskRun && meta.taskRun.length))) {
+    const turn = { text: text || '', toolUses: meta.toolUses, taskRun: meta.taskRun, reasoning: meta.reasoning };
+    const row = document.createElement('div');
+    row.className = 'flex justify-end mt-1';
+    const tsBtn = document.createElement('button');
+    tsBtn.className = (window.Troubleshoot.turnFailed(turn) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')
+      + ' text-red-400 transition-opacity text-xs leading-none p-1';
+    tsBtn.textContent = 'Troubleshoot';
+    tsBtn.title = 'Fill the prompt with a check/fix request for this answer: what its tools did, and an instruction to read their results back. Select text in the answer first to point at one part. Say what to check, then send.';
+    // keep the user's text selection alive through the click — it becomes "Part in question"
+    tsBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    tsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      troubleshootMessage(wrapper, bubble, turn);
+    });
+    row.appendChild(tsBtn);
+    bubble.appendChild(row);
   }
   wrapper.appendChild(bubble);
   responseArea.appendChild(wrapper);

@@ -11,6 +11,7 @@ import { APPLET_RE, appletBody } from './applets.js';
 export const MAX_APPLETS_CHARS = 40000;   // above this, list the applets and ask for one by index
 export const MAX_TOOL_RESULT_CHARS = 3000; // per stored tool result
 export const MAX_TOOL_RESULTS = 12;        // newest N of the turn
+export const MAX_ONE_TOOL_RESULT_CHARS = 20000; // one result asked for by index (`tool`)
 export const MAX_REASONING_CHARS = 12000;  // tail of the turn's reasoning
 
 const textOf = (msg) => (typeof msg.content === 'object' && msg.content ? msg.content.text : msg.content) || '';
@@ -60,8 +61,9 @@ const NOTHING = {
  * @param what   'applet' | 'tools' | 'reasoning'
  * @param message index into conv.messages; default = the newest assistant message that has `what`
  * @param applet  index of one applet inside that message (what: 'applet')
+ * @param tool    index of one tool result inside that message (what: 'tools') — returned in full
  */
-export function readConversationPart(conv, { what = 'applet', message, applet } = {}) {
+export function readConversationPart(conv, { what = 'applet', message, applet, tool } = {}) {
   if (!conv || !Array.isArray(conv.messages)) return { error: 'Conversation not found.' };
   if (!HAS[what]) return { error: `Unknown "what": ${what}. Use "applet", "tools" or "reasoning".` };
 
@@ -102,13 +104,28 @@ export function readConversationPart(conv, { what = 'applet', message, applet } 
 
   if (what === 'tools') {
     const all = toolUsesOf(msg);
-    const shown = all.slice(-MAX_TOOL_RESULTS).map((t) => {
-      const result = typeof t.result === 'string' ? t.result : JSON.stringify(t.result);
+    const text = (t) => (typeof t.result === 'string' ? t.result : JSON.stringify(t.result));
+    // One result by index, in full: the list view below cuts each to 3,000 chars and shows only
+    // the newest 12, which can be exactly the result the user is asking about.
+    if (tool !== undefined && tool !== null && tool !== '') {
+      const i = Number(tool);
+      const t = Number.isInteger(i) ? all[i] : undefined;
+      if (!t) return { error: `Message ${idx} has ${all.length} tool result(s), numbered 0–${all.length - 1}; there is no tool ${tool}.` };
+      const result = text(t);
+      return result.length > MAX_ONE_TOOL_RESULT_CHARS
+        ? { what, message: idx, count: all.length, tool: i, name: t.name, result: result.slice(0, MAX_ONE_TOOL_RESULT_CHARS), truncatedFrom: result.length }
+        : { what, message: idx, count: all.length, tool: i, name: t.name, result };
+    }
+    const first = Math.max(0, all.length - MAX_TOOL_RESULTS);
+    const shown = all.slice(first).map((t, k) => {
+      const result = text(t);
       return result.length > MAX_TOOL_RESULT_CHARS
-        ? { name: t.name, result: result.slice(0, MAX_TOOL_RESULT_CHARS), truncatedFrom: result.length }
-        : { name: t.name, result };
+        ? { tool: first + k, name: t.name, result: result.slice(0, MAX_TOOL_RESULT_CHARS), truncatedFrom: result.length }
+        : { tool: first + k, name: t.name, result };
     });
-    return { what, message: idx, count: all.length, shown: shown.length, toolUses: shown };
+    const out = { what, message: idx, count: all.length, shown: shown.length, toolUses: shown };
+    if (first > 0 || shown.some((t) => t.truncatedFrom)) out.note = 'Call again with "tool": <index> to read one result in full.';
+    return out;
   }
 
   const reasoning = reasoningOf(msg);

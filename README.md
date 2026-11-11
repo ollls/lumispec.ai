@@ -14,6 +14,7 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 ## 🛠 v1.5.8 — The model can troubleshoot its own applets
 
 - **Troubleshoot button.** Under every applet: it fills the prompt with your problem line, what the browser saw inside the applet (JavaScript errors, failed fetches, rendered height, visible text) and the call that lets the model read back the code it wrote — earlier applets reach it only as `[Applet: html visualization]`, so a "fix" used to be a rewrite from memory. The new always-on `conversation_read` tool returns an earlier answer's applet source, tool results or reasoning.
+- **Troubleshoot on any answer** (since v1.5.8, on `dev`). A red Troubleshoot on every assistant answer does the same for ordinary turns: it names the answer, quotes the text you selected, reports which tools failed, fell back or were truncated, and has the model read back what its tools actually returned before it corrects anything. Works on good runs too ("verify these numbers"). See [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md).
 - **An applet is never clipped.** The frame is sized to the larger of what the applet asks for and what it renders. See [`releases/1.5.8.md`](releases/1.5.8.md).
 
 ## 🔀 v1.5.7 — A running answer survives leaving its conversation
@@ -469,6 +470,7 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
+| [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md) | **Troubleshoot** — revise any earlier answer against its own tool results; the turn report, your own wording, and using `conversation_read` to inspect, comment and correct |
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
 | [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes (latest) — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
 | [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes — concurrent conversations, stopped turns keep their work, applet fit |

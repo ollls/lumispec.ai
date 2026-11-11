@@ -94,6 +94,20 @@ Diffs are always shown — even with Autorun enabled — so you can see exactly 
 ### Charts & Dashboards
 With Applets enabled, ask for visualizations. Example: "Create a pie chart of my monthly expenses" or "Build a weather dashboard for my location"
 
+### Checking & Correcting an Answer (Troubleshoot)
+The AI normally sees its earlier answers as text only — not the searches, pages, quotes or code output they were built from. **Troubleshoot** gives it that evidence back, so it checks an answer instead of guessing again.
+
+- Hover any answer and click the red **Troubleshoot** at its bottom right (it stays visible on answers that failed or were cut off)
+- Select some text in the answer first if you want to point at one part
+- The prompt box fills with a request for that answer. Type what to check or correct over the highlighted placeholder, then send — nothing is sent before that
+- The correction appears as a new answer; the original stays so you can compare
+
+It works on good answers too: "verify the numbers", "you missed two sources", "recompute the total". Charts and dashboards have their own Troubleshoot button underneath, which reports what went wrong inside the chart.
+
+You can also just ask, without the button: "show the tool results of your last answer", "read back what you fetched and list any figure that isn't in it", "read your reasoning — why did you skip that?", "read the chart you made and explain how it calculates the average".
+
+To change the wording the button uses, save a prompt titled **Troubleshoot** in the Prompts menu. Full guide: [TROUBLESHOOT.md](TROUBLESHOOT.md).
+
 ### Templates
 If you've saved a visualization you like, reference it by name: "Show weather [template: Weather]". The AI recreates the same layout with fresh data.
 
@@ -162,3 +176,4 @@ When the AI wants to run a shell command, Python script, or edit source code (wi
 - Use session prompts to set up specialized assistants (weather, coding, trading, support)
 - Set up `SOURCE_DIR` and `SOURCE_TEST` in `.env` to use the AI as a coding assistant on any project
 - Pin important conversations (📌) to keep them across server restarts
+- Doubt an answer? Use **Troubleshoot** on it instead of asking again — the AI re-reads what its tools actually returned
