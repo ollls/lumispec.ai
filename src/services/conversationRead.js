@@ -1,7 +1,7 @@
 // conversation_read: what the model wrote earlier in this conversation but can no longer see.
 //
 // The history rebuild sends each earlier assistant turn as its final text only, with every
-// <applet> block replaced by "[Applet: TYPE visualization]" and no tool rounds (reasoning only
+// <applet> block replaced by a one-line placeholder (appletPlaceholder()) and no tool rounds (reasoning only
 // with Retain on). So when the user says "the chart is blank, fix it", the model rewrites from
 // its memory of the request, not from the code that failed. Everything is still in the stored
 // message; readConversationPart() hands back one slice of it. Pure — the tool passes the conv.
@@ -67,23 +67,40 @@ export function readConversationPart(conv, { what = 'applet', message, applet, t
   if (!conv || !Array.isArray(conv.messages)) return { error: 'Conversation not found.' };
   if (!HAS[what]) return { error: `Unknown "what": ${what}. Use "applet", "tools" or "reasoning".` };
 
-  let idx;
+  const has = (i) => conv.messages[i] && conv.messages[i].role === 'assistant' && HAS[what](conv.messages[i]);
+  const label = what === 'tools' ? 'tool results' : what;
+  let idx = -1;
+  let redirected;   // why a different message than the one asked for is returned
   if (message !== undefined && message !== null && message !== '') {
-    idx = Number(message);
-    const msg = conv.messages[idx];
-    if (!Number.isInteger(idx) || !msg) return { error: `No message ${message} in this conversation (it has ${conv.messages.length}).` };
-    if (msg.role !== 'assistant') return { error: `Message ${idx} is a ${msg.role} message, not one of your answers.` };
-    if (!HAS[what](msg)) return { error: `Message ${idx} has no ${what === 'tools' ? 'tool results' : what}.` };
-  } else {
-    idx = -1;
-    for (let i = conv.messages.length - 1; i >= 0; i--) {
-      const msg = conv.messages[i];
-      if (msg.role === 'assistant' && HAS[what](msg)) { idx = i; break; }
+    const asked = Number(message);
+    if (has(asked)) {
+      idx = asked;
+    } else {
+      // A wrong index is a guess, not a request for an error: without the Troubleshoot button the
+      // model has no message numbers and on 2026-11-10 tried 2 (a user message) and 3 (no applet)
+      // before 5, a round each. Hand back the nearest answer that has it — the one before the
+      // asked position first, since "the chart" is usually the last one drawn — and say so.
+      const start = Number.isInteger(asked) ? Math.min(Math.max(asked, 0), conv.messages.length - 1) : conv.messages.length - 1;
+      for (let i = start; i >= 0 && idx < 0; i--) if (has(i)) idx = i;
+      for (let i = start + 1; i < conv.messages.length && idx < 0; i++) if (has(i)) idx = i;
+      if (idx < 0) return { error: NOTHING[what] };
+      const m = Number.isInteger(asked) ? conv.messages[asked] : undefined;
+      const why = !m ? `There is no message ${message} (the conversation has ${conv.messages.length})`
+        : m.role !== 'assistant' ? `Message ${asked} is a ${m.role} message, not one of your answers`
+        : `Message ${asked} has no ${label}`;
+      const all = conv.messages.map((_, i) => i).filter(has);
+      redirected = `${why}. This is message ${idx}, the nearest answer that has ${label}. Answers with ${label}: ${all.join(', ')}.`;
     }
+  } else {
+    for (let i = conv.messages.length - 1; i >= 0 && idx < 0; i--) if (has(i)) idx = i;
     if (idx < 0) return { error: NOTHING[what] };
   }
-  const msg = conv.messages[idx];
+  const out = readPart(conv.messages[idx], idx, { what, applet, tool });
+  if (redirected && !out.error) { out.askedFor = message; out.redirected = redirected; }
+  return out;
+}
 
+function readPart(msg, idx, { what, applet, tool }) {
   if (what === 'applet') {
     const all = appletsIn(textOf(msg));
     if (applet !== undefined && applet !== null && applet !== '') {

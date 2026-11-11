@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import conversations from '../services/conversations.js';
-import { replaceApplets } from '../services/applets.js';
+import { replaceApplets, appletPlaceholder, echoedAppletPlaceholder, APPLET_PLACEHOLDER_REPAIR } from '../services/applets.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
@@ -237,7 +237,7 @@ router.post('/:id/messages', async (req, res) => {
       if (msg.role === 'assistant') {
         const text = typeof msg.content === 'object' && msg.content.text
           ? msg.content.text : typeof msg.content === 'string' ? msg.content : '';
-        const stripped = replaceApplets(text, (type) => `[Applet: ${type} visualization]`);
+        const stripped = replaceApplets(text, (type) => appletPlaceholder(type));
         // Retain: the stored turn reasoning (all rounds concatenated) rides along as reasoning_content,
         // which the chat template renders as this turn's <think> block. Off: content only, as before.
         const reasoning = retain && typeof msg.content === 'object' ? msg.content.reasoning : undefined;
@@ -334,6 +334,7 @@ router.post('/:id/messages', async (req, res) => {
     // malformed rounds in a row), and each retry is a full LLM call.
     const MAX_REPAIR_ROUNDS = 3;
     let repairRounds = 0;           // consecutive repair rounds; reset by any executed tool round
+    let placeholderRepaired = false; // one retry per turn for an answer that echoes the applet placeholder
     let forcedAnswerPrompt = 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.';
     // Context budget. Every round appends its tool results to llmMessages, so a long tool run
     // walks the prompt into the slot's context wall. llama-server does NOT error there: it
@@ -657,6 +658,16 @@ router.post('/:id/messages', async (req, res) => {
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push(asAssistant(result.content, result.reasoning));
           llmMessages.push({ role: 'user', content: (/<invoke[\s>]/i.test(result.content) ? 'You used <invoke>/<parameter> syntax, which does not execute here. ' : 'Your <tool_call> JSON was malformed or truncated and could not be parsed. ') + 'Please retry the complete tool call with valid JSON:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          continue;
+        }
+        // The answer writes the history placeholder ("[An applet … was displayed here …]") where an
+        // applet should be — copied from its own earlier turns. Ask once for the real block.
+        if (!placeholderRepaired && round < MAX_TOOL_ROUNDS - 1 && echoedAppletPlaceholder(result.content)) {
+          placeholderRepaired = true;
+          console.warn(`[tool-loop] round ${round + 1}: answer echoes the applet history placeholder instead of an applet — asking for the real block`);
+          logRoute('repair', 'applet-placeholder');
+          llmMessages.push(asAssistant(result.content, result.reasoning));
+          llmMessages.push({ role: 'user', content: APPLET_PLACEHOLDER_REPAIR });
           continue;
         }
         logRoute('end');

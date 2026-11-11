@@ -22,3 +22,37 @@ export function appletBody(raw) {
 export function replaceApplets(text, fn) {
   return String(text).replace(APPLET_RE, (_m, type, body) => fn(type, appletBody(body)));
 }
+
+// ── History placeholder ─────────────────────────────────────────────────────────────────────
+// The history rebuild cuts each earlier applet out of the model's context and leaves one line in
+// its place. Until 2026-11-10 that line was "[Applet: html visualization]" — short, bracketed,
+// and shaped like something an answer could contain. In a conversation with three earlier
+// applets the model, asked for a fourth, answered with that exact line and a description of the
+// chart it had not written: nothing rendered and nothing flagged it. The line now says what it
+// is and that it must not be written, and echoedAppletPlaceholder() catches an answer that
+// writes either form anyway so the chat loop can ask once for the real block.
+const PLACEHOLDER_MARK = 'its code is not kept in this history';
+
+/** What an earlier applet looks like in the history sent to the model. Must not contain an
+ *  applet tag itself: echoed into an answer it would parse as an (empty) applet. */
+export function appletPlaceholder(type) {
+  return `[An applet (${type}) was displayed here; ${PLACEHOLDER_MARK}. Never write this line yourself — to show an applet, output the complete applet block with its full code.]`;
+}
+
+const OLD_PLACEHOLDER_LINE_RE = /^[ \t>*_`-]*\[Applet: (?:svg|chartjs|html) visualization\][ \t*_`]*$/im;
+
+/**
+ * True when an answer writes the history placeholder where an applet should be: the old or the
+ * new form, and no real applet block anywhere in the answer. The old form must stand on a line
+ * of its own with a real type, so prose that quotes "[Applet: TYPE visualization]" does not trip it.
+ */
+export function echoedAppletPlaceholder(content) {
+  const text = String(content || '');
+  if (/<applet\s+type=/i.test(text)) return false;
+  return text.includes(PLACEHOLDER_MARK) || OLD_PLACEHOLDER_LINE_RE.test(text);
+}
+
+/** The retry instruction for an answer caught by echoedAppletPlaceholder(). */
+export const APPLET_PLACEHOLDER_REPAIR =
+  'Your answer contains the history placeholder for an applet instead of an applet. That line is only how your EARLIER applets appear in this history — it renders nothing, so the user sees no visualization. '
+  + 'Write your answer again with the complete <applet type="…">…</applet> block (full HTML, nothing omitted). If you need the code of an earlier applet, call conversation_read first.';

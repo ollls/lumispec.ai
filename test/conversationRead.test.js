@@ -30,9 +30,15 @@ test('applet: an unclosed applet at the end of the text is still read', () => {
 });
 
 test('applet: explicit message must be an assistant answer that has one', () => {
-  assert.match(readConversationPart(conv(), { message: 0 }).error, /user message/);
-  assert.match(readConversationPart(conv(), { message: 3 }).error, /no applet/);
-  assert.match(readConversationPart(conv(), { message: 40 }).error, /No message 40/);
+  // a wrong index is a guess: the nearest answer that has one comes back, with the reason
+  const user = readConversationPart(conv(), { message: 0 });
+  assert.equal(user.message, 1);
+  assert.match(user.redirected, /Message 0 is a user message.*This is message 1.*Answers with applet: 1/);
+  const none = readConversationPart(conv(), { message: 3 });
+  assert.deepEqual([none.message, none.askedFor, none.applets.length], [1, 3, 1]);
+  assert.match(none.redirected, /Message 3 has no applet/);
+  assert.match(readConversationPart(conv(), { message: 40 }).redirected, /There is no message 40/);
+  assert.equal(readConversationPart(conv(), { message: 1 }).redirected, undefined);
   assert.equal(readConversationPart(conv(), { message: 1 }).applets.length, 1);
 });
 

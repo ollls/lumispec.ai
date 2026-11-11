@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { APPLET_RE, appletBody, replaceApplets } from '../src/services/applets.js';
+import { APPLET_RE, appletBody, replaceApplets, appletPlaceholder, echoedAppletPlaceholder } from '../src/services/applets.js';
 
 // 2026-10-31: a 19K-char html applet ended in `</applet` — the model emitted end-of-sequence
 // instead of the final `>`. The strict regex matched nothing, so the dashboard rendered as
@@ -41,4 +41,25 @@ test('text without applets is untouched and the regex is reusable', () => {
   assert.equal(sub(plain), plain);
   assert.equal(sub(plain), plain);
   assert.equal([...`<applet type="html">a</applet>`.matchAll(APPLET_RE)].length, 1);
+});
+
+// 2026-11-10: with three earlier applets in its history as "[Applet: html visualization]", the
+// model answered a request for a fourth with that line and a description — no applet, no error.
+test('history placeholder: says what it is and never parses as an applet', () => {
+  const p = appletPlaceholder('chartjs');
+  assert.match(p, /applet \(chartjs\) was displayed here/);
+  assert.match(p, /Never write this line yourself/);
+  assert.equal([...p.matchAll(APPLET_RE)].length, 0);
+  assert.equal(replaceApplets('a <applet type="svg"><svg/></applet> b', appletPlaceholder), `a ${appletPlaceholder('svg')} b`);
+});
+
+test('echoed placeholder: old and new form are caught, real applets and prose about it are not', () => {
+  assert.equal(echoedAppletPlaceholder('[Applet: html visualization]\n\nBoth watches now tick live.'), true);
+  assert.equal(echoedAppletPlaceholder('Here it is:\n\n**[Applet: chartjs visualization]**\n'), true);
+  assert.equal(echoedAppletPlaceholder(`Done.\n\n${appletPlaceholder('svg')}`), true);
+  assert.equal(echoedAppletPlaceholder('<applet type="html"><p>ok</p></applet>'), false);
+  assert.equal(echoedAppletPlaceholder(`${appletPlaceholder('html')}\n<applet type="html"><p>new</p></applet>`), false);
+  assert.equal(echoedAppletPlaceholder('History shows each one as "[Applet: TYPE visualization]".'), false);
+  assert.equal(echoedAppletPlaceholder('The line [Applet: html visualization] is what the model sees.'), false);
+  assert.equal(echoedAppletPlaceholder(''), false);
 });

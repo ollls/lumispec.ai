@@ -24,7 +24,7 @@ only**:
 |---|---|
 | Tool calls and their results (searches, pages, quotes, Python output) | nothing — tool rounds are not replayed |
 | Its reasoning | nothing, unless **Retain** is on |
-| An applet it wrote | `[Applet: html visualization]` |
+| An applet it wrote | a one-line note: `[An applet (html) was displayed here; its code is not kept in this history…]` |
 | A tool that failed, fell back or was truncated | nothing |
 
 So "that number is wrong" used to produce either a confident defence or a rewrite — both from
@@ -112,7 +112,7 @@ when the content is wrong.
 
 **Charts are where this started.** An HTML or SVG chart the model drew is the one piece of its
 own output it could never read again: in later turns the whole applet is replaced by
-`[Applet: html visualization]`, to keep thousands of characters of markup out of the context.
+a one-line note, to keep thousands of characters of markup out of the context.
 Asked to move a legend, fix an axis or explain a blank chart, it had no code to look at and drew
 a new chart from memory of the request — often different data, a different layout, and the same
 bug. With the read-back it gets the exact HTML, SVG or Chart.js source it wrote, plus what the
@@ -130,7 +130,7 @@ The model calls it; you can ask for it in plain words at any time, without the b
 | Argument | Meaning |
 |---|---|
 | `what` | `"applet"` (default) — full applet source · `"tools"` — stored tool results · `"reasoning"` — the turn's thinking |
-| `message` | Which answer, by position in the conversation. Omitted = the newest answer that has what was asked for. |
+| `message` | Which answer, by position in the conversation. Omitted = the newest answer that has what was asked for. A wrong number is not an error: the nearest answer that has it comes back, with a note saying which. |
 | `applet` | Which applet, when an answer holds several. |
 | `tool` | Which tool result, returned in full (see limits). |
 
@@ -173,6 +173,7 @@ For an older answer, use its Troubleshoot button — it is the easy way to name 
   for a full 12-result list). That is the point, but it is not free.
 - **The original answer is never edited.** A correction is a new answer. Pinned conversations and
   Obsidian exports keep both.
+- **An answer that names an applet but shows none is retried.** If the model writes its history note for an applet instead of the applet itself, the app asks it once, in the same turn, for the real block.
 - **Evidence is not truth.** The model checks its answer against what the tools returned. If a page
   it fetched was wrong, the check will agree with the page.
 

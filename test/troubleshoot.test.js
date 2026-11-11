@@ -118,3 +118,20 @@ test('conversation_read tool index: one result in full, list carries indexes and
   assert.equal(readConversationPart(conv, { what: 'tools', tool: 0 }).name, 't0');
   assert.match(readConversationPart(conv, { what: 'tools', tool: 14 }).error, /no tool 14/);
 });
+
+// 2026-11-10: after an applet correction the turn's only tool call was conversation_read, and the
+// button told the model to read "the tool results" back instead of the applet.
+test('conversation_read is not evidence; an applet in the answer gets the applet call', () => {
+  const turn = { text: 'Fixed.\n<applet type="html"><p>x</p></applet>', toolUses: [tu('conversation_read', { what: 'applet', html: 'a'.repeat(5000) })] };
+  const lines = T.turnReport(turn);
+  assert.equal(lines[0], 'no tools ran in that turn besides conversation_read (an earlier answer read back)');
+  assert.ok(!lines.some((l) => /long results|#0/.test(l)));
+  const p = T.buildPrompt({ message: 5, turn });
+  assert.ok(p.text.includes('First call conversation_read {"what":"applet","message":5} to see the exact applet code you wrote.'));
+  assert.ok(!p.text.includes('"what":"tools"'));
+  // real tools next to an applet: both calls, and conversation_read keeps its number
+  const both = { text: turn.text, toolUses: [tu('conversation_read', {}), tu('etrade_account', { error: 'x' })] };
+  assert.ok(T.turnReport(both).includes('#1 etrade_account → error: x'));
+  const q = T.buildPrompt({ message: 5, turn: both }).text;
+  assert.ok(q.includes('{"what":"applet","message":5}') && q.includes('{"what":"tools","message":5}'));
+});

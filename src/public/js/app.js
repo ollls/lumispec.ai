@@ -848,7 +848,7 @@ window.addEventListener('message', (e) => {
 
 // Fill the prompt with a troubleshooting request for one applet: what the browser saw, and the
 // conversation_read call that shows the model the code it wrote (history only carries
-// "[Applet: TYPE visualization]"). Text already typed in the prompt becomes the problem line.
+// a one-line placeholder). Text already typed in the prompt becomes the problem line.
 function troubleshootApplet(iframe) {
   const row = iframe.closest('[data-msg-index]');
   const bubbleFrames = row ? [...row.querySelectorAll('.applet-iframe')] : [iframe];

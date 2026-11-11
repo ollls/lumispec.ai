@@ -42,6 +42,8 @@
     return out;
   }
 
+  function isEvidence(t) { return t && t.name !== 'conversation_read'; }
+
   function parse(result) {
     if (result && typeof result === 'object') return result;
     try { return JSON.parse(result); } catch (e) { return null; }
@@ -86,8 +88,13 @@
       });
     }
 
+    // conversation_read is the read-back itself, not evidence the answer was built on: it keeps
+    // its number (the numbering must match the tool) but is never flagged or offered for reading.
+    var evidence = tools.filter(isEvidence);
     if (tools.length === 0) {
       lines.push('no tools ran in that turn');
+    } else if (evidence.length === 0) {
+      lines.push('no tools ran in that turn besides conversation_read (an earlier answer read back)');
     } else {
       var counts = {};
       var order = [];
@@ -102,6 +109,7 @@
       var flagged = [];
       var long = [];
       tools.forEach(function (t, i) {
+        if (!isEvidence(t)) return;
         var n = notable(t);
         if (n.text) flagged.push('#' + i + ' ' + t.name + ' → ' + n.text);
         else if (n.chars > READ_CAP) long.push('#' + i + ' ' + t.name + ' (' + n.chars + ' chars)');
@@ -155,15 +163,18 @@
       if (idx !== undefined && idx !== null) c.message = idx;
       return 'conversation_read ' + JSON.stringify(c);
     };
-    var evidence;
-    if (tools.length) {
-      evidence = 'First call ' + call('tools') + ' to see what the tools actually returned in that turn' +
+    var evidenceTools = tools.filter(isEvidence);
+    var hasApplet = /<applet\b/i.test(String(turn.text || ''));
+    var steps = [];
+    if (hasApplet) steps.push(call('applet') + ' to see the exact applet code you wrote');
+    if (evidenceTools.length) {
+      steps.push(call('tools') + ' to see what the tools actually returned in that turn' +
         (tools.length > READ_NEWEST ? ' (it lists the newest ' + READ_NEWEST + ' of ' + tools.length + ')' : '') +
-        '; add "tool": <index> to read one result in full.';
-    } else {
-      evidence = 'No tools ran in that turn, so the answer in your history is all there is to check' +
-        (/<applet\b/i.test(String(turn.text || '')) ? ' — except its applet code, which ' + call('applet') + ' returns' : '') + '.';
+        '; add "tool": <index> to read one result in full');
     }
+    var evidence = steps.length
+      ? 'First call ' + steps.join(', and ') + '.'
+      : 'No tools ran in that turn, so the answer in your history is all there is to check.';
     if (hasReasoning) evidence += ' If the question is why you answered that way, ' + call('reasoning') + ' returns your reasoning.';
     parts.push(evidence);
 
