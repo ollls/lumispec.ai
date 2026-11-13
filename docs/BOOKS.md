@@ -1,7 +1,7 @@
 # Books — index a folder, open it, chat against it
 
 A **book** is a folder of `.md` / `.txt` files anywhere on your disk — a manual, a novel split into
-chapters, a set of notes, another project's docs — or a single such file (a converted PDF, say). Lumispec indexes it into its own directory, you
+chapters, a set of notes, another project's docs — a single such file, or a **PDF**. Lumispec indexes it into its own directory, you
 make it the **open book**, and the assistant answers from it first.
 
 ## Quick start
@@ -15,6 +15,24 @@ make it the **open book**, and the assistant answers from it first.
 
 The same from chat: *"add ~/books/sicp as a book called SICP"*, *"open SICP"*, *"what books do I
 have?"*, *"index it"*, *"close the book"*, *"remove the book SICP"*.
+
+## Adding a PDF
+
+Give **Add a book** the path of a `.pdf` (or ask in chat: *"add ~/Documents/book.pdf to my
+books"*). It takes two steps, and the card's status line tells you which one is running:
+
+1. `Step 1 of 2 — converting book.pdf to markdown: page 120/690…` — the text is extracted with
+   headings taken from the PDF's own outline (bookmarks), running headers and page numbers
+   dropped, code set in fenced blocks. Seconds, not minutes.
+2. `Step 2 of 2 — indexing "book": 37/121 sections…` — the usual background indexing. The book
+   opens as soon as step 1 is done, so you can already ask questions.
+
+A toast marks each change of step and the end. The markdown is kept in the app
+(`data/books/<id>/source/`); nothing is written next to your PDF. Adding the same PDF again just
+opens its book.
+
+If step 1 fails the status line says why: a **scanned PDF** has no text layer and needs OCR first;
+a missing PyMuPDF shows the install command for your Python environment.
 
 ## What "open" means
 
@@ -34,6 +52,7 @@ looking elsewhere. Untick it, or close the book, to get the tools back.
 | What | Where |
 |---|---|
 | The book | Your folder or file. Never modified. |
+| A PDF's markdown | `data/books/<id>/source/` |
 | Its index | `data/books/<id>/index/` — one short summary per section |
 | Its record | `data/books/<id>/book.json` — name and folder path |
 | Which book is open | `data/plugins.json` → `books.activeBook` |
@@ -53,9 +72,8 @@ where it left off.
 
 ## Limits
 
-- Markdown and plain text only. For a PDF, ask the assistant: *"convert ~/Books/book.pdf to
-  markdown and add it to my books"* (Book only must be off — the conversion runs Python). It works
-  for PDFs with selectable text; scanned ones need OCR first. EPUB: `pandoc book.epub -o book.md`.
+- Markdown, plain text and PDFs with a text layer. Images, table layout and bold / italic are not
+  carried over from a PDF. EPUB: `pandoc book.epub -o book.md`, then add the `.md`.
 - Search is keyword-based (no embeddings): ask with the book's own words, or let the assistant
   try a few.
 - The open book is one global setting, not per conversation.

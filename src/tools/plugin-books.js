@@ -14,6 +14,9 @@
 import { readPluginConfig, updatePluginConfig } from './index.js';
 import { collectChatCompletion } from '../services/llm.js';
 import * as books from '../services/books.js';
+import { convertPdf } from '../services/pdfToMarkdown.js';
+import { mkdir, rm } from 'fs/promises';
+import { resolve, basename } from 'path';
 
 const GROUP = 'books';
 export const DEFAULTS = {
@@ -51,10 +54,6 @@ async function setActive(id) {
 // ── Background indexing ──────────────────────────────────
 
 const jobs = new Map(); // book id → { running, done, total, failed, lastError, stop }
-
-// One line in the Books prompt so "convert this PDF and add it" works; left out under Book only,
-// where run_python is withheld.
-const PDF_LINE = '- A PDF is not a book yet. When the user asks to add one, convert it with run_python — `import pymupdf4llm; md = pymupdf4llm.to_markdown(pdf_path)` — write the result as a .md file next to the PDF, then call book_library with action "add" and that file\'s path. Scanned PDFs come out nearly empty: say so instead of adding an empty book.';
 
 const INDEX_SYSTEM = `You write compact INDEX entries for sections of a book. Each entry lets a reader decide, without opening the section, whether it answers their question.
 Output EXACTLY this format and nothing else — no preamble, no code fence:
@@ -99,10 +98,10 @@ function jobView(job) {
 }
 
 /** Start (or report) the background index run for one book. Returns the job at once. */
-export async function startIndexing(book, { force = false, summarizeFn = summarizeSection } = {}) {
+export async function startIndexing(book, { force = false, summarizeFn = summarizeSection, root } = {}) {
   const existing = jobs.get(book.id);
   if (existing?.running) return existing;
-  const sections = await books.listSections(book);
+  const sections = await books.listSections(book, root);
   const todo = force ? sections : sections.filter(s => !s.indexed || s.stale);
   const job = { running: todo.length > 0, done: 0, total: todo.length, failed: 0, lastError: null, stop: false };
   jobs.set(book.id, job);
@@ -132,6 +131,59 @@ export async function startIndexing(book, { force = false, summarizeFn = summari
   return job;
 }
 
+// ── PDF books: step 1 convert to markdown, step 2 index ──
+
+// One entry per PDF being (or last) converted. Step 2 is an ordinary index job flagged
+// `fromPdf`, so the card can keep saying "Step 2 of 2".
+const conversions = new Map(); // abs pdf path → { file, title, running, done, total, error, bookId }
+
+function conversionView(c) {
+  if (!c) return null;
+  return {
+    pdf: c.file, step: c.running ? '1 of 2: converting to markdown' : (c.error ? 'failed in step 1' : 'converted'),
+    ...(c.running ? { pages: `${c.done}/${c.total || '?'}` } : {}), ...(c.error ? { error: c.error } : {}),
+  };
+}
+
+/**
+ * Add a PDF as a book. Returns at once: { existed, book } when this PDF is already a book,
+ * else { conversion } — the conversion runs in the background, then the book is registered,
+ * opened and indexed. The options let the tests replace the converter, the indexer's LLM call
+ * and the library root (a test root never touches the saved plugin config).
+ */
+export async function addPdf(path, name, { convert = convertPdf, summarizeFn, root } = {}) {
+  const { pdf, title } = await books.checkPdf(path, name);
+  const existing = await books.findPdfBook(pdf, root);
+  if (existing) return { existed: true, book: existing };
+  const running = conversions.get(pdf);
+  if (running?.running) return { conversion: running };
+
+  const conv = { file: basename(pdf), title, running: true, done: 0, total: 0, error: null, bookId: null };
+  conversions.set(pdf, conv);
+  const tmpDir = resolve(root || books.BOOKS_ROOT, `.convert-${books.slugify(title)}-${Date.now()}`);
+  conv.promise = (async () => {
+    try {
+      await mkdir(tmpDir, { recursive: true });
+      const mdPath = resolve(tmpDir, 'book.md');
+      const r = await convert(pdf, mdPath, { onProgress: ({ done, total }) => { conv.done = done; conv.total = total; } });
+      const book = await books.addConvertedBook({ name: title, pdf, mdPath }, root);
+      conv.bookId = book.id;
+      console.log(`[books] converted ${conv.file}: ${r.pages} pages → ${r.chars} chars, ${r.headings} headings`);
+      if (!root) await setActive(book.id);
+      const job = await startIndexing(book, { summarizeFn, root });
+      job.fromPdf = true;
+      conv.running = false;
+    } catch (err) {
+      conv.running = false;
+      conv.error = err.message;
+      console.warn(`[books] converting ${conv.file} failed: ${err.message}`);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  })();
+  return { conversion: conv };
+}
+
 // ── Prompt (built from the cache; changes only when the open book or its counts change) ──
 
 function statsLine(st) {
@@ -143,8 +195,7 @@ function statsLine(st) {
 export function booksPrompt({ book, stats, bookOnly, libraryCount }) {
   if (!book) {
     return `## Books
-No book is open. The user's library holds ${libraryCount} book${libraryCount === 1 ? '' : 's'}. When the user asks to list, add, open, index or close a book, call "book_library". "book_read" works only while a book is open.
-${PDF_LINE}`;
+No book is open. The user's library holds ${libraryCount} book${libraryCount === 1 ? '' : 's'}. When the user asks to list, add, open, index or close a book, call "book_library". "book_read" works only while a book is open.`;
   }
   const unindexed = stats ? stats.unindexed + stats.stale : 0;
   const outside = bookOnly
@@ -157,7 +208,7 @@ The user has opened the book "${book.name}"${stats ? ` (${stats.sections} sectio
 - Name the section(s) an answer rests on, e.g. (ch03.md#2). Quote exactly and sparingly.
 - Never state that the book says something you did not see in a book_read result of this conversation.
 ${outside}${unindexed ? `\n- ${unindexed} section(s) have no summary yet; search still covers their full text. Indexing: book_library action "index".` : ''}
-- Library management (list, add, open another book, close, index) goes through "book_library".${bookOnly ? '' : `\n${PDF_LINE}`}`;
+- Library management (list, add, open another book, close, index) goes through "book_library".`;
 }
 
 function livePrompt() {
@@ -225,8 +276,8 @@ export default {
         note: 'While a book is open, withhold web search, Python and every other plugin\'s tools, and have the assistant say "not in this book" instead of answering from elsewhere.',
       },
       {
-        key: 'addFolder', label: 'Add a book', type: 'text', placeholder: '/path/to/folder or file.md  (Enter)',
-        note: 'A folder of .md / .txt files, or one such file, anywhere on disk. It is opened and indexed right away; the index is stored under data/books/ and your files are never modified. Have a PDF? Ask the assistant in chat: "convert ~/Books/book.pdf to markdown and add it to my books" (with Book only off).',
+        key: 'addFolder', label: 'Add a book', type: 'text', placeholder: '/path/to/folder, file.md or book.pdf  (Enter)',
+        note: 'A folder of .md / .txt files, one such file, or a PDF, anywhere on disk. It is opened and indexed right away. A PDF takes two steps, both shown on this card: 1 — convert to markdown, 2 — index. Everything is stored under data/books/; your files are never modified.',
       },
     ],
   }),
@@ -235,7 +286,21 @@ export default {
   configChanged: async (current, changed) => {
     const out = {};
     if (typeof changed.addFolder === 'string' && changed.addFolder.trim()) {
-      try {
+      for (const c of conversions.values()) if (c.error) c.dismissed = true;
+      if (books.PDF_RE.test(changed.addFolder.trim())) {
+        try {
+          const r = await addPdf(changed.addFolder);
+          if (r.existed) {
+            current.activeBook = r.book.id;
+            await startIndexing(r.book);
+            out.notice = `"${r.book.name}" was already converted from this PDF — opened.`;
+          } else {
+            out.notice = `Step 1 of 2: converting ${r.conversion.file} to markdown. Step 2 (indexing) starts by itself and the book opens then. Both steps show on this card.`;
+          }
+        } catch (err) {
+          out.warning = err.message;
+        }
+      } else try {
         const { book, existed, files } = await books.addBook({ path: changed.addFolder });
         current.activeBook = book.id;
         const job = await startIndexing(book);
@@ -256,11 +321,19 @@ export default {
   cardStatus: () => {
     const book = activeBook();
     const only = cache.cfg.bookOnly && book ? ' · Book only' : '';
+    const converting = [...conversions.values()].find(c => c.running);
+    if (converting) {
+      const pages = converting.total ? `page ${converting.done}/${converting.total}` : 'starting';
+      return { ok: true, text: `Step 1 of 2 — converting ${converting.file} to markdown: ${pages}…${book ? ` · Open: ${book.name}` : ''}${only}` };
+    }
     const running = [...jobs.entries()].find(([, j]) => j.running);
     if (running) {
       const name = cache.books.find(b => b.id === running[0])?.name || running[0];
-      return { ok: true, text: `Indexing "${name}": ${running[1].done}/${running[1].total} sections…${book ? ` · Open: ${book.name}` : ''}${only}` };
+      const lead = running[1].fromPdf ? `Step 2 of 2 — indexing "${name}"` : `Indexing "${name}"`;
+      return { ok: true, text: `${lead}: ${running[1].done}/${running[1].total} sections…${book ? ` · Open: ${book.name}` : ''}${only}` };
     }
+    const failed1 = [...conversions.values()].reverse().find(c => c.error && !c.dismissed);
+    if (failed1) return { ok: false, text: `Could not convert ${failed1.file}: ${failed1.error}` };
     if (!cache.books.length) return { ok: false, text: 'No books yet — add a folder below' };
     if (!book) return { ok: true, text: `No book open · ${cache.books.length} in the library` };
     const st = cache.stats.get(book.id);
@@ -308,7 +381,7 @@ Actions:
 - "list": every book with section and index counts, and which one is open.
 - "open": make a book the open one. book = name, id or a unique part of the name.
 - "close": no book open.
-- "add": register a folder of .md/.txt files, or one such file, as a book, open it and start indexing. path = folder or file (required), name = title (optional, default: folder or file name). Asks the user to approve.
+- "add": register a folder of .md/.txt files, one such file, or a PDF as a book, open it and start indexing. path = folder or file (required), name = title (optional, default: folder or file name). Asks the user to approve. A PDF runs two background steps — 1: convert to markdown, 2: index — and the book opens after step 1; the call returns at once, so tell the user both steps are under way and that progress shows on the Books card (or via action "status"). Never convert a PDF yourself.
 - "index": index the open book (or "book") in the background; only new or changed sections. force: true rebuilds everything. Returns at once — report the counts, do not wait or poll.
 - "status": index progress of the open book (or "book").
 - "stop": stop a running index.
@@ -346,6 +419,19 @@ Actions:
             if (!path?.trim()) return { error: 'path is required: a folder of .md / .txt files, or one such file.' };
             const denied = await confirm(context, `Add ${path} to Books${name ? ` as "${name}"` : ''}, open it and index it`);
             if (denied) return denied;
+            if (books.PDF_RE.test(path.trim())) {
+              let r;
+              try { r = await addPdf(path, name); } catch (err) { return { error: err.message }; }
+              if (r.existed) {
+                await setActive(r.book.id);
+                const job = await startIndexing(r.book);
+                return { ok: true, book: r.book.name, note: 'This PDF was already converted; its book is now open.', indexing: jobView(job) };
+              }
+              return {
+                ok: true, pdf: r.conversion.file, title: r.conversion.title, step: '1 of 2',
+                message: `Step 1 of 2 has started: converting ${r.conversion.file} to markdown. Step 2 (indexing) starts by itself when step 1 finishes, and the book "${r.conversion.title}" opens then. Tell the user both steps; progress shows on the Books card and via book_library action "status". Do not wait or poll.`,
+              };
+            }
             let added;
             try { added = await books.addBook({ name, path }); } catch (err) { return { error: err.message }; }
             await setActive(added.book.id);
@@ -367,9 +453,18 @@ Actions:
             };
           }
           case 'status': {
+            const active = [...conversions.values()].filter(c => c.running || (c.error && !c.dismissed));
+            if (active.length && !spec) {
+              const open = activeBook();
+              return { conversions: active.map(conversionView), open: open?.name || null, ...(open ? { indexing: jobView(jobs.get(open.id)) } : {}) };
+            }
             const r = pick(spec);
             if (r.error) return r;
-            return { book: r.book.name, open: r.book.id === cache.cfg.activeBook, ...(cache.stats.get(r.book.id) || {}), indexing: jobView(jobs.get(r.book.id)) };
+            const job = jobs.get(r.book.id);
+            return {
+              book: r.book.name, open: r.book.id === cache.cfg.activeBook, ...(cache.stats.get(r.book.id) || {}),
+              ...(job?.running ? { step: job.fromPdf ? '2 of 2: indexing' : 'indexing' } : {}), indexing: jobView(job),
+            };
           }
           case 'stop': {
             const r = pick(spec);

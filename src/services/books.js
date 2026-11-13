@@ -3,9 +3,11 @@
 // A book is a folder of markdown / text files anywhere on disk — or one such file — (never
 // modified) plus its own index directory under data/books/<id>/:
 //
-//   data/books/<id>/book.json            { id, name, sourceDir, sourceFile?, createdAt }
+//   data/books/<id>/book.json            { id, name, sourceDir, sourceFile?, pdf?, createdAt }
 //                                        sourceFile: the book is that one file in sourceDir,
 //                                        nothing else in the directory belongs to it
+//                                        pdf: the book was converted from this PDF; its markdown
+//                                        is data/books/<id>/source/<name>.md (sourceDir points there)
 //   data/books/<id>/index/<file>.idx.md        summary of a file that fits in one section
 //   data/books/<id>/index/<file>.p003.idx.md   summary of section 3 of a longer file
 //
@@ -16,7 +18,7 @@
 // Everything here takes the library root as an argument (default data/books) so the tests run
 // against a temp directory; the LLM call that writes a summary is injected by the plugin.
 
-import { mkdir, writeFile, readFile, stat, readdir, rm, rename } from 'fs/promises';
+import { mkdir, writeFile, readFile, stat, readdir, rm, rename, copyFile } from 'fs/promises';
 import { resolve, relative, dirname, basename, isAbsolute, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -176,6 +178,7 @@ export async function getBook(id, root = BOOKS_ROOT) {
 
 /** Where a book's text lives, for messages: the file for a one-file book, else the folder. */
 export function bookLocation(book) {
+  if (book.pdf) return book.pdf;
   return book.sourceFile ? resolve(book.sourceDir, book.sourceFile) : resolve(book.sourceDir);
 }
 
@@ -192,6 +195,7 @@ export async function addBook({ name, path }, root = BOOKS_ROOT) {
   let sourceFile = null;
   let files;
   if (st.isFile()) {
+    if (/\.epub$/i.test(target)) throw new Error(`${basename(target)} must be converted to markdown first, e.g. pandoc "${target}" -o book.md — then add the .md file.`);
     if (!SOURCE_EXT_RE.test(target)) throw new Error(`Not a book file: ${target} — use a .md, .markdown or .txt file, or a folder of them.`);
     sourceDir = dirname(target);
     sourceFile = basename(target);
@@ -214,6 +218,42 @@ export async function addBook({ name, path }, root = BOOKS_ROOT) {
   await mkdir(resolve(root, id, 'index'), { recursive: true });
   await writeFile(resolve(root, id, 'book.json'), JSON.stringify(book, null, 2) + '\n', 'utf-8');
   return { book, existed: false, files: files.length };
+}
+
+export const PDF_RE = /\.pdf$/i;
+
+/** The book already made from this PDF, if any. */
+export async function findPdfBook(pdfPath, root = BOOKS_ROOT) {
+  const abs = resolve(expandHome(pdfPath));
+  return (await listBooks(root)).find(b => b.pdf && resolve(b.pdf) === abs) || null;
+}
+
+/** Check a PDF path before converting: returns { pdf, title } or throws a message for the user. */
+export async function checkPdf(path, name) {
+  const pdf = resolve(expandHome(path));
+  let st;
+  try { st = await stat(pdf); } catch { throw new Error(`Not found: ${pdf}`); }
+  if (!st.isFile() || !PDF_RE.test(pdf)) throw new Error(`Not a PDF file: ${pdf}`);
+  return { pdf, title: String(name || '').trim() || basename(pdf).replace(PDF_RE, '').replace(/[_]+/g, ' ').trim() };
+}
+
+/**
+ * Register a book whose markdown was converted from a PDF. The markdown at `mdPath` is moved
+ * into the book's own directory (data/books/<id>/source/), so nothing is written next to the PDF.
+ */
+export async function addConvertedBook({ name, pdf, mdPath }, root = BOOKS_ROOT) {
+  const books = await listBooks(root);
+  let id = slugify(name);
+  for (let n = 2; books.some(b => b.id === id); n++) id = `${slugify(name)}-${n}`;
+  const sourceDir = resolve(root, id, 'source');
+  const sourceFile = `${slugify(name)}.md`;
+  await mkdir(sourceDir, { recursive: true });
+  await mkdir(resolve(root, id, 'index'), { recursive: true });
+  try { await rename(mdPath, resolve(sourceDir, sourceFile)); }
+  catch { await copyFile(mdPath, resolve(sourceDir, sourceFile)); await rm(mdPath, { force: true }); }
+  const book = { id, name, sourceDir, sourceFile, pdf: resolve(pdf), createdAt: new Date().toISOString() };
+  await writeFile(resolve(root, id, 'book.json'), JSON.stringify(book, null, 2) + '\n', 'utf-8');
+  return book;
 }
 
 /** Forget a book: deletes its index directory only. The source folder is never touched. */

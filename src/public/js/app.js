@@ -3778,6 +3778,10 @@ async function pollPluginCards() {
     for (const pl of plugins) {
       const prev = before.find(x => x[0] === pl.group);
       if (prev && prev[3] && !prev[3].ok && pl.cardStatus?.ok) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`);
+      // Multi-step background work ("Step 1 of 2 — …"): toast when the step changes or the last one ends
+      const stepOf = (t) => (String(t || '').match(/^Step (\d+) of \d+/) || [])[1] || null;
+      const was = stepOf(prev?.[3]?.text), now = stepOf(pl.cardStatus?.text);
+      if (was !== now && (was || now) && pl.cardStatus?.text) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`, /^Could not/.test(pl.cardStatus.text));
     }
   } catch {}
 }

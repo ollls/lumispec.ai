@@ -8,7 +8,9 @@ import {
   addBook, listBooks, getBook, removeBook, listSourceFiles, listSections, summarize,
   indexSection, searchBook, readSection, bookContents,
 } from '../src/services/books.js';
-import { booksPrompt } from '../src/tools/plugin-books.js';
+import { booksPrompt, addPdf } from '../src/tools/plugin-books.js';
+import { parseProgressLine } from '../src/services/pdfToMarkdown.js';
+import { checkPdf, findPdfBook } from '../src/services/books.js';
 
 // Books: a folder of md/txt files indexed into its own directory, one book open at a time.
 // Everything below runs against temp directories with a fake summarizer — no llama needed.
@@ -93,6 +95,8 @@ test('library: add, list, same folder twice, bad paths, remove keeps the folder'
     assert.equal(await getBook('../etc', root), null);
     await assert.rejects(addBook({ path: join(dir, 'nope') }, root), /Not found/);
     await assert.rejects(addBook({ path: join(src, 'cover.png') }, root), /Not a book file/);
+    await writeFile(join(dir, 'novel.epub'), 'x');
+    await assert.rejects(addBook({ path: join(dir, 'novel.epub') }, root), /novel\.epub must be converted to markdown first/);
     await mkdir(join(dir, 'empty'));
     await assert.rejects(addBook({ path: join(dir, 'empty') }, root), /No \.md/);
 
@@ -232,5 +236,79 @@ test('a single file as a book: only that file, named after it, distinct from the
     assert.equal(folder.existed, false);
     assert.notEqual(folder.book.id, book.id);
     assert.equal((await listBooks(root)).length, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('converter protocol lines parse; anything else is ignored', () => {
+  assert.deepEqual(parseProgressLine('PAGES 690'), { type: 'pages', total: 690 });
+  assert.deepEqual(parseProgressLine('PROGRESS 120 690'), { type: 'progress', done: 120, total: 690 });
+  assert.deepEqual(parseProgressLine('DONE 1191544 445 761'), { type: 'done', chars: 1191544, headings: 445, codeBlocks: 761 });
+  assert.deepEqual(parseProgressLine('ERROR the PDF is password-protected'), { type: 'error', message: 'the PDF is password-protected' });
+  assert.equal(parseProgressLine('MuPDF warning: something'), null);
+});
+
+test('PDF book: step 1 converts into the library, step 2 indexes; the same PDF twice is one book', async () => {
+  const { dir, root } = await fixture();
+  try {
+    const pdf = join(dir, 'Math_for_Programmers.pdf');
+    await writeFile(pdf, '%PDF-1.7');
+    assert.equal((await checkPdf(pdf)).title, 'Math for Programmers');
+    await assert.rejects(checkPdf(join(dir, 'nope.pdf')), /Not found/);
+
+    const seen = [];
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const convert = async (src, out, { onProgress }) => {
+      onProgress({ done: 0, total: 20 });
+      await gate;                                   // hold step 1 open so its state can be read
+      onProgress({ done: 20, total: 20 });
+      await writeFile(out, '# Vectors\n\nA vector is an arrow in the plane.\n\n# Calculus\n\nDerivatives measure change.\n');
+      return { pages: 20, chars: 90, headings: 2, codeBlocks: 0 };
+    };
+    const summarizeFn = async (a) => { seen.push(a.section); return fakeSummary(a); };
+
+    const first = await addPdf(pdf, undefined, { convert, summarizeFn, root });
+    const conv = first.conversion;
+    assert.equal(conv.running, true);
+    assert.equal(conv.file, 'Math_for_Programmers.pdf');
+    assert.deepEqual([conv.done, conv.total], [0, 0]);
+    assert.equal((await addPdf(pdf, undefined, { convert, summarizeFn, root })).conversion, conv, 'a second add joins the running conversion');
+    assert.deepEqual(await listBooks(root), [], 'no book until step 1 is done');
+
+    release();
+    await conv.promise;
+    assert.equal(conv.error, null);
+    assert.equal(conv.running, false);
+    const [book] = await listBooks(root);
+    assert.equal(book.name, 'Math for Programmers');
+    assert.equal(book.pdf, pdf);
+    assert.equal(book.sourceDir, join(root, book.id, 'source'));
+    assert.equal(book.sourceFile, 'math-for-programmers.md');
+    assert.deepEqual((await readdir(root)).filter(n => n.startsWith('.convert-')), [], 'temp folder removed');
+    assert.deepEqual((await readdir(dir)).filter(n => n.endsWith('.md')), [], 'nothing written next to the PDF');
+
+    // step 2 ran over the converted markdown
+    for (let i = 0; i < 50 && seen.length < 1; i++) await new Promise(r => setTimeout(r, 10));
+    assert.deepEqual(seen, ['math-for-programmers.md']);
+    assert.match((await searchBook(book, 'derivatives', root)).matches[0].snippets[0], /Derivatives measure change/);
+
+    const again = await addPdf(pdf, 'Another title', { convert, summarizeFn, root });
+    assert.equal(again.existed, true);
+    assert.equal(again.book.id, book.id);
+    assert.equal((await findPdfBook(pdf, root)).id, book.id);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('PDF book: a failed conversion leaves no book and keeps the reason', async () => {
+  const { dir, root } = await fixture();
+  try {
+    const pdf = join(dir, 'scan.pdf');
+    await writeFile(pdf, '%PDF-1.7');
+    const { conversion } = await addPdf(pdf, undefined, { root, convert: async () => { throw new Error('this PDF has almost no text layer — it looks scanned and needs OCR first'); } });
+    await conversion.promise;
+    assert.equal(conversion.running, false);
+    assert.match(conversion.error, /looks scanned/);
+    assert.deepEqual(await listBooks(root), []);
+    assert.deepEqual(await readdir(root).catch(() => []), []);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
