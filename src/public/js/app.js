@@ -3767,6 +3767,10 @@ async function pollPluginCards() {
     const plugins = await (await fetch('/api/plugins')).json();
     const key = pluginLiveSnapshot(plugins);
     if (key === pluginLiveKey) return;
+    // A live status that ticks (Books: "Indexing 37/212") must not re-render the panel under a
+    // text field the user is typing in; the next poll after they leave it catches up.
+    const focused = document.activeElement;
+    if (focused && pluginConfigList.contains(focused) && focused.tagName === 'INPUT' && focused.type !== 'checkbox') return;
     const before = JSON.parse(pluginLiveKey || '[]');
     pluginLiveKey = key;
     renderPluginConfig(plugins);
@@ -3818,6 +3822,8 @@ function renderPluginFields(p, container) {
       });
       const result = await res.json().catch(() => ({}));
       if (!res.ok && result.error) showPluginToast(result.error, true);
+      else if (result.warning) showPluginToast(`⚠ ${result.warning}`, true);
+      else if (result.notice) showPluginToast(result.notice);
       refreshPluginConfig();
     };
     const current = f.value !== undefined ? f.value : p.config[f.key];
