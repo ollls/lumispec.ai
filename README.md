@@ -22,9 +22,12 @@ A **slot** is one conversation the server can generate for at a time. Each slot 
 | Window per conversation | 112K tokens | 112K tokens each (`--ctx-size` is the total, divided by 4) |
 | Conversations generating at once | 1; the others wait their turn | up to 4, each slower than one alone |
 | VRAM, 27B model at Q6 | 30.0 GB (measured, RTX 5090) | about 44.6 GB (server's projection) |
+| Fits a 32 GB card (RTX 5090) | yes | **no**: out of memory at load |
 
 - **On a 32 GB card, use one slot.** It is the only way to a 112K window there, and switching
   between conversations stays fast: the server keeps the idle one in system RAM and restores it.
+  Four slots fit that card only with small windows: `--parallel 4 --no-kv-unified --ctx-size 64000`
+  gives each slot about 16K tokens, too little for this app's tool runs.
 - **Always pass `--parallel`.** Without it llama-server starts 4 slots that share a single pool of
   `--ctx-size` tokens, so you pay for four slots and get one window between them.
 
