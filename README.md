@@ -120,7 +120,7 @@ Everything else is as in v1.4.0:
 - 🧮 **Precision mode** — auto-enabled for finance work; forces `run_python` for every calculation, blocks `iterrows()`/row loops, and refuses fabricated numbers.
 - 🧩 **Plugin architecture** — 8 hot-loadable plugin groups (core, web, browser, execution, source, travel, finance, wiki) with declarative dependencies and supersession. Toggle them at runtime from the Plugins panel.
 - 🎯 **TaskMaster + Task Pipeline** — decompose any prompt into a bullet list, then run each step with bounded context (32K-char prior-result cap). Indented bullets are sibling-isolated; flat bullets chain. See [`docs/TASKMASTER.md`](docs/TASKMASTER.md).
-- 🎨 **Inline applets** — the assistant emits SVG, Chart.js, and HTML visualizations that render right in the chat bubble (sandboxed iframes).
+- 🎨 **Inline applets** — the assistant emits SVG, Chart.js, and HTML visualizations that render right in the chat bubble, each in its own iframe.
 - 📚 **Two-tier wiki RAG** — your `docs/` are summarized into `wiki/` for fast grep-first retrieval. Karpathy-style self-improving knowledge base.
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
@@ -560,7 +560,7 @@ npm run css:watch    # rebuild Tailwind on change (separate terminal)
 - **Confirmation required** for `run_python`, `run_command`, and any source-tool write (override with the **Autorun** checkbox per session)
 - **Always confirm** for `git push`, `git pull`, `git fetch`, and `source_project` switching — even with Autorun on
 - **Always blocked**: `git reset --hard`, `git push --force`, `git clean -f`, `git rebase`
-- **Sandboxed iframes** for all applets (`sandbox="allow-scripts allow-same-origin"`)
+- **Applets run in iframes, but are not isolated from the app.** They use `sandbox="allow-scripts allow-same-origin"` so they can load data from `/files/`; with both flags an applet's script has the app's own origin and can call the same local API the page can. Treat an applet as code the assistant wrote and you chose to run, the same as `run_python`. Proper isolation is planned (see `TODO.md`)
 - **Fabrication detector** built into the finance plugin — refuses to present option Greeks or strike data without first calling the real E\*TRADE chain endpoint
 
 ---
