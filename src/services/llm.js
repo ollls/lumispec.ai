@@ -128,6 +128,10 @@ export async function streamChatCompletion(messages, { slotId, signal } = {}) {
 
 async function streamLlamaCompletion(messages, { slotId, signal } = {}) {
   const body = { messages, stream: true };
+  // Pins the request to the conversation's slot. Measured 2026-11-14 (llama.cpp build 11719): with
+  // the default 4 slots (one shared KV pool) a named slot re-processed the whole prompt whenever
+  // another conversation had run in between; with --parallel 1 it made no difference, the server's
+  // RAM prompt cache restored the conversation either way. See CLAUDE.md "Slots, window and VRAM".
   if (slotId != null) body.id_slot = slotId;
   // Bound one answer (reasoning + content). Without it a runaway generation ends only at the
   // context wall; with it, finish_reason "length" arrives after LLAMA_MAX_COMPLETION_TOKENS.
