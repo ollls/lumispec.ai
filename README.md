@@ -13,100 +13,27 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ## ⚡ Choosing a slot layout for llama-server
 
-A **slot** is one conversation the server can generate for at a time. More slots mean more
-conversations answering at the same moment; each slot also costs VRAM. There are two layouts worth
-running, and which one fits is decided by your card.
+A **slot** is one conversation the server can generate for at a time. Each slot costs about
+0.6 GB of VRAM just to exist, before any context is stored in it.
 
-| | **One slot** — recommended | **Four slots, a window each** |
+| | One slot (recommended) | Four slots |
 |---|---|---|
-| For | 24–32 GB cards (RTX 5090) | 48 GB and up (RTX PRO 6000, 96 GB) |
-| Flags | `--parallel 1 --ctx-size 114688` | `--parallel 4 --no-kv-unified --ctx-size 458752` |
-| Window per conversation | 112K tokens | 112K tokens each |
-| Conversations generating at once | 1 — the others wait their turn | up to 4 |
-| Returning to an earlier conversation | fast: restored from the server's RAM cache | fast: still in its own slot |
-| VRAM with a 27B model at Q6 | 30.0 GB (measured) | about 44 GB (server's own projection) |
+| Flags | `--parallel 1 --ctx-size 114688` | `--parallel 4 --kv-unified --ctx-size 64000` |
+| Window | 112K tokens | 64K tokens shared by the four slots: one conversation may use all of it, together they cannot exceed it |
+| Conversations generating at once | 1; the others wait their turn | up to 4 while they fit in the 64K together; otherwise one after the other |
+| Returning to an earlier conversation | 4 tokens re-processed | the whole prompt re-processed (3,701 of 3,701 in the same test) |
+| VRAM, 27B model at Q6 | 30.0 GB (measured) | 29.6 GB (measured) |
 
-### One slot (recommended)
+Both fit an RTX 5090 (32 GB). Three extra slots cost about 1.8 GB, which is what the 112K window
+is paid with: on this card it is four slots or a large window, not both.
 
-```bash
-  --ctx-size 114688 \
-  --parallel 1 \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-```
+- **`--kv-unified` matters with `--parallel 4`.** Without it the server splits `--ctx-size` by the
+  slot count: 64000 becomes about 16K per slot, too little for this app's tool runs.
+- **No `--parallel` at all** gives the same four-slot shared layout: the server picks 4 slots and
+  turns the shared pool on by itself.
 
-- **Why we recommend it.** On a 32 GB card it is the only way to a 112K window, and a large
-  window is what this app's long tool runs, big pages, book sections and pipeline steps need. The
-  tool loop winds down at 80% of the window: about 92K tokens here, against 51K at 64K.
-- **What you give up.** Two conversations generating at the same moment. A turn started while
-  another is running waits for the slot.
-- **Switching conversations stays cheap.** The server saves the idle conversation to system RAM
-  (8 GB limit by default) and restores it: going back and forth between two 3.7K-token
-  conversations re-processed 4 tokens per switch.
-- **Measured:** llama-server holds 30.0 GB (30.9 GB on the card with a desktop running). One
-  99,071-token prompt was processed in 52 s.
-
-### Four slots, a window each (large cards)
-
-```bash
-  --ctx-size 458752 \
-  --parallel 4 \
-  --no-kv-unified \
-  --flash-attn on \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-```
-
-- **What it gives.** Four conversations generate in parallel, each with its own 112K window, and
-  each keeps its cache in its own slot. This is the layout the app's "conversations keep running
-  when you switch" feature was built for: every running conversation shows on the Slots panel.
-- **`--ctx-size` is the total.** With `--no-kv-unified` the server divides it by the slot count:
-  458752 ÷ 4 = 114688 per slot. `--parallel 4 --kv-unified-per-slot 114688` (no `--ctx-size`)
-  builds the same thing.
-- **What it costs.** The server projects 44.6 GB for this layout with a 27B model at Q6: four
-  windows of KV cache (17 GB) and four slots' recurrent state (2.4 GB) on top of the weights.
-  Comfortable on 48 GB and up; impossible on 32 GB.
-- **On a 96 GB card you can go to the model's limit.** Four windows of 262,144 tokens (the
-  model's full training context, `--ctx-size 1048576`) come to roughly 67 GB by the sizing rule
-  below. Estimated, not measured — we do not have that card.
-- **Parallel is not faster per conversation.** The slots share one GPU; two generating at once
-  each run slower than one alone.
-
-### Not recommended: the default (no `--parallel`)
-
-Left to itself, llama-server starts 4 slots that **share one pool** of `--ctx-size` tokens
-(`kv_unified = true` in its startup log). Every slot reports the full size because any one slot
-may use all of it, but they do not get that much each, and an idle conversation is cleared from
-the pool whenever another slot starts a task. With this app, which addresses each conversation's
-slot by number, returning to a conversation then re-processed the whole prompt (3,701 of 3,701
-tokens in the same test). It works — `--ctx-size 64000` this way holds 29.6 GB and was this
-project's layout for months — but you pay four slots' VRAM for a window no bigger than one slot's.
-
-### Sizing rule
-
-For a 27B Qwen3.8 at Q6 with `q8_0` KV cache and the MTP draft, VRAM is close to:
-
-**24.7 GB of weights + 0.6 GB per slot + 37 MB per 1,000 tokens of window per slot + 0.5 GB**
-
-| Layout | Flags | VRAM |
-|---|---|---|
-| 1 × 64K | `--parallel 1 --ctx-size 64000` | ~28.2 GB (by the rule) |
-| 1 × 112K | `--parallel 1 --ctx-size 114688` | 30.0 GB (measured) |
-| 4 slots sharing 64K (default) | `--ctx-size 64000` | 29.6 GB (measured) |
-| 4 slots sharing 112K | `--ctx-size 114688` | does not fit 32 GB (out of memory at load) |
-| 4 × 112K | `--parallel 4 --no-kv-unified --ctx-size 458752` | ~44.6 GB (server's projection) |
-| 4 × 262K | `--parallel 4 --no-kv-unified --ctx-size 1048576` | ~67 GB (by the rule) |
-
-Lower `--ctx-size` if the server fails to allocate; a different model or quant changes the first
-term. **The app needs no change for any of these**: the tool loops read the live slot's window, so
-the budget follows the flags. If you set `LLAMA_MAX_CONTEXT` in `.env`, keep it at or below the
-per-slot window.
-
-Measured 2026-11-14 on an RTX 5090 with the Defiance `Q6_K_P` weights (25.9 GB file) on llama.cpp
-build 11719 (`5aeac37a3`). Apply the flags to either launch script in
-[Choosing & running your model](#-choosing--running-your-model). Change one flag at a time and
-watch `journalctl -k | grep Xid` — see the stability note in that section.
+The app needs no change for either layout: it reads the window from the live slot. The complete
+launch scripts are under [Choosing & running your model](#-choosing--running-your-model).
 
 ---
 
@@ -217,7 +144,7 @@ cp .env.example .env           # then edit — see "Configuration" below
 # 3. Start your LLM server (separate terminal — see "Choosing & running your model")
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.8-27B-GGUF:Q6_K_XL \
-  --n-gpu-layers 99 --ctx-size 64000 --flash-attn on --jinja \
+  --n-gpu-layers 99 --ctx-size 114688 --parallel 1 --flash-attn on --jinja \
   --cache-type-k q8_0 --cache-type-v q8_0 \
   --spec-default --spec-type draft-mtp \
   --port 8080
@@ -239,18 +166,19 @@ Any llama.cpp-compatible GGUF works. The three launch scripts below are the ones
 ### ✅ Qwen3.8-27B (recommended — this is what we run)
 
 Qwen is the recommended backend — it's the most reliable with this app's prompt-based tool-calling
-protocol and reasoning (`reasoning_content`) handling. This exact configuration is the one proven
-stable over long multi-step tool flows on an RTX 5090; see the note below before adding flags to it.
+protocol and reasoning (`reasoning_content`) handling. The script runs the recommended layout: one
+slot with a 112K window.
 
 ```bash
 #!/bin/bash
-# Qwen3.8-27B on an RTX 5090
+# Qwen3.8-27B on an RTX 5090 — one slot, 112K window
 export CUDA_VISIBLE_DEVICES=0            # pin the RTX 5090
 
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.8-27B-GGUF:Q6_K_XL \
   --n-gpu-layers 99 \
-  --ctx-size 64000 \
+  --ctx-size 114688 \
+  --parallel 1 \
   --flash-attn on \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
@@ -268,28 +196,29 @@ Why these flags matter for this app:
 
 | Flag | Why |
 |---|---|
-| `--ctx-size 64000` | The whole context budget derives from this. With the default slot count it is one pool **shared** by the slots: any one slot can use all of it (one slot took a 56,001-token prompt untruncated), but the slots do not get 64K each. The tool loops read the live slot's `n_ctx` and start winding down at 80% (~51K tokens), trimming old tool results. Raise it and the budget follows — no code change, no `.env` edit. |
-| `--cache-type-k q8_0` / `--cache-type-v q8_0` | Quantized KV cache — what makes a 64K window (2.1 GiB), or 112K on one slot (3.7 GiB), fit alongside a Q6 27B. Requires `--flash-attn on`, so keep that explicit rather than relying on `auto`. |
+| `--ctx-size 114688` | The whole context budget derives from this. The tool loops read the live slot's `n_ctx` and start winding down at 80% (~92K tokens), trimming old tool results. Change it and the budget follows — no code change, no `.env` edit. |
+| `--parallel 1` | One slot. Without it llama-server starts 4 slots at about 600 MiB each, and a 112K window then fails to load on a 32 GB card (`CUDA error: out of memory`). |
+| `--cache-type-k q8_0` / `--cache-type-v q8_0` | Quantized KV cache — what makes a 112K window (3.7 GiB) fit alongside a Q6 27B. Requires `--flash-attn on`, so keep that explicit rather than relying on `auto`. |
 | `--spec-default` + `--spec-type draft-mtp` | Multi-token-prediction speculative decoding. Long tool loops are the dominant workload here, and the speedup is most visible on them. |
 | `--jinja` | Applies the model's own embedded chat template. Non-negotiable — see the warning below. |
 
 Sampling values are Qwen's own recommendations (`temp 1.0`, `top-p 0.95`, `top-k 20`, `min-p 0.0`).
 
-> ⚠️ **On adding flags to this.** A tuned variant of the above — `UD-Q6_K_XL`, `--ctx-size 65536`,
-> `-np 1`, `--spec-draft-n-max 3`, `--cache-reuse 256` — produced an `NVRM: Xid 8` GPU channel hang
-> under a tool-heavy session (2026-08-29 10:31, RC watchdog, llama-server killed, no reboot needed).
-> One fault is not a controlled experiment, and `CRASH.md` records an earlier `Xid 79` on a
-> different config, so the card's stability under sustained inference load is its own open question.
-> The point stands regardless: **the block above is the one with hours of long multi-step flows
-> behind it.** Change one flag at a time and watch `journalctl -k | grep Xid`.
+**VRAM.** The 30.0 GB figure at the top of this README was measured with the Defiance weights
+(25.9 GB file, no vision projector). This script has not been measured at 112K: its weights are
+25.3 GB, and `-hf` also loads the repo's 0.9 GB vision projector, so expect about 0.3 GB more. If
+the server fails to allocate, lower `--ctx-size`: `--ctx-size 64000` with `--parallel 1` is
+estimated at about 28 GB.
 
-**Note on slot count.** This runs llama-server's default slot count (auto, 4 here). The four slots
-share **one** KV pool of `--ctx-size` tokens (2,125 MiB at 64,000 with `q8_0`); what each slot adds
-is about 600 MiB of recurrent state, so this layout holds 29.6 GB (30.5 GB on the card with the
-desktop). Dropping to `-np 1` frees about 1.8 GiB, which is what pays for the 112K window in the
-recommended one-slot layout at the top of this README; a card with 48 GB or more can instead give
-four slots a window each (`--parallel 4 --no-kv-unified`). (An earlier version of this note said each slot
-carried its own 64K window; measurement on 2026-11-14 showed the pool is shared.)
+> ⚠️ **Stability history.** The long multi-step tool flows behind the stock Qwen weights were run
+> with `--ctx-size 64000` and no `--parallel` (4 slots sharing the window). The one-slot 112K
+> layout has been the daily configuration since 2026-11-14, with the Defiance weights below. A
+> tuned variant — `UD-Q6_K_XL`, `--ctx-size 65536`, `-np 1`, `--spec-draft-n-max 3`,
+> `--cache-reuse 256` — produced an `NVRM: Xid 8` GPU channel hang under a tool-heavy session
+> (2026-08-29 10:31, RC watchdog, llama-server killed, no reboot needed). One fault is not a
+> controlled experiment, and `CRASH.md` records an earlier `Xid 79` on a different config, so the
+> card's stability under sustained inference load is its own open question. Change one flag at a
+> time and watch `journalctl -k | grep Xid`.
 
 ### 🔸 Qwen3.8-27B Defiance (uncensored variant, 40 reasoning modes)
 
@@ -306,7 +235,8 @@ one-word switch. Apache-2.0. The `Q6_K_P` quant is 25.9 GB.
 
 ```bash
 #!/bin/bash
-# run-defiance-server-5090.sh — Qwen3.8-27B Defiance Uncensored (MTP)
+# run-defiance-server-5090-p1.sh — Qwen3.8-27B Defiance Uncensored (MTP)
+# Single slot, ~112K context (--parallel 1, --ctx-size 114688) — max that fits on 32GB with Q6_K_P.
 # Uses the MTP head fused into the main GGUF (blk.64.nextn.*).
 # Do NOT add -hfd ...:FastMTP-32K: that draft has a 32K-trimmed vocab (FR-Spec)
 # and needs d2t remapping that mainline draft-mtp does not support.
@@ -322,7 +252,8 @@ fi
   --chat-template-file "$TEMPLATE" \
   -hf ttindall/Qwen3.8-27B-Defiance-Uncensored-MTP-GGUF:Q6_K_P \
   --n-gpu-layers 99 \
-  --ctx-size 64000 \
+  --ctx-size 114688 \
+  --parallel 1 \
   --flash-attn on \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
@@ -342,7 +273,8 @@ fi
 
 Run it from the directory that contains `llama.cpp/` — every path is relative. The first run
 downloads the template with the `hf` CLI (`pip install huggingface_hub`) and pulls the 25.9 GB GGUF
-into the Hugging Face cache.
+into the Hugging Face cache. This is the script run daily on the RTX 5090: llama-server holds
+30.0 GB (30.9 GB on the card with a desktop running).
 
 What differs from the stock Qwen script, and why:
 
@@ -386,13 +318,13 @@ How it fits this app:
 - **Retain.** The template renders `reasoning_content` for every assistant message, same as stock
   Qwen3.8, so the Retain toggle works unchanged.
 
-> ⚠️ **Not the proven-stable config.** This script has far fewer long tool-flow hours behind it than
-> the stock Qwen block above. It also includes `--spec-draft-n-max 3`, one of the flags present in
+> ⚠️ **Fewer hours behind it.** This script has fewer long tool-flow hours behind it than the stock
+> Qwen weights have. It also includes `--spec-draft-n-max 3`, one of the flags present in
 > the variant that produced the `Xid 8` hang described in that section. The model author tested only
 > `IQ4_XS` on a 24 GB card and has not run `Q6_K_P` at all. The same rule applies: change one flag at
-> a time and watch `journalctl -k | grep Xid`. If 25.9 GB of weights plus the 64K KV cache and four
-> slots' recurrent state (about 600 MiB each) does not fit your card, add `-np 1` or lower `--ctx-size`; the app's context budget follows
-> the live slot automatically.
+> a time and watch `journalctl -k | grep Xid`. If 25.9 GB of weights plus the 112K KV cache
+> (3.7 GiB) does not fit your card, lower `--ctx-size`; the app's context budget follows the live
+> slot automatically.
 
 ### 🔹 Gemma (alternative)
 
