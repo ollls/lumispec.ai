@@ -16,20 +16,21 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 A **slot** is one conversation the server can generate for at a time. Each slot costs about
 0.6 GB of VRAM just to exist, before any context is stored in it.
 
-| | `--parallel 1` (recommended) | `--parallel 4` |
+| | One slot (recommended) | Four slots |
 |---|---|---|
-| Flags | `--parallel 1 --ctx-size 114688` | `--parallel 4 --no-kv-unified --ctx-size 458752` |
-| Window per conversation | 112K tokens | 112K tokens each (`--ctx-size` is the total, divided by 4) |
-| Conversations generating at once | 1; the others wait their turn | up to 4, each slower than one alone |
-| VRAM, 27B model at Q6 | 30.0 GB (measured, RTX 5090) | about 44.6 GB (server's projection) |
-| Fits a 32 GB card (RTX 5090) | yes | **no**: out of memory at load |
+| Flags | `--parallel 1 --ctx-size 114688` | `--parallel 4 --kv-unified --ctx-size 64000` |
+| Window | 112K tokens | 64K tokens shared by the four slots: one conversation may use all of it, together they cannot exceed it |
+| Conversations generating at once | 1; the others wait their turn | up to 4 while they fit in the 64K together; otherwise one after the other |
+| Returning to an earlier conversation | 4 tokens re-processed | the whole prompt re-processed (3,701 of 3,701 in the same test) |
+| VRAM, 27B model at Q6 | 30.0 GB (measured) | 29.6 GB (measured) |
 
-- **On a 32 GB card, use one slot.** It is the only way to a 112K window there, and switching
-  between conversations stays fast: the server keeps the idle one in system RAM and restores it.
-  Four slots fit that card only with small windows: `--parallel 4 --no-kv-unified --ctx-size 64000`
-  gives each slot about 16K tokens, too little for this app's tool runs.
-- **Always pass `--parallel`.** Without it llama-server starts 4 slots that share a single pool of
-  `--ctx-size` tokens, so you pay for four slots and get one window between them.
+Both fit an RTX 5090 (32 GB). Three extra slots cost about 1.8 GB, which is what the 112K window
+is paid with: on this card it is four slots or a large window, not both.
+
+- **`--kv-unified` matters with `--parallel 4`.** Without it the server splits `--ctx-size` by the
+  slot count: 64000 becomes about 16K per slot, too little for this app's tool runs.
+- **No `--parallel` at all** gives the same four-slot shared layout: the server picks 4 slots and
+  turns the shared pool on by itself.
 
 The app needs no change for either layout: it reads the window from the live slot. The complete
 launch scripts are under [Choosing & running your model](#-choosing--running-your-model).
