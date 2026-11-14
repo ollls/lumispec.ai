@@ -122,6 +122,18 @@ Search for hotels, check rates, read reviews, and book rooms. Example: "Find hot
 ### E*TRADE
 If connected, check your portfolio, get stock quotes, view option chains, and analyze positions. Connect via the E*TRADE status indicator in the top bar.
 
+### Reading a Book
+Turn on **Books** in the Plugins panel, type the path of a book into **Add a book** and press Enter. A book can be a folder of text or Markdown files, a single file, or a PDF. The AI reads through it in the background and writes a short summary of each section; the card shows how far it is. You can start asking questions right away.
+
+While a book is open, the AI looks in the book first, answers from it, and tells you which section the answer comes from. If the book does not cover your question, it says so before using anything else. Tick **Book only** if you want answers from the book and nothing else.
+
+- One book is open at a time. Pick another in **Open book** on the card, or just ask: "open SICP", "close the book", "what books do I have?"
+- A PDF is added in two steps, and the card tells you which one is running: first it is converted to text, then indexed. A scanned PDF (pictures of pages) cannot be read until it has been through OCR
+- Your files are never changed. Removing a book ("remove the book SICP") deletes only the AI's summaries
+- The AI finds passages by their words, so ask with the terms the book uses
+
+Full guide: [BOOKS.md](BOOKS.md).
+
 ### Obsidian Notes
 Turn on **Obsidian Export** in the Plugins panel and a small vault icon appears on each chat in the sidebar. Click it to save that chat as a note in your Obsidian vault, under a `Lumispec` folder sorted by session colour. The note keeps the whole exchange, with tool calls and (optionally) the AI's reasoning folded away, charts saved as files next to it, and properties you can search in Obsidian.
 
