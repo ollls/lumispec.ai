@@ -37,17 +37,51 @@ export CUDA_VISIBLE_DEVICES=0  # Ensure RTX 5090 is used
   --port 8080
 ```
 
+**Recommended layout on the RTX 5090 since 2026-11-14: one slot, 112K window** — the same script
+with `--ctx-size 114688 --parallel 1` (run daily as `~/run-defiance-server-5090-p1.sh` with the
+Defiance `Q6_K_P` weights). It trades parallel generation for context; see **Slots, window and
+VRAM** below for the measurements.
+
 Notes that matter for the code:
-- **`--ctx-size 64000`** is the source of truth for the context budget. It is the **per-slot**
-  window in current llama.cpp builds, not a total split across slots — verified by feeding one slot
-  a 56,001-token prompt untruncated while 4 slots were live. Both tool loops read the live slot's
-  `n_ctx` via `slots.getSlotContextSize()` and wind down at 80% (~51K tokens) — see **Context
-  Budget** below. `LLAMA_MAX_CONTEXT` in `.env` is only the fallback when slots are unreachable, and
-  must not exceed the real window or the wind-down never fires.
-- **`--cache-type-k/v q8_0`** (quantized KV cache) is what fits a 64K per-slot window next to a Q6
-  27B. It requires `--flash-attn on`, so keep that explicit rather than relying on `auto`.
-- **Slot count** is llama-server's default (4). Each slot carries its own full `--ctx-size`, so more
-  slots cost VRAM (≈30.8 GB of 32 GB at 64K × 4) without changing any conversation's usable window.
+- **`--ctx-size`** is the source of truth for the context budget. Both tool loops read the live
+  slot's `n_ctx` via `slots.getSlotContextSize()` and wind down at 80% (~51K tokens at 64000, ~92K
+  at 114688) — see **Context Budget** below. `LLAMA_MAX_CONTEXT` in `.env` is only the fallback when
+  slots are unreachable, and must not exceed the real window or the wind-down never fires.
+- **`--cache-type-k/v q8_0`** (quantized KV cache) is what fits these windows next to a Q6 27B. It
+  requires `--flash-attn on`, so keep that explicit rather than relying on `auto`.
+- **Slots, window and VRAM** (measured 2026-11-14, llama.cpp build 11719 `5aeac37a3`, Defiance
+  `Q6_K_P` 25.9 GB, CPU-only runs for buffer sizes and GPU runs for VRAM):
+  - With the default slot count (auto = 4) the slots **share one KV pool** of `--ctx-size` tokens
+    (`kv_unified = true` in the startup log). Every slot reports `n_ctx` = the full size because any
+    one slot may use all of it — which is why the old test (one slot took a 56,001-token prompt with
+    4 slots live) passed. It never meant 4 × 64K. `--parallel 4 --no-kv-unified` splits instead
+    (16,128 per slot at 64000).
+  - What each slot does cost is **~600 MiB of recurrent state** (`llama_memory_recurrent`, 598.5 MiB
+    per sequence), independent of the window.
+  - KV cache at `q8_0`: 2,125 MiB for 64,000 tokens, 3,808 MiB for 114,688 (plus the MTP draft's
+    own KV, 250 / 448 MiB).
+  - So: 4 slots × 64K = 29.6 GB for llama-server (30.5 GB on the card with the desktop); 1 slot ×
+    112K = 30.0 GB (30.9 GB). Three fewer slots free ~1.8 GiB, the extra 50K of window costs
+    ~1.9 GiB. `--ctx-size 114688` with 4 slots dies at load with `CUDA error: out of memory`.
+  - **Cache reuse when conversations alternate** (two 3.7K-token conversations, prompt tokens
+    re-processed on each return): 1 slot → 4 of 3,701, with or without `id_slot` (llama-server saves
+    the idle conversation to its RAM prompt cache, 8 GB limit by default, and restores it); 4 slots
+    with `id_slot` named, **as this app does** (`services/llm.js`) → 3,701 of 3,701 every time (an
+    idle slot is cleared from the shared pool when another slot starts a task, and naming the slot
+    appears to prevent the restore); 4 slots, server-picked slot → 4 of 3,701. Not tested with
+    conversations big enough to exceed the prompt-cache limit. On the 4-slot layout the app's slot
+    pinning is therefore worth revisiting; on one slot it makes no difference.
+  - **Four slots with a window each** (for cards with 48 GB or more): `--parallel 4
+    --no-kv-unified --ctx-size <4×N>` — the server divides `--ctx-size` by the slot count — or
+    `--parallel 4 --kv-unified-per-slot N` with no `--ctx-size`. Each slot then has its own KV and
+    the same alternating test with `id_slot` named re-processed 4 of 2,821 tokens: this is the
+    layout the app's slot pinning fits. 4 × 114,688 is projected by the server at 44.6 GB with these
+    weights (KV 15,232 MiB + draft 1,792 MiB + recurrent 2,394 MiB). Sizing rule: 24.7 GB weights +
+    0.6 GB per slot + 37 MB per 1,000 tokens of window per slot + 0.5 GB. README, "Choosing a slot
+    layout", presents one slot (recommended) and this layout, and marks the default shared pool as
+    not recommended.
+  - One slot, one 99,071-token prompt: processed in 52 s. Four slots, two 48K prompts at once
+    (97K into a 64K pool): both completed, one after the other.
 - **`--spec-default` / `--spec-type draft-mtp`** — MTP speculative decoding, aimed at the tool-loop
   workload that dominates here.
 - **Stability:** a tuned variant (`UD-Q6_K_XL`, `--ctx-size 65536`, `-np 1`, `--spec-draft-n-max 3`,
@@ -580,7 +614,9 @@ the true prompt. Nothing else changes — retained reasoning just makes the wall
 **KV cache**: with Retain on, each re-sent assistant turn matches what the model generated, so the
 slot's cached prefix extends through the whole history and a new turn processes only the new
 question (~80 tokens measured vs ~780–1,100 when the toggle flips and the history is re-read). This
-depends on the system prompt being stable — see the date/time bullet under **Key Architecture Details**.
+depends on the system prompt being stable — see the date/time bullet under **Key Architecture Details**
+— and on the slot still holding that conversation: when conversations alternate, reuse depends on the
+slot layout (see **Slots, window and VRAM** under LLM Server Configuration).
 
 **Claude backend**: `reasoning_content` is stripped in `mergeConsecutiveRoles()` before the request;
 the Anthropic API rejects unknown message fields.

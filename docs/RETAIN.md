@@ -108,6 +108,13 @@ re-derived from the stored `sentAt` on replay) and the system prompt is byte-sta
 the fix: 6,393 on a cold slot, then 81 / 80 per turn with Retain on; 779 when toggled off (history
 re-read without thinking), 90 steady; 1,097 when toggled back on.
 
+**These figures are for one conversation continuing on its slot.** Measured 2026-11-14 (llama.cpp
+build 11719) with two 3.7K-token conversations taking turns: on a one-slot server
+(`--parallel 1`) each return re-processed 4 tokens — llama-server saves the idle conversation to
+its RAM prompt cache and restores it; on the default 4-slot server with `id_slot` named in the
+request, as this app does, each return re-processed all 3,701 — the slots share one KV pool and an
+idle slot is cleared when another starts a task. See CLAUDE.md, "Slots, window and VRAM".
+
 ## Out of scope
 
 - Any automatic compression or dropping of old reasoning.
