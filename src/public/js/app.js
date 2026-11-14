@@ -280,6 +280,7 @@ const pluginConfigClose = document.getElementById('plugin-config-close');
 function addRefineButton(details, getPrompt, getReasoning) {
   const btn = document.createElement('button');
   btn.textContent = 'Refine';
+  btn.title = 'Improve your prompt, not the answer: the AI reads its thought process for this turn, finds where your request left it guessing or struggling, and puts a sharper version of your prompt in the input box for you to review. Nothing is sent. Shows "Already optimal" when there is nothing to improve.';
   Object.assign(btn.style, {
     fontSize: '10px', padding: '1px 8px', borderRadius: '4px', marginLeft: '8px',
     background: '#3f3f46', color: '#a1a1aa', border: 'none', cursor: 'pointer',
@@ -848,7 +849,7 @@ window.addEventListener('message', (e) => {
 
 // Fill the prompt with a troubleshooting request for one applet: what the browser saw, and the
 // conversation_read call that shows the model the code it wrote (history only carries
-// "[Applet: TYPE visualization]"). Text already typed in the prompt becomes the problem line.
+// a one-line placeholder). Text already typed in the prompt becomes the problem line.
 function troubleshootApplet(iframe) {
   const row = iframe.closest('[data-msg-index]');
   const bubbleFrames = row ? [...row.querySelectorAll('.applet-iframe')] : [iframe];
@@ -885,6 +886,32 @@ function troubleshootApplet(iframe) {
   input.focus();
   if (problem) input.setSelectionRange(lead.length + problem.length, lead.length + problem.length);
   else input.setSelectionRange(lead.length, lead.length + PLACEHOLDER.length);
+}
+
+// Troubleshoot button on an assistant bubble: same flow as troubleshootApplet() for any answer,
+// good runs included. The prompt text is built by troubleshoot.js (window.Troubleshoot): the
+// message index, the text selected in the bubble, a turn report and the conversation_read call.
+// A saved prompt titled "Troubleshoot" (Prompts menu) replaces the closing guidance paragraph,
+// so the wording can be tuned without touching code. Nothing is sent until the user submits.
+async function troubleshootMessage(wrapper, bubble, turn) {
+  const sel = window.getSelection();
+  const selection = sel && sel.rangeCount && bubble.contains(sel.anchorNode) && bubble.contains(sel.focusNode)
+    ? sel.toString().trim() : '';
+  const problem = input.value.trim();
+  let guidance = '';
+  try {
+    const prompts = await (await fetch('/api/prompts')).json();
+    const custom = prompts.find((p) => (p.title || '').trim().toLowerCase() === 'troubleshoot');
+    if (custom) guidance = custom.text || '';
+  } catch {}
+  if (state.listMode) toggleListMode(false); // the report's "- " lines are not a task list
+  const built = window.Troubleshoot.buildPrompt({
+    message: Number(wrapper.dataset.msgIndex), problem, selection, turn, guidance,
+  });
+  input.value = built.text;
+  autosizeInput();
+  input.focus();
+  input.setSelectionRange(built.selectStart, built.selectEnd);
 }
 
 function createAppletIframe(applet) {
@@ -1314,7 +1341,7 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'group max-w-[95%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Edit + regenerate buttons on user bubbles
@@ -1558,6 +1585,25 @@ function appendMessage(role, text, images, meta = {}) {
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
+  }
+  // Troubleshoot (any answer): shown on hover, always shown on a failed turn
+  if (role === 'assistant' && meta.msgIndex !== undefined && (text || (meta.taskRun && meta.taskRun.length))) {
+    const turn = { text: text || '', toolUses: meta.toolUses, taskRun: meta.taskRun, reasoning: meta.reasoning };
+    const row = document.createElement('div');
+    row.className = 'flex justify-end mt-1';
+    const tsBtn = document.createElement('button');
+    tsBtn.className = (window.Troubleshoot.turnFailed(turn) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')
+      + ' text-red-400 transition-opacity text-xs leading-none p-1';
+    tsBtn.textContent = 'Troubleshoot';
+    tsBtn.title = 'Fill the prompt with a check/fix request for this answer: what its tools did, and an instruction to read their results back. Select text in the answer first to point at one part. Say what to check, then send.';
+    // keep the user's text selection alive through the click — it becomes "Part in question"
+    tsBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    tsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      troubleshootMessage(wrapper, bubble, turn);
+    });
+    row.appendChild(tsBtn);
+    bubble.appendChild(row);
   }
   wrapper.appendChild(bubble);
   responseArea.appendChild(wrapper);
@@ -3721,6 +3767,10 @@ async function pollPluginCards() {
     const plugins = await (await fetch('/api/plugins')).json();
     const key = pluginLiveSnapshot(plugins);
     if (key === pluginLiveKey) return;
+    // A live status that ticks (Books: "Indexing 37/212") must not re-render the panel under a
+    // text field the user is typing in; the next poll after they leave it catches up.
+    const focused = document.activeElement;
+    if (focused && pluginConfigList.contains(focused) && focused.tagName === 'INPUT' && focused.type !== 'checkbox') return;
     const before = JSON.parse(pluginLiveKey || '[]');
     pluginLiveKey = key;
     renderPluginConfig(plugins);
@@ -3728,6 +3778,10 @@ async function pollPluginCards() {
     for (const pl of plugins) {
       const prev = before.find(x => x[0] === pl.group);
       if (prev && prev[3] && !prev[3].ok && pl.cardStatus?.ok) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`);
+      // Multi-step background work ("Step 1 of 2 — …"): toast when the step changes or the last one ends
+      const stepOf = (t) => (String(t || '').match(/^Step (\d+) of \d+/) || [])[1] || null;
+      const was = stepOf(prev?.[3]?.text), now = stepOf(pl.cardStatus?.text);
+      if (was !== now && (was || now) && pl.cardStatus?.text) showPluginToast(`${pl.label}: ${pl.cardStatus.text}`, /^Could not/.test(pl.cardStatus.text));
     }
   } catch {}
 }
@@ -3772,6 +3826,8 @@ function renderPluginFields(p, container) {
       });
       const result = await res.json().catch(() => ({}));
       if (!res.ok && result.error) showPluginToast(result.error, true);
+      else if (result.warning) showPluginToast(`⚠ ${result.warning}`, true);
+      else if (result.notice) showPluginToast(result.notice);
       refreshPluginConfig();
     };
     const current = f.value !== undefined ? f.value : p.config[f.key];

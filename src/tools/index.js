@@ -333,6 +333,9 @@ function registerPlugin(plugin) {
     routing: plugin.routing || [],
     prompt: plugin.prompt || null,
     status: plugin.status || null,
+    // Optional sync predicate: while true, only this group's tools (plus `core`) are offered
+    // and executable — Books' "Book only" switch. See exclusiveGroup().
+    exclusive: typeof plugin.exclusive === 'function' ? plugin.exclusive : null,
   };
   console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
 }
@@ -578,6 +581,15 @@ export async function updatePluginConfig(groupName, updates) {
     }
   }
 
+  // Optional plugin hook: sees the merged entry before it is saved and may edit it (Books turns
+  // the "Add a book" text field into a library entry and clears the field). May return
+  // { notice } / { warning } for a toast.
+  let hookResult = null;
+  if (updates.config && typeof cached.plugin.configChanged === 'function') {
+    try { hookResult = await cached.plugin.configChanged(current, updates.config); }
+    catch (err) { hookResult = { warning: err.message }; }
+  }
+
   // Supersession, step 1: enabling this plugin unloads the groups it replaces BEFORE it
   // registers, since it typically reuses their tool names. Their cfg entries are not touched.
   const superseded = [];
@@ -625,6 +637,8 @@ export async function updatePluginConfig(groupName, updates) {
       if (warning) result.warning = warning;
     } catch {}
   }
+  if (hookResult?.notice) result.notice = hookResult.notice;
+  if (hookResult?.warning && !result.warning) result.warning = hookResult.warning;
   if (cascadedOn.length > 0) result.cascadedOn = cascadedOn;
   if (cascadedOff.length > 0) result.cascadedOff = cascadedOff;
   if (superseded.length > 0) result.superseded = superseded;
@@ -712,6 +726,25 @@ function isGroupEnabled(group) {
   const hasEnabledTool = group.tools.some(t => !disabledTools.has(t));
   const conditionMet = !group.condition || group.condition();
   return hasEnabledTool && conditionMet;
+}
+
+// A group whose `exclusive()` hook is true narrows the session to its own tools plus `core`
+// (date/time, conversation_read). First such group wins; a throwing hook counts as false.
+function exclusiveGroup() {
+  for (const [name, g] of Object.entries(toolGroups)) {
+    if (!g.exclusive || !isGroupEnabled(g)) continue;
+    try { if (g.exclusive()) return name; } catch {}
+  }
+  return null;
+}
+
+function groupOffered(name, exclusive) {
+  return !exclusive || name === exclusive || name === 'core';
+}
+
+function toolOffered(toolName, exclusive) {
+  if (!exclusive) return true;
+  return Object.entries(toolGroups).some(([g, def]) => groupOffered(g, exclusive) && def.tools.includes(toolName));
 }
 
 export function isToolGroupEnabled(groupName) {
@@ -816,8 +849,12 @@ export function getDatetimeStamp(now = new Date()) {
 }
 
 export function getSystemPrompt({ applets = false, precision = false, cite = false } = {}) {
+  const exclusive = exclusiveGroup();
+  const offeredGroups = Object.entries(toolGroups)
+    .filter(([name, g]) => groupOffered(name, exclusive) && isGroupEnabled(g))
+    .map(([, g]) => g);
   const toolList = Object.entries(tools)
-    .filter(([name]) => !disabledTools.has(name))
+    .filter(([name]) => !disabledTools.has(name) && toolOffered(name, exclusive))
     .map(([name, t]) => `- ${name}: ${t.description}`)
     .join('\n');
 
@@ -837,21 +874,19 @@ export function getSystemPrompt({ applets = false, precision = false, cite = fal
   const citeSection = cite ? CITE_RULES : '';
 
   const resolveDyn = (v) => { try { return typeof v === 'function' ? v() : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
-  const groupSections = Object.values(toolGroups)
-    .filter(isGroupEnabled)
+  const groupSections = offeredGroups
     .map(g => resolveDyn(g.prompt))
     .filter(Boolean)
     .join('\n\n');
 
-  const routingLines = Object.values(toolGroups)
-    .filter(isGroupEnabled)
+  const routingLines = offeredGroups
     .map(g => resolveDyn(g.routing))
     .filter(Boolean)
     .flat()
     .filter(Boolean);
 
   // Cross-group warnings (only when both groups are active)
-  if (toolGroups.finance && toolGroups.travel && isGroupEnabled(toolGroups.finance) && isGroupEnabled(toolGroups.travel)) {
+  if (!exclusive && toolGroups.finance && toolGroups.travel && isGroupEnabled(toolGroups.finance) && isGroupEnabled(toolGroups.travel)) {
     routingLines.push('- NEVER use etrade_account for travel/hotel queries. NEVER use hotel/travel for financial queries.');
   }
 
@@ -1317,6 +1352,11 @@ export async function executeTool(name, args, context) {
     } else {
       return JSON.stringify({ error: `Unknown tool: ${name}. Available tools: ${available.join(', ')}` });
     }
+  }
+  const exclusive = exclusiveGroup();
+  if (!toolOffered(name, exclusive)) {
+    const label = pluginModules[exclusive]?.plugin.label || exclusive;
+    return JSON.stringify({ error: `Tool "${name}" is withheld while ${label} is in exclusive mode. Available tools: ${Object.keys(tools).filter(t => toolOffered(t, exclusive)).join(', ')}` });
   }
   try {
     console.log(`[tools] executing "${name}" args=${JSON.stringify(args).slice(0, 200)}`);

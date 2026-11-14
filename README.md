@@ -11,6 +11,12 @@ Connect any [llama.cpp](https://github.com/ggerganov/llama.cpp)-compatible model
 
 ---
 
+## 📚 v1.6.0 — Read a book with it
+
+- **Books** *(new, off by default)* — point Lumispec at a folder of Markdown or text files, a single file, or a PDF. It indexes the book in the background, you make it the **open book**, and the assistant searches it before any other tool, answers from it, and names the section each answer rests on. Questions work before indexing finishes. **Book only** withholds every other tool, so the answer is "not in this book" instead of a web search. See "Add Books" below and [`docs/BOOKS.md`](docs/BOOKS.md).
+- **PDF books.** A PDF is converted to Markdown in seconds — headings from the PDF's own outline, code fenced, running headers and page numbers dropped — then indexed; the card reports "Step 1 of 2" and "Step 2 of 2". 690 pages converted in 1.4 s. Needs PyMuPDF in the Python environment.
+- **Troubleshoot on any answer.** *Revise an answer against its own evidence instead of rerunning it.* A red Troubleshoot on every assistant answer names the answer, quotes the text you selected, reports which tools failed, fell back or were truncated, and has the model read back what its tools actually returned before it corrects anything. Works on good runs too ("verify these numbers"). See [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md) and [`releases/1.6.0.md`](releases/1.6.0.md).
+
 ## 🛠 v1.5.8 — The model can troubleshoot its own applets
 
 - **Troubleshoot button.** Under every applet: it fills the prompt with your problem line, what the browser saw inside the applet (JavaScript errors, failed fetches, rendered height, visible text) and the call that lets the model read back the code it wrote — earlier applets reach it only as `[Applet: html visualization]`, so a "fix" used to be a rewrite from memory. The new always-on `conversation_read` tool returns an earlier answer's applet source, tool results or reasoning.
@@ -93,7 +99,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.5.8.md`](releases/1.5.8.md) (latest) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.6.0.md`](releases/1.6.0.md) (latest) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -411,6 +417,18 @@ OBSIDIAN_VAULT=/path/to/any/folder
 
 Design notes: [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md).
 
+### Add Books (optional)
+
+Turn on **Books** in **Plugins**, type a path into **Add a book** and press Enter: a folder of
+`.md` / `.txt` files, one such file, or a `.pdf`. The book is added, opened, and indexed in the
+background; the card shows progress. While a book is open the assistant answers from it first and
+names the section. Tick **Book only** to withhold every other tool while the book is open. The
+same works from chat: *"add ~/books/sicp as a book called SICP"*, *"open SICP"*, *"close the book"*.
+
+Your folder or file is never modified; the index lives in `data/books/<id>/`. PDFs need PyMuPDF
+in the Python environment (`PYTHON_VENV`) — the card shows the install command if it is missing —
+and a text layer (a scanned PDF needs OCR first). Full guide: [`docs/BOOKS.md`](docs/BOOKS.md).
+
 ### Keeping the search engines current
 
 Browser Search reads real search-result pages, so it depends on each engine's HTML. When an engine
@@ -469,8 +487,11 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/KNOWLEDGE_HARDENING.md`](docs/KNOWLEDGE_HARDENING.md) | Cite mode design — documentation-hallucination guardrails |
 | [`docs/RETAIN.md`](docs/RETAIN.md) | Retain toggle design note — reasoning fed back as context, KV-prefix measurements |
 | [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md) | Obsidian export — vault discovery, note format, triggers, no-vault behaviour |
+| [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md) | **Troubleshoot** — revise any earlier answer against its own tool results; the turn report, your own wording, and using `conversation_read` to inspect, comment and correct |
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
-| [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes (latest) — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
+| [`docs/BOOKS.md`](docs/BOOKS.md) | **Books** — add a folder, file or PDF as a book, open it, chat against it; Book only, sections, limits |
+| [`releases/1.6.0.md`](releases/1.6.0.md) | v1.6.0 release notes (latest) — Books plugin, PDF books, Troubleshoot on any answer |
+| [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
 | [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes — concurrent conversations, stopped turns keep their work, applet fit |
 | [`releases/1.5.6.md`](releases/1.5.6.md) | v1.5.6 release notes — tool result limits: tree summary, executor ceiling, wind-down fit |
 | [`releases/1.5.5.md`](releases/1.5.5.md) | v1.5.5 release notes — Python environment detection, per-answer token cap, template titles |

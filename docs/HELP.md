@@ -94,6 +94,22 @@ Diffs are always shown — even with Autorun enabled — so you can see exactly 
 ### Charts & Dashboards
 With Applets enabled, ask for visualizations. Example: "Create a pie chart of my monthly expenses" or "Build a weather dashboard for my location"
 
+### Checking & Correcting an Answer (Troubleshoot)
+**The AI can read its own earlier output back and correct it — you don't have to run the original prompt again.**
+
+The AI normally sees its earlier answers as text only — not the searches, pages, quotes or code output they were built from. **Troubleshoot** gives it that evidence back, so it checks an answer instead of guessing again.
+
+- Hover any answer and click the red **Troubleshoot** at its bottom right (it stays visible on answers that failed or were cut off)
+- Select some text in the answer first if you want to point at one part
+- The prompt box fills with a request for that answer. Type what to check or correct over the highlighted placeholder, then send — nothing is sent before that
+- The correction appears as a new answer; the original stays so you can compare
+
+It works on good answers too: "verify the numbers", "you missed two sources", "recompute the total". Charts and dashboards have their own Troubleshoot button underneath, which reports what went wrong inside the chart. The AI could not read a chart it had drawn before — now it gets the chart's exact code back and fixes that, instead of drawing a new one.
+
+You can also just ask, without the button: "show the tool results of your last answer", "read back what you fetched and list any figure that isn't in it", "read your reasoning — why did you skip that?", "read the chart you made and explain how it calculates the average".
+
+To change the wording the button uses, save a prompt titled **Troubleshoot** in the Prompts menu. Full guide: [TROUBLESHOOT.md](TROUBLESHOOT.md).
+
 ### Templates
 If you've saved a visualization you like, reference it by name: "Show weather [template: Weather]". The AI recreates the same layout with fresh data.
 
@@ -105,6 +121,18 @@ Search for hotels, check rates, read reviews, and book rooms. Example: "Find hot
 
 ### E*TRADE
 If connected, check your portfolio, get stock quotes, view option chains, and analyze positions. Connect via the E*TRADE status indicator in the top bar.
+
+### Reading a Book
+Turn on **Books** in the Plugins panel, type the path of a book into **Add a book** and press Enter. A book can be a folder of text or Markdown files, a single file, or a PDF. The AI reads through it in the background and writes a short summary of each section; the card shows how far it is. You can start asking questions right away.
+
+While a book is open, the AI looks in the book first, answers from it, and tells you which section the answer comes from. If the book does not cover your question, it says so before using anything else. Tick **Book only** if you want answers from the book and nothing else.
+
+- One book is open at a time. Pick another in **Open book** on the card, or just ask: "open SICP", "close the book", "what books do I have?"
+- A PDF is added in two steps, and the card tells you which one is running: first it is converted to text, then indexed. A scanned PDF (pictures of pages) cannot be read until it has been through OCR
+- Your files are never changed. Removing a book ("remove the book SICP") deletes only the AI's summaries
+- The AI finds passages by their words, so ask with the terms the book uses
+
+Full guide: [BOOKS.md](BOOKS.md).
 
 ### Obsidian Notes
 Turn on **Obsidian Export** in the Plugins panel and a small vault icon appears on each chat in the sidebar. Click it to save that chat as a note in your Obsidian vault, under a `Lumispec` folder sorted by session colour. The note keeps the whole exchange, with tool calls and (optionally) the AI's reasoning folded away, charts saved as files next to it, and properties you can search in Obsidian.
@@ -162,3 +190,4 @@ When the AI wants to run a shell command, Python script, or edit source code (wi
 - Use session prompts to set up specialized assistants (weather, coding, trading, support)
 - Set up `SOURCE_DIR` and `SOURCE_TEST` in `.env` to use the AI as a coding assistant on any project
 - Pin important conversations (📌) to keep them across server restarts
+- Doubt an answer? Use **Troubleshoot** on it instead of asking again — the AI re-reads what its tools actually returned
