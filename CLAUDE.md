@@ -106,6 +106,7 @@ src/
     plugin-browser.js      # web_search/web_fetch via the Chrome extension bridge; owns the engine table (URLs + linkedom parsers); supersedes 'web'
     plugin-books.js        # Books: book_library, book_read; library card, background indexer, "Book only" exclusive mode (off by default)
     plugin-obsidian.js     # Obsidian export card + obsidian_export tool; manual Save to Obsidian only (off by default)
+    plugin-memory.js       # Memories: `memory` tool (list/read/save/forget, always confirmed), card, promptTail block (off by default)
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
     tasks.js               # Task pipeline CRUD + reorder
@@ -125,6 +126,7 @@ src/
     browserBridge.js       # WebSocket endpoint /ws/browser for the Chrome extension (search/fetch requests, heartbeat, token)
     pdfToMarkdown.js       # Books: runs scripts/pdf_to_md.py (PyMuPDF) with page progress
     books.js               # Books library (data/books/<id>/), section splitting, index entries, search/read (pure parts tested)
+    memory.js              # Memories storage (data/memory/<slug>.md), color visibility, the "## Memories" prompt block (sync, pure parts tested)
     frontmatter.js         # parseFrontmatter / enforceFrontmatterFields, shared by wiki and Books
     obsidian.js            # Obsidian export: vault registry lookup, pure renderNote(), atomic exportConversation()
     prompts.js             # Prompt library persistence (data/prompts.json)
@@ -143,6 +145,7 @@ extension/                 # Lumispec Browser Search Chrome extension (MV3, load
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json, tasks.json (served at /files/)
   plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
+  memory/                  # One markdown file per memory (frontmatter: name, color?, created, updated, description?); gitignored
   books/<id>/              # One directory per book: book.json + index/ (LLM-written section summaries); gitignored
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 test/                      # node --test suites (npm test); obsidian.test.js covers the exporter
@@ -190,6 +193,7 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 | `/api/config` | GET | Public config (location) |
 | `/api/plugins` | GET | List configurable plugin groups |
 | `/api/plugins/:group/toggle` | POST | Hot-load/unload a plugin group |
+| `/api/plugins/:group/list/delete` | POST | Delete one row of a plugin's card list, body `{ id }` (Memories: forget that memory) |
 | `/api/plugins/:group/action/:id` | POST | Run a plugin card helper button (e.g. `browser` → `open-extensions`, `open-folder`) |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
@@ -275,6 +279,9 @@ export default {
   beforeCard: async () => {},                     // optional: awaited by listPluginGroups() before cardStatus/configUi so sync hooks can see fresh config
   enableWarning: () => null | 'string',           // optional: warning toast shown right after the user enables the plugin
   configChanged: async (current, changed) => ({ notice?, warning? }), // optional: called by updatePluginConfig() on a field save with the merged entry before it is written; may edit it (Books consumes its "Add a book" text field here)
+  promptTail: ({ session }) => '## Section…',     // optional sync function: a section rendered at the very END of the system prompt (before FINAL REMINDER); `session` = the chat's color. For content that changes over time, so the KV prefix before it survives (Memories)
+  alwaysOffered: true,                            // optional: tools stay listed and executable while another group is exclusive, like `core` (Memories)
+  listDelete: async (id) => ({ ok, message }),    // optional: deletes one row of the card list (configUi().list with deletable: true)
   exclusive: () => false,                         // optional sync predicate: while true only this group's tools plus `core` are listed in the system prompt and executable (Books' "Book only")
   defaults: { enabled: false },                   // optional: per-plugin config defaults; enabled:false = off until the user turns it on
   condition: () => someCheck(),                   // optional: group only active when true (omit for always-on)
@@ -333,8 +340,18 @@ export default {
 | `browser` | plugin-browser.js | `web_search`, `web_fetch`, `browser_tabs` (via Chrome extension) | off by default; supersedes `web` | — |
 | `obsidian` | plugin-obsidian.js | `obsidian_export` | off by default | — |
 | `books` | plugin-books.js | `book_library`, `book_read` | off by default | — |
+| `memory` | plugin-memory.js | `memory` | off by default | — |
 
 `isToolGroupEnabled(name)` exported for runtime checks in `conversations.js`.
+
+#### Memories (facts kept across conversations)
+`plugin-memory.js` + `services/memory.js`, user guide and design notes in `docs/MEMORY.md`. Off by default. One markdown file per memory in `data/memory/<slug>.md` (frontmatter `name`, optional `color`, `created`, `updated`, optional `description`; hand-editable, a file with no frontmatter is a memory named after the file). **No retrieval step**: while the plugin is on, `promptTail` renders a `## Memories` block as the last section of the system prompt (just before FINAL REMINDER) with one line per memory, oldest first — the text itself up to `INLINE_CHARS` (200), else the description plus "(long — read it for the full text)"; the list is capped at the card's **List size** (`indexMaxChars`, default `MAX_INDEX_CHARS` 8,000, clamped 2,000–40,000 by `clampIndexChars()`) with a "N more" line — `fitIndex()` keeps the oldest and drops the newest, and while anything is dropped `cardStatus` turns amber ("the newest N do not fit in the list the assistant sees… raise List size") and those rows carry an amber "not listed" flag in the card list. Books-style keyword search was rejected: a question rarely shares words with the memory it needs. Saving re-reads the KV cache only from that block on; with the plugin off the prompt is byte-identical to before.
+- **Tool**: `memory { action: list | read | save | forget, name?, text?, description?, color? }`. `save` creates, or replaces the memory whose name slugifies the same (`created` and color kept); `read`/`forget` take id, exact name or a fragment matching exactly one, else `{ error, candidates }`. `save` and `forget` always go through `context.confirmFn` with the exact text (and what it replaces) — **autorun does not bypass it**, no `confirmFn` → error — because a fetched page saying "remember this" would otherwise plant a line in every later conversation. The prompt block tells the model to save only on the user's own request.
+- **Color**: stored only when the user asks ("for this kind of chat" → `color: "current"`, resolved from `context.session`; `"none"` clears; omitted keeps). The card's one field, **Only memories matching the chat color** (`colorMatch`, off): off → every memory in every chat; on → a tagged memory only in chats of its color, untagged ones everywhere (`visibleMemories()`). The enable switch is the card's own slider.
+- **Session color on the server**: the frontend now sends `session` (from `state.sessionColors`) in the message and task-pipeline POST bodies; the routes call `conversations.setSession()` and pass `conv.session` to `getSystemPrompt({ session })` and into the tool `context`.
+- `alwaysOffered: true` keeps the tool and the block available under Books' "Book only". `cardStatus` shows the count, tagged count, and "sent to Anthropic with each request" on the Claude backend.
+- **Card list**: `configUi()` also returns `list: { title, emptyText, colorFilter, items: [{ title, text, color, meta }] }` — a generic read-only card element rendered by `renderPluginList()` in app.js under the fields: a painted swatch per row from the session color variable (`sessionColorValue()`; "N/A" without a color), name, text (ellipsis, full text as tooltip), date, and with `colorFilter` a chip strip — All (default, everything shown), one chip per color present, "N/A" for uncolored — where clicking the active chip returns to All. The filter is per card, page lifetime (`pluginListFilter`). `pluginLiveSnapshot()` includes the list, so a memory saved in chat appears on the open panel within the 4 s poll. The `memory` tool's `list` reports a missing color as `N/A`. With `search: true` a box above the rows filters by title and text as you type (every word must match; Escape or ✕ clears; only the rows are redrawn, so the input keeps focus) and composes with the color chips; an item's `flag`/`flagTip` is an amber note ahead of its date. With `deletable: true` (items carry an `id`) each row shows a ✕ on hover: the first click arms it (red "Delete?", disarmed after 4 s or when the pointer leaves the row), the second POSTs `/api/plugins/:group/list/delete` `{ id }` → `runPluginListDelete()` → the plugin's `listDelete(id)` hook (id must match `[\w-]{1,80}`; refused while the plugin is disabled), then the row is dropped and the card re-polled. For Memories it removes the file with no chat approval prompt — the two clicks are the user's own. No edit control on the card: ask in chat.
+- Tests: `test/memory.test.js` (temp directories; approval flow with a fake `confirmFn`).
 
 #### Books (index a folder, open it, chat against it)
 `plugin-books.js` + `services/books.js`, user guide in `docs/BOOKS.md`. A **book** is a folder of `.md` / `.markdown` / `.txt` files anywhere on disk (hidden folders skipped, natural order so "chapter 2" precedes "chapter 10"); the folder is never written to. `addBook()` also takes the path of one such file: `book.json` then carries `sourceFile` and the book is that file alone (siblings in its directory are not listed, searched or readable; a file book and a folder book over the same directory are distinct). Each book has its own directory `data/books/<id>/`: `book.json` (`{ id, name, sourceDir, sourceFile?, createdAt }`) and `index/` with one LLM-written entry per **section** (frontmatter `source: book:<id>/<section>`, `last_updated` = source mtime, tags, answers; then title, paragraph, key topics — `source`/`last_updated` enforced by the plugin, as in the wiki). Files over `MAX_PART_CHARS` (16,000) are cut by `splitIntoParts()` at paragraph breaks, and at a heading once a section is half full, so a novel in one `.txt` is indexed and read piecewise; a section id is the relative path plus `#n` when the file has several (`ch01.md`, `book.txt#12`). The wiki plugin is unchanged and independent (project docs inside `SOURCE_DIR`, read through `source_read`).
@@ -431,6 +448,7 @@ is why the bar used to show 84K on a 64K slot.
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
 | `booking` | LiteAPI: prebook, book, list bookings, booking details, cancel |
+| `memory` | Memories: list, read, save (new or replace by name) and forget the facts the user asked to keep; save/forget always ask for approval; optional session color only on request |
 | `book_library` | Books: list the library, open/close a book, add a folder as a book (confirmation), start/stop/report background indexing, remove a book's index (confirmation) |
 | `book_read` | Books: `search` (ranked sections with excerpts), `read` (one section's text, ≤16K chars, with previous/next), `contents` (table of contents) — the open book only |
 | `wiki_scan` | Walks both source markdown tree and `wiki/` tree, returns unified view: `fileEntries` (with compressed/stale flags via `last_updated:` frontmatter), `noteEntries`/`lensEntries` (reserved `_`-prefixed subdirs), `orphans`, `nextBatch` (capped at 20), and `hasMore` boolean. Recognizes `_notes/`, `_lens/<color>/`, `_conv/`, `_web/` as reserved non-file-derived areas. |
@@ -696,7 +714,7 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 
 **Chart.js**: Served as static file from `src/public/lib/chart.min.js` at `/lib/chart.min.js` — no CDN dependency.
 
-**Security**: `sandbox="allow-scripts allow-same-origin"` allows JS execution and fetch to same-origin `/files/` endpoints. postMessage resize is the parent communication channel.
+**Security**: `sandbox="allow-scripts allow-same-origin"` allows JS execution and fetch to same-origin `/files/` endpoints. postMessage resize is the parent communication channel. **This is not isolation**: with both flags on a `srcdoc` iframe the applet has the app's origin — it can call every `/api` route (confirm a pending command, `/api/file?path=`), reach `window.parent.document` and remove its own sandbox attribute. The README says so since 2026-11-14; the fix (drop `allow-same-origin`, CORS on `/files/`, `/lib/`, `/api/files` only) is the open item in `TODO.md`.
 
 ### Template Sanitizer & LLM Review
 **Sanitizer** (`sanitizeTemplate()` in `src/services/templateReview.js`): Runs on POST and PATCH and on every LLM answer. Fixes Python-in-JS (None→null, True→true inside `<script>` blocks only), CDN→local Chart.js, stray semicolons. Deterministic, no LLM.

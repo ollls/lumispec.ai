@@ -336,6 +336,12 @@ function registerPlugin(plugin) {
     // Optional sync predicate: while true, only this group's tools (plus `core`) are offered
     // and executable — Books' "Book only" switch. See exclusiveGroup().
     exclusive: typeof plugin.exclusive === 'function' ? plugin.exclusive : null,
+    // Optional sync function ({ session }) → a section rendered at the very END of the system
+    // prompt. For content that changes between conversations or over time (Memories): whatever
+    // changes there leaves the llama KV prefix before it valid.
+    promptTail: typeof plugin.promptTail === 'function' ? plugin.promptTail : null,
+    // Offered even while another group is exclusive, like `core` (Memories).
+    alwaysOffered: !!plugin.alwaysOffered,
   };
   console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
 }
@@ -739,7 +745,7 @@ function exclusiveGroup() {
 }
 
 function groupOffered(name, exclusive) {
-  return !exclusive || name === exclusive || name === 'core';
+  return !exclusive || name === exclusive || name === 'core' || !!toolGroups[name]?.alwaysOffered;
 }
 
 function toolOffered(toolName, exclusive) {
@@ -788,6 +794,15 @@ export function getPluginAuth(groupName) {
 // Run a card helper button (see cardActions in listPluginGroups). Looked up in pluginModules,
 // not toolGroups, so the helper works while the plugin is still disabled — the user installs
 // the extension first and enables Browser Search after.
+// Delete one row of a plugin's card list (configUi().list with `deletable`). The plugin's
+// listDelete(id) decides what the id means and validates it; works only while the plugin is enabled.
+export async function runPluginListDelete(groupName, itemId) {
+  const plugin = pluginModules[groupName]?.plugin;
+  if (!plugin || typeof plugin.listDelete !== 'function') return { error: 'This plugin has no deletable list' };
+  if (!toolGroups[groupName]) return { error: 'This plugin is disabled' };
+  return plugin.listDelete(String(itemId ?? ''));
+}
+
 export async function runPluginCardAction(groupName, actionId) {
   const plugin = pluginModules[groupName]?.plugin;
   if (!plugin || typeof plugin.cardAction !== 'function') return { error: 'No actions for this plugin' };
@@ -848,7 +863,8 @@ export function getDatetimeStamp(now = new Date()) {
   return `[Now: ${date}, ${time} ${timezone} (UTC${offset > 0 ? '-' : '+'}${Math.abs(offset / 60)}h) — UTC ${now.toISOString()}]`;
 }
 
-export function getSystemPrompt({ applets = false, precision = false, cite = false } = {}) {
+// `session` is the conversation's session color (null when unknown); only promptTail hooks read it.
+export function getSystemPrompt({ applets = false, precision = false, cite = false, session = null } = {}) {
   const exclusive = exclusiveGroup();
   const offeredGroups = Object.entries(toolGroups)
     .filter(([name, g]) => groupOffered(name, exclusive) && isGroupEnabled(g))
@@ -873,11 +889,18 @@ export function getSystemPrompt({ applets = false, precision = false, cite = fal
   // common path for any conversation that can read code.
   const citeSection = cite ? CITE_RULES : '';
 
-  const resolveDyn = (v) => { try { return typeof v === 'function' ? v() : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
+  const resolveDyn = (v, arg) => { try { return typeof v === 'function' ? v(arg) : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
   const groupSections = offeredGroups
     .map(g => resolveDyn(g.prompt))
     .filter(Boolean)
     .join('\n\n');
+
+  // With no promptTail plugin enabled this is '' and the prompt is byte-identical to before.
+  const tailSections = offeredGroups
+    .map(g => g.promptTail ? resolveDyn(g.promptTail, { session }) : null)
+    .filter(Boolean)
+    .map(t => `${t}\n\n`)
+    .join('');
 
   const routingLines = offeredGroups
     .map(g => resolveDyn(g.routing))
@@ -1069,7 +1092,7 @@ For type="html" applets:
 - Data files saved to project directory are available via /files/FILENAME (e.g. fetch('/files/optionchains_123.csv'))
 - APPLET DATA LOADING: When tool results produce CSV files (_autoSaved), load them DIRECTLY in the applet via fetch('/files/FILENAME.csv') and parse in JS. Do NOT use run_python to pre-process or convert CSVs — this wastes tool rounds and introduces column name/value case errors. The CSV is already in the right format. Parse it client-side with split/map.
 
-` : ''}## FINAL REMINDER
+` : ''}${tailSections}## FINAL REMINDER
 All tool calls MUST use <tool_call></tool_call> tags. Bare JSON is silently ignored — the tool will NOT run.`;
 }
 

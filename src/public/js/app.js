@@ -1660,6 +1660,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
         precision: state.precisionEnabled,
         cite: state.citeEnabled,
         retain: state.retainEnabled,
+        session: state.sessionColors[convId] || null,
         sessionInit: sessionInit || false,
       }),
       signal: stream.controller.signal,
@@ -2002,6 +2003,7 @@ async function sendTasks(tasks, displayText) {
         precision: state.precisionEnabled,
         cite: state.citeEnabled,
         retain: state.retainEnabled,
+        session: state.sessionColors[convId] || null,
         review: state.reviewEnabled,
       }),
       signal: stream.controller.signal,
@@ -3759,7 +3761,7 @@ function renderPluginHelper(p, help) {
 let pluginLiveKey = '';
 let pluginLiveTimer = null;
 function pluginLiveSnapshot(plugins) {
-  return JSON.stringify(plugins.map(pl => [pl.group, pl.enabled, pl.supersededBy, pl.cardStatus, pl.cardActions]));
+  return JSON.stringify(plugins.map(pl => [pl.group, pl.enabled, pl.supersededBy, pl.cardStatus, pl.cardActions, pl.config?.list || null]));
 }
 async function pollPluginCards() {
   if (pluginConfigPanel.classList.contains('hidden')) return;
@@ -3792,6 +3794,203 @@ function syncObsidianFlag(plugins) {
     state.obsidianEnabled = on;
     renderSidebar();
   }
+}
+
+// Read-only list on a plugin card, declared by configUi() → { list: { title?, emptyText?, colorFilter?,
+// items: [{ title, text, color?, meta? }] } }. `color` is a session color name: the row gets a painted
+// swatch ("N/A" without one). With colorFilter, a chip strip filters by color — "All" by default, one
+// chip per color present, plus "N/A" when both colored and uncolored items exist; clicking the active
+// chip returns to All. The choice is kept per card for the page's lifetime (panel re-renders keep it).
+// With `search`, a box filters rows by title and text as you type (case-insensitive; every word must
+// match; Escape or ✕ clears) and composes with the color chips. An item's optional `flag` (+ `flagTip`)
+// is an amber note ahead of its date. With `deletable`, each row (it needs an `id`) shows a ✕ on hover:
+// the first click arms it ("Delete?", disarms after 4 s or when the pointer leaves the row), the second
+// POSTs /api/plugins/:group/list/delete { id } and drops the row.
+const pluginListFilter = {}; // group → 'all' | color | 'none'
+const pluginListQuery = {};  // group → search text
+function renderPluginList(p, container) {
+  const list = p.config.list;
+  const items = Array.isArray(list.items) ? list.items : [];
+  const box = document.createElement('div');
+  Object.assign(box.style, { marginTop: '10px' });
+  container.appendChild(box);
+
+  const swatchFor = (color, size = 12) => {
+    const sw = document.createElement('span');
+    const value = color ? sessionColorValue(color) : '';
+    if (value) {
+      Object.assign(sw.style, { display: 'inline-block', width: `${size + 6}px`, height: `${size}px`, borderRadius: '3px', background: value, flex: 'none' });
+      sw.title = color;
+    } else {
+      Object.assign(sw.style, { fontSize: '10px', color: '#71717a', flex: 'none', minWidth: `${size + 6}px` });
+      sw.textContent = color || 'N/A'; // an unknown color name is shown as text
+      sw.title = color ? color : 'No color: shown in every chat';
+    }
+    return sw;
+  };
+
+  const draw = () => {
+    box.textContent = '';
+    const counts = {};
+    for (const it of items) counts[it.color || 'none'] = (counts[it.color || 'none'] || 0) + 1;
+    const colors = Object.keys(counts).filter(c => c !== 'none');
+    let filter = pluginListFilter[p.group] || 'all';
+    if (filter !== 'all' && !counts[filter]) filter = pluginListFilter[p.group] = 'all';
+
+    const head = document.createElement('div');
+    Object.assign(head.style, { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' });
+    const title = document.createElement('span');
+    Object.assign(title.style, { fontSize: '12px', color: '#a1a1aa', marginRight: '6px' });
+    title.textContent = list.title || 'Items';
+    head.appendChild(title);
+    if (list.colorFilter && colors.length) {
+      const chip = (value, label, color) => {
+        const active = filter === value;
+        const b = document.createElement('button');
+        b.type = 'button';
+        Object.assign(b.style, {
+          display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', padding: '2px 8px',
+          borderRadius: '999px', cursor: 'pointer', color: active ? '#e4e4e7' : '#a1a1aa',
+          background: active ? '#3f3f46' : 'transparent', border: `1px solid ${active ? '#71717a' : '#3f3f46'}`,
+        });
+        if (color) b.appendChild(swatchFor(color, 9));
+        const t = document.createElement('span');
+        t.textContent = label;
+        b.appendChild(t);
+        b.title = value === 'all' ? 'Show every item' : value === 'none' ? 'Items without a color' : `${value} only`;
+        b.addEventListener('click', () => { pluginListFilter[p.group] = active && value !== 'all' ? 'all' : value; draw(); });
+        head.appendChild(b);
+      };
+      chip('all', `All ${items.length}`);
+      for (const c of colors) chip(c, String(counts[c]), c);
+      if (counts.none) chip('none', `N/A ${counts.none}`);
+    }
+    box.appendChild(head);
+
+    // Search box: lives outside rowsBox, which is all that is redrawn while typing.
+    const rowsBox = document.createElement('div');
+    if (list.search && items.length) {
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, { position: 'relative', marginBottom: '6px' });
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Search name or text…';
+      input.value = pluginListQuery[p.group] || '';
+      Object.assign(input.style, {
+        width: '100%', boxSizing: 'border-box', fontSize: '12px', padding: '4px 26px 4px 8px', borderRadius: '6px',
+        background: '#27272a', color: '#e4e4e7', border: '1px solid #3f3f46', outline: 'none',
+      });
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.textContent = '✕';
+      clear.title = 'Clear search';
+      Object.assign(clear.style, { position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', fontSize: '11px', color: '#a1a1aa', background: 'none', border: 'none', cursor: 'pointer' });
+      const sync = () => { clear.style.display = input.value ? '' : 'none'; };
+      const set = (v) => { pluginListQuery[p.group] = v; input.value = v; sync(); drawRows(); };
+      input.addEventListener('input', () => { pluginListQuery[p.group] = input.value; sync(); drawRows(); });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); set(''); } });
+      clear.addEventListener('click', () => { set(''); input.focus(); });
+      sync();
+      wrap.append(input, clear);
+      box.appendChild(wrap);
+    }
+    box.appendChild(rowsBox);
+
+    function drawRows() {
+    rowsBox.textContent = '';
+    const words = (pluginListQuery[p.group] || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const byColor = filter === 'all' ? items : items.filter(it => (it.color || 'none') === filter);
+    const shown = !words.length ? byColor : byColor.filter(it => {
+      const hay = `${it.title || ''} ${it.text || ''}`.toLowerCase();
+      return words.every(w => hay.includes(w));
+    });
+    if (!shown.length) {
+      const empty = document.createElement('div');
+      Object.assign(empty.style, { fontSize: '12px', color: '#71717a' });
+      empty.textContent = items.length ? 'No match.' : (list.emptyText || 'Nothing here yet.');
+      rowsBox.appendChild(empty);
+      return;
+    }
+    if (shown.length !== items.length) {
+      const count = document.createElement('div');
+      Object.assign(count.style, { fontSize: '11px', color: '#71717a', marginBottom: '4px' });
+      count.textContent = `${shown.length} of ${items.length}`;
+      rowsBox.appendChild(count);
+    }
+    const rows = document.createElement('div');
+    Object.assign(rows.style, { maxHeight: '260px', overflowY: 'auto', border: '1px solid #3f3f46', borderRadius: '6px' });
+    shown.forEach((it, i) => {
+      const row = document.createElement('div');
+      Object.assign(row.style, {
+        display: 'grid', gridTemplateColumns: `28px minmax(90px, 200px) minmax(0, 1fr) max-content${list.deletable ? ' max-content' : ''}`, columnGap: '10px',
+        alignItems: 'center', padding: '5px 8px', fontSize: '12px', borderTop: i ? '1px solid #27272a' : 'none',
+      });
+      row.appendChild(swatchFor(it.color));
+      const name = document.createElement('span');
+      Object.assign(name.style, { color: '#e4e4e7', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+      name.textContent = it.title || '';
+      name.title = it.title || '';
+      const text = document.createElement('span');
+      Object.assign(text.style, { color: '#a1a1aa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+      text.textContent = it.text || '';
+      text.title = it.text || '';
+      const meta = document.createElement('span');
+      Object.assign(meta.style, { color: '#71717a', fontSize: '11px' });
+      if (it.flag) {
+        const flag = document.createElement('span');
+        Object.assign(flag.style, { color: '#d97706', marginRight: '8px' });
+        flag.textContent = it.flag;
+        flag.title = it.flagTip || '';
+        meta.appendChild(flag);
+      }
+      meta.appendChild(document.createTextNode(it.meta || ''));
+      row.append(name, text, meta);
+      if (list.deletable && it.id) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        Object.assign(del.style, { fontSize: '11px', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', minWidth: '14px', textAlign: 'right' });
+        let armed = false, timer = null;
+        const paint = () => {
+          del.textContent = armed ? 'Delete?' : '✕';
+          del.title = armed ? 'Click again to delete for good' : 'Delete';
+          del.style.color = armed ? '#ef4444' : '#a1a1aa';
+          del.style.fontWeight = armed ? '600' : '400';
+          del.style.visibility = armed || row.matches(':hover') ? 'visible' : 'hidden';
+        };
+        const disarm = () => { armed = false; clearTimeout(timer); paint(); };
+        row.addEventListener('mouseenter', paint);
+        row.addEventListener('mouseleave', disarm);
+        del.addEventListener('click', async () => {
+          if (!armed) { armed = true; paint(); timer = setTimeout(disarm, 4000); return; }
+          clearTimeout(timer);
+          del.disabled = true;
+          try {
+            const res = await fetch(`/api/plugins/${p.group}/list/delete`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: it.id }),
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) { showPluginToast(result.error || 'Could not delete', true); del.disabled = false; disarm(); return; }
+            const at = items.indexOf(it);
+            if (at !== -1) items.splice(at, 1);
+            showPluginToast(result.message || 'Deleted');
+            draw();                 // chip counts and rows from what is left
+            pollPluginCards();      // status line, list-size note, "not listed" flags
+          } catch (err) {
+            showPluginToast(err.message, true);
+            del.disabled = false;
+            disarm();
+          }
+        });
+        paint();
+        row.appendChild(del);
+      }
+      rows.appendChild(row);
+    });
+    rowsBox.appendChild(rows);
+    }
+    drawRows();
+  };
+  draw();
 }
 
 // Generic per-plugin fields declared by configUi() → { fields: [{ key, label, type, options?, placeholder?, note?, disabled?, min?, max?, step?, group?, value? }] }.
@@ -4068,6 +4267,9 @@ function renderPluginConfig(plugins) {
 
       // Generic fields (select / text / boolean) declared by the plugin
       if (hasFields) renderPluginFields(p, configSection);
+
+      // Read-only item list declared by the plugin (Memories)
+      if (p.config.list) renderPluginList(p, configSection);
 
       // Mode dropdown
       if (hasModes) {

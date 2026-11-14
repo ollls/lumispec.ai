@@ -16,6 +16,7 @@ export {
   getPluginStatuses,
   getPluginAuth,
   runPluginCardAction,
+  runPluginListDelete,
   listPluginGroups,
   setPluginEnabled,
   updatePluginConfig,

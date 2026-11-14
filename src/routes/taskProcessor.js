@@ -61,6 +61,7 @@ router.post('/:id/tasks', async (req, res) => {
 
   const { tasks, applets, autorun, review, precision, cite, retain } = req.body;
   console.log(`[task-processor] autorun=${autorun} cite=${!!cite} retain=${!!retain}`);
+  if (req.body.session) conversations.setSession(conv.id, req.body.session);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -104,7 +105,7 @@ router.post('/:id/tasks', async (req, res) => {
     cancelReview(conv.id);
   });
 
-  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision, cite: !!cite });
+  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision, cite: !!cite, session: conv.session || null });
   const taskRunResults = [];
   let prev = { result: null, files: [] }; // output from immediately preceding step
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -677,6 +678,7 @@ CRITICAL RULES:
 function buildToolContext(autorun, cite, conv, res) {
   return {
     conversationId: conv.id,
+    session: conv.session || null,
     autorun,
     cite,
     confirmFn: (command) => {
