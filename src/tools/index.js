@@ -25,6 +25,27 @@ export function fixPythonBooleans(code) {
   return code;
 }
 
+// run_python: the model sometimes writes a backslash followed by a real newline inside a string
+// literal (a double-escaped "\\n" that lost its n). Put the escape back.
+export function fixEscapedNewlines(code) {
+  return code.replace(/(["'])([^"']*)\\\n([^"']*)\1/g, (m, q, before, after) => `${q}${before}\\n${after}${q}`);
+}
+
+// Which argument-level auto-fixes the calls of one round will receive when they execute. Pure;
+// the tool loops record the answer in the route log next to the parser's own fixes.
+export function detectArgFixes(calls = []) {
+  const fixes = [];
+  for (const call of calls) {
+    if (call?.name !== 'run_python') continue;
+    const code = call.arguments?.code;
+    if (typeof code !== 'string') continue;
+    const booleans = fixPythonBooleans(code);
+    if (booleans !== code) fixes.push('python-booleans');
+    if (fixEscapedNewlines(booleans) !== booleans) fixes.push('escaped-newlines');
+  }
+  return fixes;
+}
+
 export function tagLineCount(stdout, limit) {
   const out = (stdout || '').slice(0, limit);
   const lines = out.split('\n').filter(Boolean);
@@ -1117,7 +1138,7 @@ function normalizeToolCallKeys(raw) {
     .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)"(\s*:)/g, '$1"$2"$3');
 }
 
-function repairToolCallJson(raw) {
+function repairToolCallJson(raw, note = () => {}) {
   raw = normalizeToolCallKeys(raw.replace(/\s*\/>/g, '}').replace(/<\/[^>]+>/g, ''));
   const quoteFixed = raw.replace(/:(\s*)([a-zA-Z_][a-zA-Z0-9_]*)"/g, ':$1"$2"');
   const nameMatch = quoteFixed.match(/"name"\s*:\s*"([^"]+)"/);
@@ -1127,6 +1148,7 @@ function repairToolCallJson(raw) {
     const parsed = JSON.parse(quoteFixed);
     if (parsed.name) {
       console.log(`[parseToolCalls] repaired JSON by fixing missing quotes for tool "${name}"`);
+      note('repair-quotes');
       return { name: parsed.name, arguments: parsed.arguments || {} };
     }
   } catch { /* continue to other repair attempts */ }
@@ -1157,6 +1179,7 @@ function repairToolCallJson(raw) {
     const parsed = JSON.parse(escaped);
     if (parsed.name) {
       console.log(`[parseToolCalls] repaired JSON by smart-escaping newlines for tool "${name}"`);
+      note('repair-newlines');
       return { name: parsed.name, arguments: parsed.arguments || {} };
     }
   } catch { /* continue to next attempt */ }
@@ -1203,6 +1226,7 @@ function repairToolCallJson(raw) {
         }
       }
       console.log(`[parseToolCalls] manually extracted args (${Object.keys(args).join(', ')}) for tool "${name}"`);
+      note('repair-extracted');
       return { name, arguments: args };
     }
   }
@@ -1210,28 +1234,56 @@ function repairToolCallJson(raw) {
   return null;
 }
 
-export function parseToolCalls(text) {
+// True when a block is already a well-formed call: strict JSON with a "name". Only blocks that
+// fail this are reported as patched — the tolerant replacements below also touch valid calls
+// (a query containing the word True), and that is not a model error.
+function isStrictToolCall(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return !!parsed && typeof parsed.name === 'string' && parsed.name.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} text   the model's round content
+ * @param {string[]} [fixes]  optional collector: one entry per patch the parser needed to read a
+ *   call (see OUTPUT_FIXES in services/routeLog.js). Observation only — passing it changes nothing
+ *   about what is parsed. Both tool loops hand it to the route log.
+ */
+export function parseToolCalls(text, fixes = null) {
   const calls = [];
+  const note = fix => { if (fixes) fixes.push(fix); };
 
   text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
 
+  const beforeEquals = text;
   text = text.replace(/"(name|arguments)\s*=\s*([^"{}[\],]+)"/g, '"$1": "$2"');
   text = text.replace(/"(\w+)"\s*=\s*/g, '"$1": ');
+  if (text !== beforeEquals) note('equals-syntax');
 
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
     const raw = match[1];
-    if (!raw.trim()) continue;   // empty block — Claude emitted one after its <invoke> blocks on 2026-11-04
-    const normalized = normalizeToolCallKeys(raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null'));
+    if (!raw.trim()) { note('empty-block'); continue; }   // empty block — Claude emitted one after its <invoke> blocks on 2026-11-04
+    const literals = raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    const normalized = normalizeToolCallKeys(literals);
+    if (!isStrictToolCall(raw)) {
+      if (literals !== raw) note('python-literals');
+      if (normalized !== literals) note('key-normalized');
+    }
     try {
       const parsed = JSON.parse(normalized);
       if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+      else note('no-name');
     } catch (e) {
       console.warn(`[parseToolCalls] JSON.parse failed: ${e.message}`);
-      const repaired = repairToolCallJson(normalized);
+      const repaired = repairToolCallJson(normalized, note);
       if (repaired) {
         calls.push(repaired);
       } else {
+        note('unparseable-block');
         console.error(`[parseToolCalls] Could not repair tool call. Raw (first 300 chars):\n${raw.slice(0, 300)}`);
       }
     }
@@ -1239,7 +1291,9 @@ export function parseToolCalls(text) {
   // Claude's native tool-use syntax. The Anthropic backend gets no `tools` in the request, so the
   // model sometimes writes the format it was trained on instead of the <tool_call> JSON the prompt
   // asks for (2026-11-04 16:39Z, run_python in <invoke>/<parameter> tags, then an empty <tool_call>).
-  calls.push(...parseInvokeBlocks(text));
+  const invoked = parseInvokeBlocks(text);
+  for (let n = 0; n < invoked.length; n++) note('invoke-syntax');
+  calls.push(...invoked);
   if (calls.length > 0) return calls;
 
   // Fallback: detect bare JSON tool calls without tags
@@ -1260,8 +1314,9 @@ export function parseToolCalls(text) {
       else if (ch === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
     }
     let candidate = text.slice(start, end);
-    if (depth > 0) candidate += '}'.repeat(depth);
+    if (depth > 0) { candidate += '}'.repeat(depth); note('bare-json-unclosed'); }
     let parsed = null;
+    const before = calls.length;
     try {
       parsed = JSON.parse(candidate);
     } catch {
@@ -1284,8 +1339,9 @@ export function parseToolCalls(text) {
       try {
         parsed = JSON.parse(escaped);
         console.log(`[parseToolCalls] bare JSON parsed after smart-escaping newlines`);
+        note('repair-newlines');
       } catch {
-        const repaired = repairToolCallJson(candidate);
+        const repaired = repairToolCallJson(candidate, note);
         if (repaired) calls.push(repaired);
       }
     }
@@ -1293,6 +1349,7 @@ export function parseToolCalls(text) {
       const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
       calls.push({ name: parsed.name, arguments: args });
     }
+    if (calls.length > before) note('bare-json');
     i = end > start ? end : start + 1;
   }
   return calls;

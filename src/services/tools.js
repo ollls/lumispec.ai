@@ -6,6 +6,7 @@ export {
   getSystemPrompt,
   getDatetimeStamp,
   parseToolCalls,
+  detectArgFixes,
   capToolCalls,
   droppedCallsNote,
   executeTool,

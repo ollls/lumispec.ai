@@ -4,7 +4,7 @@ import { replaceApplets, appletPlaceholder, echoedAppletPlaceholder, APPLET_PLAC
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, detectArgFixes, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { expandTemplateTags, TEMPLATE_TAG_RE } from '../services/templateExpansion.js';
 import config from '../config.js';
@@ -386,7 +386,9 @@ router.post('/:id/messages', async (req, res) => {
       if (result.usage) lastUsage = result.usage;
       lastFinishReason = result.finishReason;
 
-      const toolCallsFound = parseToolCalls(result.content);
+      const outputFixes = [];
+      const toolCallsFound = parseToolCalls(result.content, outputFixes);
+      outputFixes.push(...detectArgFixes(toolCallsFound));
       // Route logging (observation only — the if-chain below still decides).
       // Captured before the parallel cap mutates toolCallsFound.
       const roundToolCallCount = toolCallsFound.length;
@@ -399,6 +401,13 @@ router.post('/:id/messages', async (req, res) => {
         edge,
         reason,
         content: result.content,
+        fixes: outputFixes,
+        ctx: {
+          prompt: promptTokens,
+          limit: ctxLimit,
+          completion: result.usage?.completion_tokens ?? null,
+          finish: result.finishReason ?? null,
+        },
         pred: evalPredicates({
           content: result.content,
           toolCallCount: roundToolCallCount,

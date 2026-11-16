@@ -3,7 +3,7 @@ import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, detectArgFixes, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
 import { truncatePrevResult } from '../services/pipelineContext.js';
@@ -451,7 +451,9 @@ CRITICAL RULES:
       if (result.usage) lastUsage = result.usage;
       lastFinishReason = result.finishReason;
 
-      const toolCallsFound = parseToolCalls(result.content);
+      const outputFixes = [];
+      const toolCallsFound = parseToolCalls(result.content, outputFixes);
+      outputFixes.push(...detectArgFixes(toolCallsFound));
 
       // Route logging (observation only — the if-chain below still decides).
       // Captured before the parallel cap mutates toolCallsFound.
@@ -465,6 +467,13 @@ CRITICAL RULES:
         edge,
         reason,
         content: result.content,
+        fixes: outputFixes,
+        ctx: {
+          prompt: promptTokens,
+          limit: ctxLimit,
+          completion: result.usage?.completion_tokens ?? null,
+          finish: result.finishReason ?? null,
+        },
         pred: evalPredicates({
           content: result.content,
           toolCallCount: roundToolCallCount,
