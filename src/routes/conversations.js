@@ -4,7 +4,7 @@ import { replaceApplets, appletPlaceholder, echoedAppletPlaceholder, APPLET_PLAC
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, detectArgFixes, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { expandTemplateTags, TEMPLATE_TAG_RE } from '../services/templateExpansion.js';
 import config from '../config.js';
@@ -161,6 +161,8 @@ router.post('/:id/messages', async (req, res) => {
   const cite = !!req.body.cite;
   const retain = !!req.body.retain; // send the model's own reasoning back as reasoning_content
   const sessionInit = !!req.body.sessionInit;
+  // Session color of this chat (browser state); kept on the conversation for Memories' color match.
+  if (req.body.session) conversations.setSession(conv.id, req.body.session);
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -213,7 +215,7 @@ router.post('/:id/messages', async (req, res) => {
 
   try {
     // Build messages with system prompt for tool support
-    const systemPrompt = getSystemPrompt({ applets, precision, cite });
+    const systemPrompt = getSystemPrompt({ applets, precision, cite, session: conv.session || null });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
     // Earlier user messages are re-stamped from their sentAt, byte-identical to when they were
@@ -384,7 +386,9 @@ router.post('/:id/messages', async (req, res) => {
       if (result.usage) lastUsage = result.usage;
       lastFinishReason = result.finishReason;
 
-      const toolCallsFound = parseToolCalls(result.content);
+      const outputFixes = [];
+      const toolCallsFound = parseToolCalls(result.content, outputFixes);
+      outputFixes.push(...detectArgFixes(toolCallsFound));
       // Route logging (observation only — the if-chain below still decides).
       // Captured before the parallel cap mutates toolCallsFound.
       const roundToolCallCount = toolCallsFound.length;
@@ -397,6 +401,13 @@ router.post('/:id/messages', async (req, res) => {
         edge,
         reason,
         content: result.content,
+        fixes: outputFixes,
+        ctx: {
+          prompt: promptTokens,
+          limit: ctxLimit,
+          completion: result.usage?.completion_tokens ?? null,
+          finish: result.finishReason ?? null,
+        },
         pred: evalPredicates({
           content: result.content,
           toolCallCount: roundToolCallCount,
@@ -464,6 +475,7 @@ router.post('/:id/messages', async (req, res) => {
             console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
             const context = {
           conversationId: conv.id,
+          session: conv.session || null,
               autorun,
               cite,
               confirmFn: (command) => {
@@ -511,6 +523,7 @@ router.post('/:id/messages', async (req, res) => {
         const roundStart = Date.now();
         const context = {
           conversationId: conv.id,
+          session: conv.session || null,
           autorun,
           cite,
           confirmFn: (command) => {
@@ -696,6 +709,7 @@ router.post('/:id/messages', async (req, res) => {
         console.warn(`[tool-loop] forced answer still contains tool call(s): ${lastChanceCalls.map(c => c.name).join(', ')}, executing last chance`);
         const context = {
           conversationId: conv.id,
+          session: conv.session || null,
           autorun,
           cite,
           confirmFn: (command) => {
@@ -736,6 +750,7 @@ router.post('/:id/messages', async (req, res) => {
         console.warn(`[safety-net] finalContent contains unparsed tool call(s): ${safetyCalls.map(c => c.name).join(', ')} — executing`);
         const context = {
           conversationId: conv.id,
+          session: conv.session || null,
           autorun,
           cite,
           confirmFn: (command) => {

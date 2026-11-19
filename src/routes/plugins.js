@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPluginStatuses, getPluginAuth, listPluginGroups, runPluginCardAction, setPluginEnabled, updatePluginConfig } from '../services/tools.js';
+import { getPluginStatuses, getPluginAuth, listPluginGroups, runPluginCardAction, runPluginListDelete, setPluginEnabled, updatePluginConfig } from '../services/tools.js';
 
 const router = Router();
 
@@ -63,6 +63,19 @@ router.post('/:group/action/:id', async (req, res) => {
   if (!/^[a-z0-9-]{1,32}$/.test(req.params.id)) return res.status(400).json({ error: 'Bad action id' });
   try {
     const result = await runPluginCardAction(req.params.group, req.params.id);
+    if (result?.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete one row of a card list (Memories). Body: { id } — an item id from GET /api/plugins.
+router.post('/:group/list/delete', async (req, res) => {
+  const id = req.body?.id;
+  if (typeof id !== 'string' || !/^[\w-]{1,80}$/.test(id)) return res.status(400).json({ error: 'Bad item id' });
+  try {
+    const result = await runPluginListDelete(req.params.group, id);
     if (result?.error) return res.status(400).json(result);
     res.json(result);
   } catch (err) {

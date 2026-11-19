@@ -25,6 +25,27 @@ export function fixPythonBooleans(code) {
   return code;
 }
 
+// run_python: the model sometimes writes a backslash followed by a real newline inside a string
+// literal (a double-escaped "\\n" that lost its n). Put the escape back.
+export function fixEscapedNewlines(code) {
+  return code.replace(/(["'])([^"']*)\\\n([^"']*)\1/g, (m, q, before, after) => `${q}${before}\\n${after}${q}`);
+}
+
+// Which argument-level auto-fixes the calls of one round will receive when they execute. Pure;
+// the tool loops record the answer in the route log next to the parser's own fixes.
+export function detectArgFixes(calls = []) {
+  const fixes = [];
+  for (const call of calls) {
+    if (call?.name !== 'run_python') continue;
+    const code = call.arguments?.code;
+    if (typeof code !== 'string') continue;
+    const booleans = fixPythonBooleans(code);
+    if (booleans !== code) fixes.push('python-booleans');
+    if (fixEscapedNewlines(booleans) !== booleans) fixes.push('escaped-newlines');
+  }
+  return fixes;
+}
+
 export function tagLineCount(stdout, limit) {
   const out = (stdout || '').slice(0, limit);
   const lines = out.split('\n').filter(Boolean);
@@ -336,6 +357,12 @@ function registerPlugin(plugin) {
     // Optional sync predicate: while true, only this group's tools (plus `core`) are offered
     // and executable — Books' "Book only" switch. See exclusiveGroup().
     exclusive: typeof plugin.exclusive === 'function' ? plugin.exclusive : null,
+    // Optional sync function ({ session }) → a section rendered at the very END of the system
+    // prompt. For content that changes between conversations or over time (Memories): whatever
+    // changes there leaves the llama KV prefix before it valid.
+    promptTail: typeof plugin.promptTail === 'function' ? plugin.promptTail : null,
+    // Offered even while another group is exclusive, like `core` (Memories).
+    alwaysOffered: !!plugin.alwaysOffered,
   };
   console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
 }
@@ -739,7 +766,7 @@ function exclusiveGroup() {
 }
 
 function groupOffered(name, exclusive) {
-  return !exclusive || name === exclusive || name === 'core';
+  return !exclusive || name === exclusive || name === 'core' || !!toolGroups[name]?.alwaysOffered;
 }
 
 function toolOffered(toolName, exclusive) {
@@ -788,6 +815,15 @@ export function getPluginAuth(groupName) {
 // Run a card helper button (see cardActions in listPluginGroups). Looked up in pluginModules,
 // not toolGroups, so the helper works while the plugin is still disabled — the user installs
 // the extension first and enables Browser Search after.
+// Delete one row of a plugin's card list (configUi().list with `deletable`). The plugin's
+// listDelete(id) decides what the id means and validates it; works only while the plugin is enabled.
+export async function runPluginListDelete(groupName, itemId) {
+  const plugin = pluginModules[groupName]?.plugin;
+  if (!plugin || typeof plugin.listDelete !== 'function') return { error: 'This plugin has no deletable list' };
+  if (!toolGroups[groupName]) return { error: 'This plugin is disabled' };
+  return plugin.listDelete(String(itemId ?? ''));
+}
+
 export async function runPluginCardAction(groupName, actionId) {
   const plugin = pluginModules[groupName]?.plugin;
   if (!plugin || typeof plugin.cardAction !== 'function') return { error: 'No actions for this plugin' };
@@ -848,7 +884,8 @@ export function getDatetimeStamp(now = new Date()) {
   return `[Now: ${date}, ${time} ${timezone} (UTC${offset > 0 ? '-' : '+'}${Math.abs(offset / 60)}h) — UTC ${now.toISOString()}]`;
 }
 
-export function getSystemPrompt({ applets = false, precision = false, cite = false } = {}) {
+// `session` is the conversation's session color (null when unknown); only promptTail hooks read it.
+export function getSystemPrompt({ applets = false, precision = false, cite = false, session = null } = {}) {
   const exclusive = exclusiveGroup();
   const offeredGroups = Object.entries(toolGroups)
     .filter(([name, g]) => groupOffered(name, exclusive) && isGroupEnabled(g))
@@ -873,11 +910,18 @@ export function getSystemPrompt({ applets = false, precision = false, cite = fal
   // common path for any conversation that can read code.
   const citeSection = cite ? CITE_RULES : '';
 
-  const resolveDyn = (v) => { try { return typeof v === 'function' ? v() : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
+  const resolveDyn = (v, arg) => { try { return typeof v === 'function' ? v(arg) : v; } catch (err) { console.warn(`[tools] plugin prompt/routing threw: ${err.message}`); return null; } };
   const groupSections = offeredGroups
     .map(g => resolveDyn(g.prompt))
     .filter(Boolean)
     .join('\n\n');
+
+  // With no promptTail plugin enabled this is '' and the prompt is byte-identical to before.
+  const tailSections = offeredGroups
+    .map(g => g.promptTail ? resolveDyn(g.promptTail, { session }) : null)
+    .filter(Boolean)
+    .map(t => `${t}\n\n`)
+    .join('');
 
   const routingLines = offeredGroups
     .map(g => resolveDyn(g.routing))
@@ -1069,7 +1113,7 @@ For type="html" applets:
 - Data files saved to project directory are available via /files/FILENAME (e.g. fetch('/files/optionchains_123.csv'))
 - APPLET DATA LOADING: When tool results produce CSV files (_autoSaved), load them DIRECTLY in the applet via fetch('/files/FILENAME.csv') and parse in JS. Do NOT use run_python to pre-process or convert CSVs — this wastes tool rounds and introduces column name/value case errors. The CSV is already in the right format. Parse it client-side with split/map.
 
-` : ''}## FINAL REMINDER
+` : ''}${tailSections}## FINAL REMINDER
 All tool calls MUST use <tool_call></tool_call> tags. Bare JSON is silently ignored — the tool will NOT run.`;
 }
 
@@ -1094,7 +1138,7 @@ function normalizeToolCallKeys(raw) {
     .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)"(\s*:)/g, '$1"$2"$3');
 }
 
-function repairToolCallJson(raw) {
+function repairToolCallJson(raw, note = () => {}) {
   raw = normalizeToolCallKeys(raw.replace(/\s*\/>/g, '}').replace(/<\/[^>]+>/g, ''));
   const quoteFixed = raw.replace(/:(\s*)([a-zA-Z_][a-zA-Z0-9_]*)"/g, ':$1"$2"');
   const nameMatch = quoteFixed.match(/"name"\s*:\s*"([^"]+)"/);
@@ -1104,6 +1148,7 @@ function repairToolCallJson(raw) {
     const parsed = JSON.parse(quoteFixed);
     if (parsed.name) {
       console.log(`[parseToolCalls] repaired JSON by fixing missing quotes for tool "${name}"`);
+      note('repair-quotes');
       return { name: parsed.name, arguments: parsed.arguments || {} };
     }
   } catch { /* continue to other repair attempts */ }
@@ -1134,6 +1179,7 @@ function repairToolCallJson(raw) {
     const parsed = JSON.parse(escaped);
     if (parsed.name) {
       console.log(`[parseToolCalls] repaired JSON by smart-escaping newlines for tool "${name}"`);
+      note('repair-newlines');
       return { name: parsed.name, arguments: parsed.arguments || {} };
     }
   } catch { /* continue to next attempt */ }
@@ -1180,6 +1226,7 @@ function repairToolCallJson(raw) {
         }
       }
       console.log(`[parseToolCalls] manually extracted args (${Object.keys(args).join(', ')}) for tool "${name}"`);
+      note('repair-extracted');
       return { name, arguments: args };
     }
   }
@@ -1187,28 +1234,56 @@ function repairToolCallJson(raw) {
   return null;
 }
 
-export function parseToolCalls(text) {
+// True when a block is already a well-formed call: strict JSON with a "name". Only blocks that
+// fail this are reported as patched — the tolerant replacements below also touch valid calls
+// (a query containing the word True), and that is not a model error.
+function isStrictToolCall(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return !!parsed && typeof parsed.name === 'string' && parsed.name.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} text   the model's round content
+ * @param {string[]} [fixes]  optional collector: one entry per patch the parser needed to read a
+ *   call (see OUTPUT_FIXES in services/routeLog.js). Observation only — passing it changes nothing
+ *   about what is parsed. Both tool loops hand it to the route log.
+ */
+export function parseToolCalls(text, fixes = null) {
   const calls = [];
+  const note = fix => { if (fixes) fixes.push(fix); };
 
   text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
 
+  const beforeEquals = text;
   text = text.replace(/"(name|arguments)\s*=\s*([^"{}[\],]+)"/g, '"$1": "$2"');
   text = text.replace(/"(\w+)"\s*=\s*/g, '"$1": ');
+  if (text !== beforeEquals) note('equals-syntax');
 
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
     const raw = match[1];
-    if (!raw.trim()) continue;   // empty block — Claude emitted one after its <invoke> blocks on 2026-11-04
-    const normalized = normalizeToolCallKeys(raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null'));
+    if (!raw.trim()) { note('empty-block'); continue; }   // empty block — Claude emitted one after its <invoke> blocks on 2026-11-04
+    const literals = raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    const normalized = normalizeToolCallKeys(literals);
+    if (!isStrictToolCall(raw)) {
+      if (literals !== raw) note('python-literals');
+      if (normalized !== literals) note('key-normalized');
+    }
     try {
       const parsed = JSON.parse(normalized);
       if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });
+      else note('no-name');
     } catch (e) {
       console.warn(`[parseToolCalls] JSON.parse failed: ${e.message}`);
-      const repaired = repairToolCallJson(normalized);
+      const repaired = repairToolCallJson(normalized, note);
       if (repaired) {
         calls.push(repaired);
       } else {
+        note('unparseable-block');
         console.error(`[parseToolCalls] Could not repair tool call. Raw (first 300 chars):\n${raw.slice(0, 300)}`);
       }
     }
@@ -1216,7 +1291,9 @@ export function parseToolCalls(text) {
   // Claude's native tool-use syntax. The Anthropic backend gets no `tools` in the request, so the
   // model sometimes writes the format it was trained on instead of the <tool_call> JSON the prompt
   // asks for (2026-11-04 16:39Z, run_python in <invoke>/<parameter> tags, then an empty <tool_call>).
-  calls.push(...parseInvokeBlocks(text));
+  const invoked = parseInvokeBlocks(text);
+  for (let n = 0; n < invoked.length; n++) note('invoke-syntax');
+  calls.push(...invoked);
   if (calls.length > 0) return calls;
 
   // Fallback: detect bare JSON tool calls without tags
@@ -1237,8 +1314,9 @@ export function parseToolCalls(text) {
       else if (ch === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
     }
     let candidate = text.slice(start, end);
-    if (depth > 0) candidate += '}'.repeat(depth);
+    if (depth > 0) { candidate += '}'.repeat(depth); note('bare-json-unclosed'); }
     let parsed = null;
+    const before = calls.length;
     try {
       parsed = JSON.parse(candidate);
     } catch {
@@ -1261,8 +1339,9 @@ export function parseToolCalls(text) {
       try {
         parsed = JSON.parse(escaped);
         console.log(`[parseToolCalls] bare JSON parsed after smart-escaping newlines`);
+        note('repair-newlines');
       } catch {
-        const repaired = repairToolCallJson(candidate);
+        const repaired = repairToolCallJson(candidate, note);
         if (repaired) calls.push(repaired);
       }
     }
@@ -1270,6 +1349,7 @@ export function parseToolCalls(text) {
       const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
       calls.push({ name: parsed.name, arguments: args });
     }
+    if (calls.length > before) note('bare-json');
     i = end > start ? end : start + 1;
   }
   return calls;

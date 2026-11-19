@@ -3,7 +3,7 @@ import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolResults, hitCompletionCap } from '../services/llm.js';
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
-import { getSystemPrompt, getDatetimeStamp, parseToolCalls, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { getSystemPrompt, getDatetimeStamp, parseToolCalls, detectArgFixes, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
 import config from '../config.js';
 import { truncatePrevResult } from '../services/pipelineContext.js';
@@ -61,6 +61,7 @@ router.post('/:id/tasks', async (req, res) => {
 
   const { tasks, applets, autorun, review, precision, cite, retain } = req.body;
   console.log(`[task-processor] autorun=${autorun} cite=${!!cite} retain=${!!retain}`);
+  if (req.body.session) conversations.setSession(conv.id, req.body.session);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -104,7 +105,7 @@ router.post('/:id/tasks', async (req, res) => {
     cancelReview(conv.id);
   });
 
-  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision, cite: !!cite });
+  const systemPrompt = getSystemPrompt({ applets: !!applets, precision: !!precision, cite: !!cite, session: conv.session || null });
   const taskRunResults = [];
   let prev = { result: null, files: [] }; // output from immediately preceding step
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -450,7 +451,9 @@ CRITICAL RULES:
       if (result.usage) lastUsage = result.usage;
       lastFinishReason = result.finishReason;
 
-      const toolCallsFound = parseToolCalls(result.content);
+      const outputFixes = [];
+      const toolCallsFound = parseToolCalls(result.content, outputFixes);
+      outputFixes.push(...detectArgFixes(toolCallsFound));
 
       // Route logging (observation only — the if-chain below still decides).
       // Captured before the parallel cap mutates toolCallsFound.
@@ -464,6 +467,13 @@ CRITICAL RULES:
         edge,
         reason,
         content: result.content,
+        fixes: outputFixes,
+        ctx: {
+          prompt: promptTokens,
+          limit: ctxLimit,
+          completion: result.usage?.completion_tokens ?? null,
+          finish: result.finishReason ?? null,
+        },
         pred: evalPredicates({
           content: result.content,
           toolCallCount: roundToolCallCount,
@@ -677,6 +687,7 @@ CRITICAL RULES:
 function buildToolContext(autorun, cite, conv, res) {
   return {
     conversationId: conv.id,
+    session: conv.session || null,
     autorun,
     cite,
     confirmFn: (command) => {

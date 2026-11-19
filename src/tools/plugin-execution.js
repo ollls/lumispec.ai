@@ -2,7 +2,7 @@ import { writeFile, unlink } from 'fs/promises';
 import { join, resolve } from 'path';
 import { spawn } from 'child_process';
 import config from '../config.js';
-import { fixPythonBooleans, tagLineCount } from './index.js';
+import { fixPythonBooleans, fixEscapedNewlines, tagLineCount } from './index.js';
 import { getPythonEnv, toolEnv, missingModuleHint, pythonEnvPromptLine } from '../services/pythonEnv.js';
 
 // Which Python (services/pythonEnv.js): PYTHON_VENV's interpreter, or python3 on PATH. Probed once.
@@ -45,9 +45,7 @@ export default {
 
         code = fixPythonBooleans(code);
         // Fix double-escaping: LLM sometimes produces a backslash + real newline
-        code = code.replace(/(["'])([^"']*)\\\n([^"']*)\1/g, (m, q, before, after) => {
-          return `${q}${before}\\n${after}${q}`;
-        });
+        code = fixEscapedNewlines(code);
 
         const projectDir = resolve(config.sourceDir || process.env.HOME);
         const tmpFile = join(projectDir, '.tmp_script.py');

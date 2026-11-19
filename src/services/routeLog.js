@@ -74,6 +74,26 @@ export function evalPredicates({
   };
 }
 
+// Every value a record's `fixes` array can hold.
+export const OUTPUT_FIXES = {
+  // parseToolCalls — the call was not valid as written
+  'equals-syntax': '"name"= or "key"= written instead of a colon',
+  'python-literals': 'True / False / None in the call JSON',
+  'key-normalized': 'tool named under "function"/"tool", or a key missing its opening quote',
+  'no-name': 'block parsed as JSON but names no tool (dropped)',
+  'repair-quotes': 'value missing its opening quote',
+  'repair-newlines': 'raw newline or control character inside a JSON string',
+  'repair-extracted': 'JSON unrecoverable; code/content argument cut out by hand',
+  'unparseable-block': 'tagged block that no repair could read (dropped)',
+  'empty-block': 'empty <tool_call></tool_call>',
+  'invoke-syntax': '<invoke>/<parameter> syntax instead of <tool_call> JSON',
+  'bare-json': 'call written with no <tool_call> tag',
+  'bare-json-unclosed': 'untagged call cut off before its closing braces',
+  // run_python arguments, fixed at execution
+  'python-booleans': 'true / false / null in Python code',
+  'escaped-newlines': 'backslash + real newline inside a Python string literal',
+};
+
 function firedCount(pred) {
   let n = pred.toolCalls > 0 ? 1 : 0;
   for (const key of FIRED_KEYS) if (pred[key]) n++;
@@ -101,9 +121,16 @@ function hasUnactedPredicate(loop, pred) {
  * loop cannot act on fired. Otherwise a length + sha stands in. Content is never truncated: every
  * predicate regex can match anywhere in the string, so a truncated record would not replay
  * faithfully.
+ *
+ * Output monitoring (2026-11-15): `ctx` is the measured prompt of the round ({ prompt, limit,
+ * completion, finish }) and `fixes` lists every patch needed to read or run the round's tool calls
+ * — see OUTPUT_FIXES. Together they answer "do output errors climb as the window fills", which the
+ * repair edges alone cannot: a call the parser patches silently never reaches a repair edge.
+ * A round with fixes always keeps its content. `scripts/output-fixes.mjs` reports on them.
  */
 export async function logRouteDecision({
   run, loop, step = null, round, edge, reason = null, pred, state = {}, content = '',
+  fixes = [], ctx = null,
 }) {
   if (!config.routeLog) return;
   try {
@@ -118,8 +145,11 @@ export async function logRouteDecision({
       edge,
       reason,
       state: { ...state, contentLen: content.length },
+      backend: config.llm?.backend || 'llama',
     };
-    if ((edge !== 'tools' && edge !== 'end') || firedCount(pred) >= 2 || hasUnactedPredicate(loop, pred)) {
+    if (ctx) rec.ctx = ctx;
+    if (fixes.length) rec.fixes = fixes;
+    if (fixes.length || (edge !== 'tools' && edge !== 'end') || firedCount(pred) >= 2 || hasUnactedPredicate(loop, pred)) {
       rec.content = content;
     } else {
       rec.contentSha = createHash('sha256').update(content).digest('hex').slice(0, 16);
