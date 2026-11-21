@@ -18,6 +18,8 @@ Type in the text box at the bottom and press **Enter** to send. Use **Shift+Ente
 
 Click any conversation in the left sidebar to switch to it. Your previous chat is preserved — switch back anytime.
 
+Above the list you can narrow it down: the color chips show one session color, the **Filter by title…** box keeps chats whose title contains what you type, and the pin button at the end of that row steps through all chats, pinned only, and not pinned. The three work together.
+
 ## Top Bar
 
 The top bar shows the status of connected services:

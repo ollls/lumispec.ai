@@ -37,6 +37,11 @@ launch scripts are under [Choosing & running your model](#-choosing--running-you
 
 ---
 
+## 📌 v1.6.3 — Find your pinned chats
+
+- **Filter by pinned.** A pin button next to the sidebar's title filter steps through all, pinned only and not pinned; it combines with the color chips and the title box.
+- **Llama Dashboard shows only what it has.** A card with nothing to show is left out: off Linux, or without an NVIDIA card, the dashboard is the server, model and speed cards. See [`releases/1.6.3.md`](releases/1.6.3.md).
+
 ## 🖥 v1.6.2 — It shows you the server behind it
 
 - **Llama Dashboard** *(new)* — a chip icon in the top bar opens a panel on the llama-server the app talks to: model and build, the launch command as it is running, GPU memory and temperature, generation speed and cache reuse, GPU errors from the kernel log, and how far the llama.cpp checkout is behind upstream. Nothing changes in how the server is started, and nothing is updated from the panel. **Linux with an NVIDIA card is recommended:** that is where the GPU, stability and launch-command cards appear. On macOS and Windows the dashboard shows the server, model and speed cards only.
@@ -136,7 +141,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.6.2.md`](releases/1.6.2.md) (latest) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.6.3.md`](releases/1.6.3.md) (latest) · [`releases/1.6.2.md`](releases/1.6.2.md) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -557,7 +562,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
 | [`docs/BOOKS.md`](docs/BOOKS.md) | **Books** — add a folder, file or PDF as a book, open it, chat against it; Book only, sections, limits |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | **Memories** — facts kept across conversations: saving, approval, colors, list size, files |
-| [`releases/1.6.2.md`](releases/1.6.2.md) | v1.6.2 release notes (latest) — Llama Dashboard, tokens per second in the top bar |
+| [`releases/1.6.3.md`](releases/1.6.3.md) | v1.6.3 release notes (latest) — pinned / not pinned filter in the sidebar, Llama Dashboard leaves out empty cards |
+| [`releases/1.6.2.md`](releases/1.6.2.md) | v1.6.2 release notes — Llama Dashboard, tokens per second in the top bar |
 | [`releases/1.6.1.md`](releases/1.6.1.md) | v1.6.1 release notes — Memories plugin, slot layouts, route log records tool-call patches |
 | [`releases/1.6.0.md`](releases/1.6.0.md) | v1.6.0 release notes — Books plugin, PDF books, Troubleshoot on any answer |
 | [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
