@@ -369,6 +369,27 @@ Lower `--ctx-size` if you run out of VRAM — the app adapts automatically, sinc
 5. **Try an applet** — ask for *"a Chart.js bar chart of [some data]"* and it'll render inline.
 6. **Pin important chats** — the 📌 button on a conversation persists it across restarts.
 
+### Macros in saved prompts
+
+A prompt saved with **Save Prompt** or **Save Session** can carry `{$name}` macros. They are filled in each time the prompt is loaded from the Prompts or Sessions menu (or a session prompt auto-submits), so a saved prompt never goes out with a stale date.
+
+| Macro | Becomes | Example |
+|---|---|---|
+| `{$date}` | today's date | `2026-11-19` |
+| `{$time}` | current time | `04:02 PM` |
+| `{$day}` | weekday | `Thursday` |
+| `{$month}` | month name | `November` |
+| `{$year}` | year | `2026` |
+| `{$location}` | `LOCATION` from `.env` | `New York, NY` |
+
+Any other name is your own variable: `{$symbol}` opens a small form asking for its value before the prompt loads. A type after a colon gives a picker — `{$start:date}`, `{$period:daterange}`, `{$m:month}`.
+
+- The `$` is required. `{DATE}` is not a macro and reaches the model as written.
+- Values are set when the prompt is loaded into the input box, not when you press Send, and come from the browser's clock and timezone.
+- Macros typed straight into the input box are not expanded — only saved prompts and sessions.
+
+More in [`docs/HELP.md`](docs/HELP.md).
+
 ---
 
 ## ⚙️ Configuration
