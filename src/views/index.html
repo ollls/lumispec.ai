@@ -157,15 +157,26 @@
       <div id="plugin-status-container" class="contents"></div>
       <!-- Tool usage -->
       <div class="relative flex items-center gap-2">
-        <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1 hidden">
+        <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1" title="Tool calls since this page was loaded">
           <span>🔧</span>
           <span id="tool-usage-count">0</span>
         </button>
         <div id="tool-usage-dropdown" class="hidden absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
         </div>
       </div>
+      <!-- Llama Dashboard (src/public/js/llama-dashboard.js adds the amber alert dot) -->
+      <div class="relative flex items-center">
+        <button id="llama-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center" title="Llama Dashboard — server, GPU, speed, stability, updates" aria-label="Llama Dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="5" y="5" width="14" height="14" rx="2"/>
+            <rect x="9.5" y="9.5" width="5" height="5" rx="0.8"/>
+            <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>
+          </svg>
+        </button>
+      </div>
     </div>
-      <div class="ml-auto mr-10 flex items-center gap-6">
+      <!-- Menus start 32px after the status row (header gap 16 + margin 16); the free space sits between the menus and the right-aligned Context group -->
+      <div class="flex items-center gap-6" style="margin-left:16px">
         <div class="relative flex items-center">
           <button id="plugins-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Enable/disable plugin groups">Plugins</button>
         </div>
@@ -201,14 +212,17 @@
         </div>
 
       </div>
-      <div class="flex items-center gap-4">
+      <!-- Right-aligned group (ml-auto): Slots hugs the right edge, the changing figures grow to the left -->
+      <div class="ml-auto flex items-center" style="gap:8px">
         <div class="flex items-center gap-2">
           <span class="text-zinc-500">Context:</span>
-          <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
+          <div class="h-2 bg-zinc-800 rounded-full overflow-hidden" style="width:77px">
             <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
           </div>
           <span id="context-label" class="text-zinc-500">0 / 131K</span>
-          <span id="elapsed-timer" class="text-zinc-600 text-xs hidden"></span>
+          <!-- Always shown, at their natural width: only the Slots label after them can shift, by a few pixels -->
+          <span id="elapsed-timer" class="text-zinc-600 text-xs" style="font-variant-numeric:tabular-nums" title="Time the last answer took">0s</span>
+          <span id="speed-label" class="text-zinc-600 text-xs" style="font-variant-numeric:tabular-nums" title="Generation speed of the last answer">0 tok/s</span>
         </div>
         <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
           Slots: <span id="slots-summary">—</span>
@@ -437,5 +451,6 @@
 <script src="/lib/flatpickr.min.js"></script>
 <script src="/js/applet-fit.js?v=1"></script>
 <script src="/js/troubleshoot.js?v=2"></script>
-<script src="/js/app.js?v=12"></script>
+<script src="/js/app.js?v=15"></script>
+<script src="/js/llama-dashboard.js?v=1"></script>
 </html>

@@ -68,10 +68,11 @@ function textSafeColor(color) {
 let _elapsedInterval = null;
 function startElapsedTimer(t0 = Date.now()) {
   const tick = () => {
-    const s = Math.floor((Date.now() - t0) / 1000);
-    elapsedTimer.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+    elapsedTimer.textContent = fmtElapsed(Math.floor((Date.now() - t0) / 1000));
   };
-  elapsedTimer.classList.remove('hidden');
+  // The speed is known only when the answer ends
+  speedLabel.textContent = '… tok/s';
+  speedLabel.title = 'Generation speed appears when the answer is finished';
   tick();
   clearInterval(_elapsedInterval);
   _elapsedInterval = setInterval(tick, 1000);
@@ -79,6 +80,26 @@ function startElapsedTimer(t0 = Date.now()) {
 function stopElapsedTimer() {
   clearInterval(_elapsedInterval);
   _elapsedInterval = null;
+}
+
+// The timer and the speed figure next to the Context bar are always on screen, so the top bar
+// keeps its layout: "0s" and "0 tok/s" until the conversation has a finished turn, then that
+// turn's time and speed. Kept per conversation for the life of the page (convId → { elapsed
+// seconds, speed }), so switching back shows the conversation's own last turn.
+const turnStats = new Map();
+const fmtElapsed = (s) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`);
+function noteTurnSpeed(convId, speed) {
+  turnStats.set(convId, { ...(turnStats.get(convId) || {}), speed: speed || null });
+}
+function endTurnStats(convId) {
+  const live = liveStreams.get(convId);
+  if (!live) return;
+  turnStats.set(convId, { ...(turnStats.get(convId) || {}), elapsed: Math.floor((Date.now() - live.startedAt) / 1000) });
+}
+function showTurnStats() {
+  const st = turnStats.get(state.currentConversationId) || {};
+  elapsedTimer.textContent = fmtElapsed(st.elapsed || 0);
+  updateSpeedLabel(st.speed || null, st.elapsed != null);
 }
 
 // ── Live streams ──────────────────────────────────────
@@ -95,6 +116,7 @@ const liveStreams = new Map();
 function beginStream(convId, nodes) {
   const stream = { controller: new AbortController(), startedAt: Date.now(), nodes };
   liveStreams.set(convId, stream);
+  noteTurnSpeed(convId, null);   // the previous turn's speed does not describe this one
   syncStreamUi();
   renderSidebar();
   return stream;
@@ -107,7 +129,7 @@ function syncStreamUi() {
   sendBtn.disabled = locked || !!live;
   stopBtn.classList.toggle('hidden', !live);
   if (live) startElapsedTimer(live.startedAt);
-  else stopElapsedTimer();
+  else { stopElapsedTimer(); showTurnStats(); }
 }
 
 // After a turn ends, replace its live bubbles with the stored messages. A stopped turn is stored
@@ -216,6 +238,29 @@ const slotCards = document.getElementById('slot-cards');
 const contextBar = document.getElementById('context-bar');
 const contextLabel = document.getElementById('context-label');
 const elapsedTimer = document.getElementById('elapsed-timer');
+const speedLabel = document.getElementById('speed-label');
+
+// Generation speed of the answer just finished, next to the Context bar. `speed` is the
+// usage event's `speed` object (llama backend only; the last round of the turn). The Llama
+// Dashboard shows the same figures across answers.
+function updateSpeedLabel(speed, hadTurn = false) {
+  if (!speed || speed.gen == null) {
+    speedLabel.textContent = '0 tok/s';
+    speedLabel.title = hadTurn
+      ? 'No speed reported for the last answer (stopped early, or not the llama backend)'
+      : 'Generation speed of the last answer — none yet in this conversation';
+    return;
+  }
+  const n = (v) => Number(v || 0).toLocaleString('en-US');
+  const all = (speed.promptN || 0) + (speed.cacheN || 0);
+  const lines = [
+    `Generation: ${speed.gen} tokens/s over ${n(speed.genN)} tokens (last round of this answer)`,
+    `Prompt: ${n(speed.promptN)} tokens read${speed.prompt != null ? ` at ${n(Math.round(speed.prompt))} tokens/s` : ''}, ${n(speed.cacheN)} from cache${all ? ` (${Math.round((speed.cacheN / all) * 100)}%)` : ''}`,
+  ];
+  if (speed.draftN) lines.push(`Draft tokens accepted: ${n(speed.draftAccepted)} of ${n(speed.draftN)} (${Math.round((speed.draftAccepted / speed.draftN) * 100)}%)`);
+  speedLabel.textContent = `${Math.round(speed.gen)} tok/s`;
+  speedLabel.title = lines.join('\n');
+}
 const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
 const toolUsageToggle = document.getElementById('tool-usage-toggle');
@@ -1925,6 +1970,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
             if (data.usage) {
               // context_tokens = measured prompt + last completion (what the slot holds); total_tokens is a fallback
               const total = data.usage.context_tokens || data.usage.total_tokens || data.usage.prompt_tokens + data.usage.completion_tokens || 0;
+              noteTurnSpeed(convId, data.usage.speed);   // shown when the turn ends (syncStreamUi)
               if (visible()) updateContextBar(total);
             }
             if (data.error) {
@@ -1941,6 +1987,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
       bubble.className = 'max-w-[85%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
+    endTurnStats(convId);
     liveStreams.delete(convId);
     syncStreamUi();
     renderSidebar(); // drop the "working" dot now; the stored turn may take a moment to settle
@@ -2317,6 +2364,7 @@ async function sendTasks(tasks, displayText) {
 
             if (data.usage) {
               const total = data.usage.context_tokens || data.usage.total_tokens || (data.usage.prompt_tokens + data.usage.completion_tokens) || 0;
+              noteTurnSpeed(convId, data.usage.speed);   // shown when the turn ends (syncStreamUi)
               if (visible()) updateContextBar(total);
             }
 
@@ -2346,6 +2394,7 @@ async function sendTasks(tasks, displayText) {
     }
     // The last step's output is the actual answer — leave it open
     if (lastOutputFold) lastOutputFold.open = true;
+    endTurnStats(convId);
     liveStreams.delete(convId);
     syncStreamUi();
     renderSidebar(); // drop the "working" dot now; the stored turn may take a moment to settle
@@ -2473,6 +2522,13 @@ function trackToolUse(name) {
 function renderToolUsageDropdown() {
   toolUsageDropdown.innerHTML = '';
   const entries = Object.entries(toolUsageCounts).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    // The icon is always shown (count 0), so the empty list needs a line of its own
+    const item = document.createElement('div');
+    item.className = 'px-3 py-1.5 text-xs text-zinc-500';
+    item.textContent = 'No tools used yet';
+    toolUsageDropdown.appendChild(item);
+  }
   for (const [name, count] of entries) {
     const item = document.createElement('div');
     item.className = 'px-3 py-1.5 text-xs flex justify-between gap-4';
@@ -2803,8 +2859,7 @@ function updateInputLock() {
   input.disabled = locked;
   input.placeholder = locked ? 'Select or create a session to start…' : 'Type your message…';
   syncStreamUi();
-  // The timer belongs to a turn; don't leave another conversation's time on screen
-  if (!liveStreams.has(state.currentConversationId)) elapsedTimer.classList.add('hidden');
+  // syncStreamUi() also puts this conversation's own last time and speed next to the Context bar
 }
 
 // ── Event handlers ────────────────────────────────────

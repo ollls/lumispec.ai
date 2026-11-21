@@ -10,6 +10,7 @@ import { expandTemplateTags, TEMPLATE_TAG_RE } from '../services/templateExpansi
 import config from '../config.js';
 import { getCompactByColor } from '../services/compacts.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
+import { recordTimings } from '../services/llamaDashboard.js';
 import { looksLikeChainQuote } from '../services/chainQuote.js';
 
 const router = Router();
@@ -316,6 +317,8 @@ router.post('/:id/messages', async (req, res) => {
           const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
           const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
           usage = { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: prompt + predicted };
+          const speed = recordTimings(chunk.timings);   // Llama Dashboard; null off llama
+          if (speed) usage.speed = speed;
         }
       }
 
@@ -407,6 +410,7 @@ router.post('/:id/messages', async (req, res) => {
           limit: ctxLimit,
           completion: result.usage?.completion_tokens ?? null,
           finish: result.finishReason ?? null,
+          speed: result.usage?.speed ?? null,
         },
         pred: evalPredicates({
           content: result.content,

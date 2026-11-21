@@ -88,7 +88,8 @@ Notes that matter for the code:
   `--cache-reuse 256`) produced an `NVRM: Xid 8` GPU channel hang under a tool-heavy session
   (2026-08-29 10:31; RC watchdog killed llama-server, no reboot required). `CRASH.md` records an
   earlier `Xid 79` on a different config. Change one flag at a time and watch
-  `journalctl -k | grep Xid`.
+  `journalctl -t kernel | grep Xid` (`-k` is the current boot only and showed none of the three Xid 8
+  events on record: 2026-08-29, 2026-11-09, 2026-11-16) — or the Llama Dashboard's Stability card.
 
 ## Project Structure
 ```
@@ -118,11 +119,13 @@ src/
     sessions.js            # Session prompts CRUD (upsert by color, reorder, PATCH title, LLM-generated titles)
     tools.js               # List tools, toggle enable/disable (individual tool level)
     templates.js           # Template CRUD, background LLM review on save, on-demand review endpoint
+    llama.js               # Llama Dashboard: GET /dashboard, POST /check-updates, POST /speed/reset
   services/
     conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser), prompt sizing + tool-result trimming
     tools.js               # Backward-compat barrel (re-exports from ../tools/index.js)
     slots.js               # Slot monitor (polling, assignment, pin/unpin, per-slot n_ctx lookup)
+    llamaDashboard.js      # Llama Dashboard: server/process/GPU/Xid/updates collectors, per-answer speed recorder (pure parsers tested)
     browserBridge.js       # WebSocket endpoint /ws/browser for the Chrome extension (search/fetch requests, heartbeat, token)
     pdfToMarkdown.js       # Books: runs scripts/pdf_to_md.py (PyMuPDF) with page progress
     books.js               # Books library (data/books/<id>/), section splitting, index entries, search/read (pure parts tested)
@@ -138,6 +141,7 @@ src/
     tasks.js               # Task pipeline persistence (data/tasks.json)
   views/index.html         # Main chat UI (full-width top bar, sidebar, slot panel)
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
+  public/js/llama-dashboard.js # Llama Dashboard panel (plain script, inline styles, loaded after app.js)
   public/js/troubleshoot.js # Troubleshoot prompt builder for any answer (turn report + conversation_read call); plain script, window.Troubleshoot
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
@@ -176,6 +180,9 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 | `/api/health/internet` | GET | Internet connectivity check (1.1.1.1) |
 | `/api/health/search` | GET/POST | Search engine availability check / switch engine |
 | `/api/health/liteapi` | GET | LiteAPI key validation |
+| `/api/llama/dashboard` | GET | Llama Dashboard data: server, process, slots, GPU, Xid events, speed, checkout, updates, alerts |
+| `/api/llama/check-updates` | POST | Ask GitHub again how far the llama.cpp checkout is behind (at most once a minute), awaited |
+| `/api/llama/speed/reset` | POST | Clear the recorded per-answer speed samples |
 | `/api/etrade/status` | GET | E*TRADE auth status |
 | `/api/etrade/auth` | GET/POST | Start/complete OAuth flow |
 | `/api/etrade/disconnect` | POST | Clear E*TRADE tokens |
@@ -232,6 +239,7 @@ test/                      # node --test suites (npm test); obsidian.test.js cov
 - `LITEAPI_KEY` — LiteAPI hotel/travel API key
 - `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` — E*TRADE OAuth credentials
 - `ETRADE_SANDBOX` — `true` for sandbox mode
+- `LLAMA_CPP_DIR` — optional llama.cpp git checkout for the Llama Dashboard's update check; by default found from the running llama-server binary (nearest `.git` above `/proc/<pid>/exe`)
 - `LOCATION` — default user location for weather/travel queries and `{$location}` macro
 - `SOURCE_DIR` — project root path for source tools (self-awareness + code editing)
 - `SOURCE_TEST` — test command for `source_test` tool (e.g. `npm test`, `pytest -x`, `cargo test`)
@@ -696,6 +704,19 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 - `source_test`: runs `SOURCE_TEST` env var command in source dir. No parameters, no confirmation needed, 120s timeout. Language-agnostic (npm test, pytest, cargo test, etc.).
 
 **Diff preview system:** `source_write`, `source_edit`, and `source_delete` include `_diff` field in results. Frontend renders color-coded diff blocks (green=added, red=removed, cyan=hunk headers). `_diff` stripped from LLM context to save tokens. Diffs shown in both confirmation prompt and tool_use display (visible even with autorun).
+
+### Llama Dashboard
+A chip icon in the top bar's status row (`#llama-toggle`, right after the tool-usage icon, which is always shown and starts at 0) opens a full-area panel: `src/public/js/llama-dashboard.js` (plain script, inline styles — no Tailwind rebuild) over `GET /api/llama/dashboard` (`src/services/llamaDashboard.js`). Not a plugin: nothing to toggle, works with every plugin off. Nothing needs a change to how llama-server is started, and **nothing is ever pulled, built or restarted from here**.
+- **Server / Model**: `/props` + `/v1/models` (build `b<n>-<sha>`, model, quant, params, window vs trained window, slots) and the cached `/slots` (busy, tokens held, sampling actually in force, speculative types).
+- **Process** (server on this machine only): the `llama-server` in `/proc` whose `--port` matches `LLAMA_URL` → pid, `exe`, uptime and RSS (`ps`), and the launch command as running (`flagsFromArgv()`; Copy button).
+- **GPU**: `nvidia-smi` (VRAM bar split llama-server / other, temperature, power, load, driver); cached 2 s.
+- **Stability**: `NVRM: Xid` lines from `journalctl -t kernel` for 90 days (not `-k`, which is the current boot only), newest first with a short meaning (`XID_MEANING`).
+- **Speed**: `recordTimings(timings)` is called where both tool loops and `collectChatCompletion` read a completion's `timings`; `speedOf()` keeps generation tok/s, prompt tok/s, processed vs cached prompt tokens and MTP `draft_n` / `draft_n_accepted` (null for the Claude backend's `usage`). In memory, last 500 answers, since the app started. `summarizeSpeed()` gives medians (answers under 20 generated tokens are left out of the rate), cache share, draft acceptance and a sparkline series. The same object is `usage.speed` and the route log's `ctx.speed`. If llama-server runs with `--metrics`, `/metrics` adds server-lifetime totals and draft acceptance by position (`parsePrometheus()`); without it the card says so.
+- **Speed next to the Context bar**: the `usage` SSE event carries that `speed` object (chat: the turn's last round; pipeline: the last step's — `addUsage()` copies, never sums it), and `updateSpeedLabel()` in app.js shows `104 tok/s` in `#speed-label` after the elapsed timer, with the prompt read / cached and draft-acceptance figures as tooltip. The timer and the speed figure are **always on screen** at their natural width, 8px apart (`0s` / `0 tok/s` until the conversation has a finished turn; `… tok/s` while one runs), so nothing appears or disappears in the top bar; the group (Context bar, figures, timer, speed, Slots) is right-aligned in the top bar, so Slots hugs the right edge and the changing numbers grow to the left into the free space after the menus. `turnStats` (app.js, `Map<convId, { elapsed, speed }>`, page lifetime) keeps each conversation's last turn: `noteTurnSpeed()` on the usage event, `endTurnStats()` when the stream ends, and `syncStreamUi()` → `showTurnStats()` paints the conversation on screen. A stopped turn or the Claude backend reads `0 tok/s` with a tooltip saying why.
+- **Updates**: checkout = `LLAMA_CPP_DIR` or the nearest `.git` above the binary; `collectUpdates()` asks GitHub (unauthenticated, 4 requests, cached 6 h, "Check now" forces at most once a minute) for `compare/<head>...<default branch>` → commits behind, the newest 100 subjects filtered by `isRelevantCommit()` (server, CUDA, speculative/MTP, KV, chat handling; other backends, UI, docs dropped), and the latest release. **Compared by commit, not by tag**: releases moved from `b<n>` tags to `v1.0.0` on 2026-11-13.
+- **Alerts** (`buildAlerts()`): server down, an Xid in the last 48 h, VRAM over 97%, GPU ≥ 85 °C → banner in the panel and an amber dot on the chip icon (polled once a minute while closed); "N commits behind" is info only.
+- **Other machines** (simulated 2026-11-21 with a canned llama-server on `127.0.0.2`, an empty `PATH`, a dead address and a malformed URL): the response carries `local` (`isLocalHost()` of `LLAMA_URL`). With the server on another host, GPU, Stability, process and launch command are **left out, not read from this machine** — `nvidia-smi` and the journal would describe the wrong box — and Updates appears only with `LLAMA_CPP_DIR`. Missing `nvidia-smi` / `journalctl` / `git` / `ps`, or a process the app cannot see (container, other user), each null one section and the card says why; a stopped server keeps GPU and Stability, shows the error banner, and keeps Updates if the binary was seen earlier in this app run (`lastExe`) or `LLAMA_CPP_DIR` is set.
+- Tests: `test/llamaDashboard.test.js` (pure parsers and summaries).
 
 ### Elapsed Timer
 - Live timer in top bar next to context label, starts on `sendMessage()`, stops in `finally` block

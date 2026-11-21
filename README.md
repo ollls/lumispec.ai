@@ -37,6 +37,11 @@ launch scripts are under [Choosing & running your model](#-choosing--running-you
 
 ---
 
+## 🖥 v1.6.2 — It shows you the server behind it
+
+- **Llama Dashboard** *(new)* — a chip icon in the top bar opens a panel on the llama-server the app talks to: model and build, the launch command as it is running, GPU memory and temperature, generation speed and cache reuse, GPU errors from the kernel log, and how far the llama.cpp checkout is behind upstream. Nothing changes in how the server is started, and nothing is updated from the panel.
+- **Tokens per second in the top bar.** Each answer's speed sits next to the elapsed timer; both are always shown. The top bar was rearranged to use less space. See [`releases/1.6.2.md`](releases/1.6.2.md).
+
 ## 🧠 v1.6.1 — It remembers what you ask it to
 
 - **Memories** *(new, off by default)* — "remember that I prefer metric units": the assistant shows the exact text, waits for your approval, and carries that fact into every later conversation. Save and forget always ask, and Autorun does not skip the prompt. A memory can be tied to a session color on request; the card lists every memory with color chips, search and a two-click delete. See [`docs/MEMORY.md`](docs/MEMORY.md).
@@ -131,7 +136,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.6.1.md`](releases/1.6.1.md) (latest) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.6.2.md`](releases/1.6.2.md) (latest) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -369,6 +374,27 @@ Lower `--ctx-size` if you run out of VRAM — the app adapts automatically, sinc
 5. **Try an applet** — ask for *"a Chart.js bar chart of [some data]"* and it'll render inline.
 6. **Pin important chats** — the 📌 button on a conversation persists it across restarts.
 
+### Macros in saved prompts
+
+A prompt saved with **Save Prompt** or **Save Session** can carry `{$name}` macros. They are filled in each time the prompt is loaded from the Prompts or Sessions menu (or a session prompt auto-submits), so a saved prompt never goes out with a stale date.
+
+| Macro | Becomes | Example |
+|---|---|---|
+| `{$date}` | today's date | `2026-11-19` |
+| `{$time}` | current time | `04:02 PM` |
+| `{$day}` | weekday | `Thursday` |
+| `{$month}` | month name | `November` |
+| `{$year}` | year | `2026` |
+| `{$location}` | `LOCATION` from `.env` | `New York, NY` |
+
+Any other name is your own variable: `{$symbol}` opens a small form asking for its value before the prompt loads. A type after a colon gives a picker — `{$start:date}`, `{$period:daterange}`, `{$m:month}`.
+
+- The `$` is required. `{DATE}` is not a macro and reaches the model as written.
+- Values are set when the prompt is loaded into the input box, not when you press Send, and come from the browser's clock and timezone.
+- Macros typed straight into the input box are not expanded — only saved prompts and sessions.
+
+More in [`docs/HELP.md`](docs/HELP.md).
+
 ---
 
 ## ⚙️ Configuration
@@ -531,7 +557,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
 | [`docs/BOOKS.md`](docs/BOOKS.md) | **Books** — add a folder, file or PDF as a book, open it, chat against it; Book only, sections, limits |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | **Memories** — facts kept across conversations: saving, approval, colors, list size, files |
-| [`releases/1.6.1.md`](releases/1.6.1.md) | v1.6.1 release notes (latest) — Memories plugin, slot layouts, route log records tool-call patches |
+| [`releases/1.6.2.md`](releases/1.6.2.md) | v1.6.2 release notes (latest) — Llama Dashboard, tokens per second in the top bar |
+| [`releases/1.6.1.md`](releases/1.6.1.md) | v1.6.1 release notes — Memories plugin, slot layouts, route log records tool-call patches |
 | [`releases/1.6.0.md`](releases/1.6.0.md) | v1.6.0 release notes — Books plugin, PDF books, Troubleshoot on any answer |
 | [`releases/1.5.8.md`](releases/1.5.8.md) | v1.5.8 release notes — Troubleshoot button, applet diagnostics, `conversation_read`, applets never clipped |
 | [`releases/1.5.7.md`](releases/1.5.7.md) | v1.5.7 release notes — concurrent conversations, stopped turns keep their work, applet fit |

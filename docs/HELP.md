@@ -28,8 +28,24 @@ The top bar shows the status of connected services:
 - **Browser** — whether the Browser Search Chrome extension is connected (green = yes). Only shown when the Browser Search plugin is on
 - **LiteAPI** — travel/hotel service status
 - **E*TRADE** — trading account connection status
+- **Tool icon** (🔧) — how many tools the AI has used since you loaded the page; click for the list
+- **Chip icon** — opens the Llama Dashboard (see below). An amber dot next to it means something needs a look; hover to see what
 - **Context** — how much of the AI's memory is being used (progress bar)
-- **Timer** — shows elapsed time while the AI is thinking
+- **Timer** — elapsed time while the AI is thinking, then the time the last answer took
+- **Speed** — how fast the last answer was written, in tokens per second (`0 tok/s` until the chat has an answer). Hover for details
+
+### Llama Dashboard
+
+Click the chip icon to see the local AI server the app is using:
+
+- **Server and Model** — which model is loaded, how long the server has been running, how big its memory window is
+- **GPU** — how much graphics memory is in use, and by what; temperature and power
+- **Speed** — how fast answers are being written, and how much of each prompt was reused from the previous turn
+- **Stability** — graphics-card errors from the last 90 days, if any
+- **Updates** — whether a newer version of llama.cpp is available. It only tells you; it never updates anything
+- **Launch command** — the exact command the server was started with, with a Copy button
+
+Some cards are empty when the server runs on another computer; each one says why. Press Esc or ✕ to close.
 
 ## Menus
 
