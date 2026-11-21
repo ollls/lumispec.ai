@@ -1,4 +1,5 @@
 import config from '../config.js';
+import { recordTimings } from './llamaDashboard.js';
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -223,6 +224,7 @@ async function collectLlamaCompletion(messages, { slotId, signal, maxTokens, tem
     const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
     const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
     usage = { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: prompt + predicted };
+    recordTimings(json.timings);   // Llama Dashboard speed samples
   }
   return { content, usage };
 }

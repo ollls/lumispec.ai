@@ -5,6 +5,7 @@ import { streamChatCompletion, parseSSEChunks, countPromptTokens, trimOldToolRes
 import { fitToolResultsToContext } from '../services/toolResultLimits.js';
 import { getSystemPrompt, getDatetimeStamp, parseToolCalls, detectArgFixes, capToolCalls, droppedCallsNote, executeTool, requestConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { evalPredicates, logRouteDecision } from '../services/routeLog.js';
+import { recordTimings } from '../services/llamaDashboard.js';
 import config from '../config.js';
 import { truncatePrevResult } from '../services/pipelineContext.js';
 
@@ -405,6 +406,8 @@ CRITICAL RULES:
         const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
         const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
         usage = { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: prompt + predicted };
+        const speed = recordTimings(chunk.timings);   // Llama Dashboard; null off llama
+        if (speed) usage.speed = speed;
       }
     }
 
@@ -473,6 +476,7 @@ CRITICAL RULES:
           limit: ctxLimit,
           completion: result.usage?.completion_tokens ?? null,
           finish: result.finishReason ?? null,
+          speed: result.usage?.speed ?? null,
         },
         pred: evalPredicates({
           content: result.content,
@@ -738,6 +742,8 @@ function addUsage(total, usage) {
   total.prompt_tokens += usage.prompt_tokens || 0;
   total.completion_tokens += usage.completion_tokens || 0;
   total.total_tokens += usage.total_tokens || 0;
+  // Speed is not summed: the top bar shows the most recent step's last round, like the chat loop
+  if (usage.speed) total.speed = usage.speed;
 }
 
 export default router;

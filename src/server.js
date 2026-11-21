@@ -16,6 +16,7 @@ import compactRoutes from './routes/compacts.js';
 import taskRoutes from './routes/tasks.js';
 import taskProcessorRoutes from './routes/taskProcessor.js';
 import pluginRoutes from './routes/plugins.js';
+import llamaRoutes from './routes/llama.js';
 import slots from './services/slots.js';
 import browserBridge from './services/browserBridge.js';
 import { loadPlugins } from './services/tools.js';
@@ -40,6 +41,7 @@ app.use('/api/compacts', compactRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/conversations', taskProcessorRoutes);
 app.use('/api/plugins', pluginRoutes);
+app.use('/api/llama', llamaRoutes);
 
 // Serve project directory files (follows source_project switches)
 app.use('/files', (req, res, next) => {
