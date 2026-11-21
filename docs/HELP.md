@@ -20,6 +20,8 @@ Click any conversation in the left sidebar to switch to it. Your previous chat i
 
 Above the list you can narrow it down: the color chips show one session color, the **Filter by title…** box keeps chats whose title contains what you type, and the pin button at the end of that row steps through all chats, pinned only, and not pinned. The three work together.
 
+To rename a chat, double-click its title in the list or hover over it and click the pencil (✎). Type the new title and press Enter, or click elsewhere, to save; Escape keeps the old one. A renamed chat keeps its new title — it is never replaced by an automatic one. If the **Filter by title…** box is in use and the new title no longer matches it, the chat leaves the filtered list until you clear the box.
+
 ## Top Bar
 
 The top bar shows the status of connected services:

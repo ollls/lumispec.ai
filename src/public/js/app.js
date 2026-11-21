@@ -439,7 +439,9 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     });
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
   },
   async checkHealth() {
     const res = await fetch('/api/health');
@@ -617,7 +619,49 @@ function renderConvFilter(counts) {
   };
 }
 
+// A title being renamed in the sidebar must survive a refresh: renderSidebar() wipes the list,
+// and a turn finishing in any conversation refreshes it. While a title is being edited the
+// redraw is held and runs once the edit ends.
+let sidebarRenderHeld = false;
+function sidebarEditing() {
+  return !!sidebar.querySelector('[contenteditable="true"]');
+}
+function releaseSidebarRender() {
+  if (sidebarRenderHeld && !sidebarEditing()) renderSidebar();
+}
+
+// Rename a conversation in place: pencil button or double-click on the title. Enter or clicking
+// away saves, Escape cancels, an empty title keeps the old one.
+function renameConversation(conv, titleSpan) {
+  if (titleSpan.isContentEditable) return;
+  // The title span also holds the "Working…" dot; edit the text alone
+  titleSpan.textContent = conv.title;
+  titleSpan.style.textOverflow = 'clip';
+  let saved = false;
+  startTitleEdit(titleSpan, async (newTitle) => {
+    if (saved) return;
+    saved = true;
+    const before = conv.title;
+    conv.title = newTitle;            // shown at once; the server's version replaces it below
+    try {
+      await api.updateTitle(conv.id, newTitle);
+    } catch (err) {
+      conv.title = before;
+      showToast(`Could not rename: ${err.message}`, true);
+    }
+    sidebarRenderHeld = true;
+    await refreshSidebar();
+  });
+  // Cancelled or unchanged: nothing was saved, but the row still has to be redrawn (dot,
+  // ellipsis) and any refresh that arrived meanwhile applied
+  const done = () => setTimeout(() => { sidebarRenderHeld = true; releaseSidebarRender(); }, 0);
+  titleSpan.addEventListener('blur', done, { once: true });
+  titleSpan.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') done(); });
+}
+
 function renderSidebar() {
+  if (sidebarEditing()) { sidebarRenderHeld = true; return; }
+  sidebarRenderHeld = false;
   // Count per color first — the filter strip needs totals, and a filter whose
   // last conversation was just deleted has to fall back to All.
   const counts = {};
@@ -696,6 +740,15 @@ function renderSidebar() {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
       if (c) title.style.color = textSafeColor(c);
     }
+
+    title.title = 'Double-click to rename';
+    title.addEventListener('dblclick', (e) => { e.stopPropagation(); renameConversation(conv, title); });
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'text-zinc-600 hover:text-zinc-200 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
+    renameBtn.textContent = '✎';
+    renameBtn.title = 'Rename';
+    renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameConversation(conv, title); });
 
     const pinBtn = document.createElement('button');
     pinBtn.className = conv.pinned
@@ -795,6 +848,7 @@ function renderSidebar() {
 
     item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
+    item.appendChild(renameBtn);
     if (obsBtn) item.appendChild(obsBtn);
     if (compactBtn) item.appendChild(compactBtn);
     item.appendChild(pinBtn);
