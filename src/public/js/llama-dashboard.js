@@ -129,7 +129,7 @@
 
   function cardGpu(d) {
     const g = d.gpu;
-    if (!g) return `<div class="ld-card"><h3>GPU</h3><div class="ld-muted">${d.local ? 'No reading: nvidia-smi is not available on this machine.' : 'llama-server runs on another machine, so its GPU cannot be read from here.'}</div></div>`;
+    if (!g) return '';   // no NVIDIA reading (not Linux, no nvidia-smi, or a remote server): no card
     return `<div class="ld-card"><h3>GPU</h3>` + g.gpus.map((x, i) => {
       const mine = i === 0 && g.llamaMiB != null ? Math.min(g.llamaMiB, x.memUsedMiB) : 0;
       const other = Math.max(0, x.memUsedMiB - mine);
@@ -179,7 +179,7 @@
 
   function cardStability(d) {
     const x = d.xid;
-    if (!x) return `<div class="ld-card"><h3>Stability</h3><div class="ld-muted">${d.local ? 'The kernel log is not readable from this app, so GPU errors cannot be listed.' : 'llama-server runs on another machine, so its GPU errors cannot be listed from here.'}</div></div>`;
+    if (!x || !d.gpu) return '';   // Xid is an NVIDIA-on-Linux log line: no card without that GPU
     if (!x.events.length) return `<div class="ld-card"><h3>Stability</h3><div class="ld-ok">No GPU errors (Xid) in the last ${x.days} days.</div></div>`;
     return `<div class="ld-card"><h3>Stability</h3><div><span class="ld-warn">${x.total} GPU error${x.total > 1 ? 's' : ''}</span> <span class="ld-muted">(Xid) in the last ${x.days} days · latest ${esc(ago(x.events[0].at))}</span></div>
       <ul>${x.events.slice(0, 8).map(e => `<li title="${esc(e.detail)}"><span class="ld-when">${esc(dayTime(e.at))}</span><span class="ld-what">Xid ${e.code}${e.meaning ? ' — ' + esc(e.meaning) : ''}${e.process ? ` <span class="ld-muted">· ${esc(e.process)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
@@ -188,7 +188,7 @@
   function cardUpdates(d) {
     const c = d.checkout, u = d.updates;
     const btn = `<button class="ld-btn" data-act="check-updates" ${checking ? 'disabled' : ''}>${checking ? 'Checking…' : 'Check now'}</button>`;
-    if (!c) return `<div class="ld-card ld-wide"><h3>Updates</h3><div class="ld-muted">${!d.server?.reachable && d.local ? 'llama-server is not running, so its checkout cannot be located. Set <code>LLAMA_CPP_DIR</code> in .env to check for updates while it is stopped.' : d.local ? 'The llama.cpp checkout was not found. It is located from the running llama-server binary; set <code>LLAMA_CPP_DIR</code> in .env if it was built elsewhere.' : 'llama-server runs on another machine. To compare a checkout on this machine against upstream, set <code>LLAMA_CPP_DIR</code> in .env.'}</div></div>`;
+    if (!c) return '';   // no checkout known (set LLAMA_CPP_DIR to name one): no card
     let state;
     if (!u) state = `<div class="ld-muted">Not checked yet.</div>`;
     else if (u.error) state = `<div class="ld-warn">Could not check: ${esc(u.error)}</div>`;
@@ -219,10 +219,21 @@
 
   function cardFlags(d) {
     const p = d.process;
-    if (!p) return `<div class="ld-card ld-wide"><h3>Launch command</h3><div class="ld-muted">${!d.server?.reachable && d.local ? 'llama-server is not running.' : d.local ? 'No llama-server process was found on this machine for this address (it may run under another user or in a container), so its command line and memory use are not shown.' : 'llama-server runs on another machine, so its command line and memory use are not shown.'}</div></div>`;
+    if (!p) return '';   // process not visible from here: no card
     const lines = [p.exe || 'llama-server', ...p.flags.map(f => `  ${f.flag}${f.value ? ' ' + f.value : ''}`)].join(' \\\n');
     return `<div class="ld-card ld-wide"><h3>Launch command <button class="ld-btn" data-act="copy-cmd">Copy</button></h3>
       <div class="ld-muted">As it is running now${p.cwd ? `, started in ${esc(p.cwd)}` : ''}.</div><pre>${esc(lines)}</pre></div>`;
+  }
+
+  // A card with nothing to show is left out rather than explained. One line under the grid says
+  // what the full panel needs, only when something is missing.
+  function footnote(d) {
+    if (d.gpu && d.process && d.checkout) return '';
+    const why = !d.local ? 'llama-server runs on another machine, so only what it reports itself is shown.'
+      : d.platform !== 'linux' ? 'Only what llama-server reports itself is shown on this system.'
+      : !d.server?.reachable ? '' : 'Some readings are not available on this machine.';
+    if (!why) return '';
+    return `<div class="ld-muted" style="margin-top:12px">${why} GPU, stability and launch-command cards need Linux with an NVIDIA card and llama-server on the same machine${d.checkout ? '' : '; the Updates card also appears when <code>LLAMA_CPP_DIR</code> in .env names a llama.cpp checkout'}.</div>`;
   }
 
   // ── render / poll ───────────────────────────────────
@@ -237,6 +248,7 @@
       <div class="ld-head"><div><h2>Llama Dashboard</h2><div class="ld-sub">${sub}</div></div><button class="ld-close" data-act="close" aria-label="Close">&times;</button></div>
       ${notLlama}${(d.alerts || []).filter(a => a.level !== 'info').map(a => `<div class="ld-alert ${esc(a.level)}">${esc(a.text)}</div>`).join('')}
       <div class="ld-grid">${cardServer(d)}${cardGpu(d)}${cardSpeed(d)}${cardModel(d)}${cardStability(d)}${cardUpdates(d)}${cardFlags(d)}</div>
+      ${footnote(d)}
     </div>`;
   }
 

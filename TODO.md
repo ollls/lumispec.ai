@@ -66,35 +66,18 @@ the first build can use defaults and the second the saved values.
 
 ## Llama Dashboard on macOS and Windows
 
-Added 2026-11-21. Not run on either system; the table is from the code
-(`src/services/llamaDashboard.js`).
+Added 2026-11-21, decided the same day: **keep it simple.** Off Linux the dashboard probes
+nothing on the machine (not even `nvidia-smi` on Windows) and shows only what llama-server
+reports itself: Server, Model and Speed, plus Updates when `LLAMA_CPP_DIR` names a checkout. The
+same rule applies everywhere: a card with nothing to show is left out, and one line under the
+cards says what the full panel needs (Linux, an NVIDIA card, llama-server on the same machine).
 
-**State in v1.6.2.** The panel opens and everything that comes from llama-server itself works
-(Server, Model, Speed, tok/s in the top bar). What reads the machine is Linux-only:
+Simulated by starting the app with `process.platform` set to `darwin` and `win32`; not run on a
+real Mac or Windows machine.
 
-| Card | macOS | Windows |
-|---|---|---|
-| Launch command, uptime, RAM | empty (`collectProcess()` reads `/proc`) | empty |
-| Stability (Xid) | empty (`journalctl`) | empty |
-| GPU | empty (no `nvidia-smi`) | should work with an NVIDIA card, without the llama-server / other split (no pid) |
-| Updates | only with `LLAMA_CPP_DIR` (the checkout is located from the process) | only with `LLAMA_CPP_DIR` |
+Only if someone asks for more:
 
-**Problems.**
-
-- The empty cards give the Linux explanations ("No llama-server process was found… may run under
-  another user or in a container", "The kernel log is not readable") instead of saying the
-  reading is not supported on this system.
-- Updates says the checkout was not found unless `LLAMA_CPP_DIR` is set.
-
-**Fix.**
-
-- [ ] Send the platform in the dashboard response and word each empty card for it ("not
-      available on macOS / Windows"); Updates should name `LLAMA_CPP_DIR` as the way to turn it on.
-- [ ] macOS: find the process with `ps -axo pid=,etime=,rss=,args=` (command line, uptime, RAM)
-      and its binary path, so the launch command and the automatic checkout lookup work.
-- [ ] Windows: the same through PowerShell (`Get-CimInstance Win32_Process`). Needs someone who
-      can run it.
-- [ ] Leave GPU memory on Apple Silicon and Stability on both systems empty, with an accurate
-      message: there is no `nvidia-smi` equivalent on a Mac, and Xid is an NVIDIA-on-Linux log line.
-- [ ] Correct the v1.6.2 notes' wording if any of this ships ("there the process, GPU and
-      Stability cards report no reading").
+- [ ] macOS: process, launch command and uptime through `ps`, which would also locate the
+      checkout for Updates without `LLAMA_CPP_DIR`.
+- [ ] Windows: the same through PowerShell (`Get-CimInstance Win32_Process`), and `nvidia-smi`
+      for the GPU card. Needs someone who can run it.

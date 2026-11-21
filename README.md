@@ -39,7 +39,7 @@ launch scripts are under [Choosing & running your model](#-choosing--running-you
 
 ## 🖥 v1.6.2 — It shows you the server behind it
 
-- **Llama Dashboard** *(new)* — a chip icon in the top bar opens a panel on the llama-server the app talks to: model and build, the launch command as it is running, GPU memory and temperature, generation speed and cache reuse, GPU errors from the kernel log, and how far the llama.cpp checkout is behind upstream. Nothing changes in how the server is started, and nothing is updated from the panel. **Linux with an NVIDIA card is recommended:** on macOS and Windows the server, model and speed cards work, while the launch command, GPU errors and (on a Mac) GPU memory are not read yet.
+- **Llama Dashboard** *(new)* — a chip icon in the top bar opens a panel on the llama-server the app talks to: model and build, the launch command as it is running, GPU memory and temperature, generation speed and cache reuse, GPU errors from the kernel log, and how far the llama.cpp checkout is behind upstream. Nothing changes in how the server is started, and nothing is updated from the panel. **Linux with an NVIDIA card is recommended:** that is where the GPU, stability and launch-command cards appear. On macOS and Windows the dashboard shows the server, model and speed cards only.
 - **Tokens per second in the top bar.** Each answer's speed sits next to the elapsed timer; both are always shown. The top bar was rearranged to use less space. See [`releases/1.6.2.md`](releases/1.6.2.md).
 
 ## 🧠 v1.6.1 — It remembers what you ask it to

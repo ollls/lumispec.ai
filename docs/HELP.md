@@ -45,7 +45,7 @@ Click the chip icon to see the local AI server the app is using:
 - **Updates** — whether a newer version of llama.cpp is available. It only tells you; it never updates anything
 - **Launch command** — the exact command the server was started with, with a Copy button
 
-Some cards are empty when the server runs on another computer; each one says why. Press Esc or ✕ to close.
+The GPU, Stability and Launch command cards appear on Linux with an NVIDIA graphics card, when the server runs on the same computer as the app. Otherwise the dashboard shows the Server, Model and Speed cards, and a line at the bottom says so. Press Esc or ✕ to close.
 
 ## Menus
 

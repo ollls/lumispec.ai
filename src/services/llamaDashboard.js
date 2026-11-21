@@ -486,9 +486,12 @@ export async function getDashboard({ checkUpdates = false } = {}) {
   // llama-server elsewhere they would be someone else's GPU and errors, so they are left out
   // (the checkout only when LLAMA_CPP_DIR names one explicitly).
   const local = isLocalHost(llamaUrl()?.hostname);
+  // Machine readings are Linux-only by decision (2026-11-21): elsewhere nothing is probed at all,
+  // not even nvidia-smi on Windows, and the panel shows only what llama-server itself reports.
+  const machine = local && process.platform === 'linux';
   const [gpu, xid, metrics, checkout] = await Promise.all([
-    local ? cached('gpu', 2_000, () => collectGpu(proc?.pid ?? null)) : null,
-    local ? cached('xid', 60_000, collectXid) : null,
+    machine ? cached('gpu', 2_000, () => collectGpu(proc?.pid ?? null)) : null,
+    machine ? cached('xid', 60_000, collectXid) : null,
     server?.metricsEndpoint ? cached('metrics', 3_000, collectMetrics) : null,
     local || process.env.LLAMA_CPP_DIR ? cached('checkout', 60_000, () => collectCheckout(proc?.exe || lastExe)) : null,
   ]);
@@ -505,6 +508,7 @@ export async function getDashboard({ checkUpdates = false } = {}) {
     backend: config.llm.backend,
     url: config.llama.baseUrl,
     local,
+    platform: process.platform,
     server, process: proc, slots: collectSlots(), gpu, xid, metrics, speed, checkout, updates,
     alerts: buildAlerts({ server, gpu, xid, updates }),
   };
