@@ -28,6 +28,15 @@ export function autoTitle(text) {
   return firstSentence.length > 120 ? firstSentence.slice(0, 120) + '…' : firstSentence;
 }
 
+/**
+ * A title typed by the user (sidebar rename): whitespace runs become one space, 120 chars max —
+ * the auto-title limit. Returns '' when nothing is left (pure, tested in test/autoTitle.test.js).
+ */
+export function normalizeTitle(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 120).trim();
+}
+
 // List conversation summaries
 router.get('/', (_req, res) => {
   res.json(conversations.list());
@@ -57,7 +66,9 @@ router.delete('/:id', (req, res) => {
 
 // Update title
 router.patch('/:id', (req, res) => {
-  const conv = conversations.updateTitle(req.params.id, req.body.title);
+  const title = normalizeTitle(req.body?.title);
+  if (!title) return res.status(400).json({ error: 'A title cannot be empty' });
+  const conv = conversations.updateTitle(req.params.id, title);
   if (!conv) return res.status(404).json({ error: 'Not found' });
   res.json(conv);
 });

@@ -439,7 +439,9 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     });
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
   },
   async checkHealth() {
     const res = await fetch('/api/health');
@@ -617,7 +619,49 @@ function renderConvFilter(counts) {
   };
 }
 
+// A title being renamed in the sidebar must survive a refresh: renderSidebar() wipes the list,
+// and a turn finishing in any conversation refreshes it. While a title is being edited the
+// redraw is held and runs once the edit ends.
+let sidebarRenderHeld = false;
+function sidebarEditing() {
+  return !!sidebar.querySelector('[contenteditable="true"]');
+}
+function releaseSidebarRender() {
+  if (sidebarRenderHeld && !sidebarEditing()) renderSidebar();
+}
+
+// Rename a conversation in place: pencil button or double-click on the title. Enter or clicking
+// away saves, Escape cancels, an empty title keeps the old one.
+function renameConversation(conv, titleSpan) {
+  if (titleSpan.isContentEditable) return;
+  // The title span also holds the "Working…" dot; edit the text alone
+  titleSpan.textContent = conv.title;
+  titleSpan.style.textOverflow = 'clip';
+  let saved = false;
+  startTitleEdit(titleSpan, async (newTitle) => {
+    if (saved) return;
+    saved = true;
+    const before = conv.title;
+    conv.title = newTitle;            // shown at once; the server's version replaces it below
+    try {
+      await api.updateTitle(conv.id, newTitle);
+    } catch (err) {
+      conv.title = before;
+      showToast(`Could not rename: ${err.message}`, true);
+    }
+    sidebarRenderHeld = true;
+    await refreshSidebar();
+  });
+  // Cancelled or unchanged: nothing was saved, but the row still has to be redrawn (dot,
+  // ellipsis) and any refresh that arrived meanwhile applied
+  const done = () => setTimeout(() => { sidebarRenderHeld = true; releaseSidebarRender(); }, 0);
+  titleSpan.addEventListener('blur', done, { once: true });
+  titleSpan.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') done(); });
+}
+
 function renderSidebar() {
+  if (sidebarEditing()) { sidebarRenderHeld = true; return; }
+  sidebarRenderHeld = false;
   // Count per color first — the filter strip needs totals, and a filter whose
   // last conversation was just deleted has to fall back to All.
   const counts = {};
@@ -696,6 +740,15 @@ function renderSidebar() {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
       if (c) title.style.color = textSafeColor(c);
     }
+
+    title.title = 'Double-click to rename';
+    title.addEventListener('dblclick', (e) => { e.stopPropagation(); renameConversation(conv, title); });
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'text-zinc-600 hover:text-zinc-200 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
+    renameBtn.textContent = '✎';
+    renameBtn.title = 'Rename';
+    renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameConversation(conv, title); });
 
     const pinBtn = document.createElement('button');
     pinBtn.className = conv.pinned
@@ -795,6 +848,7 @@ function renderSidebar() {
 
     item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
+    item.appendChild(renameBtn);
     if (obsBtn) item.appendChild(obsBtn);
     if (compactBtn) item.appendChild(compactBtn);
     item.appendChild(pinBtn);
@@ -993,7 +1047,9 @@ async function troubleshootMessage(wrapper, bubble, turn) {
   input.setSelectionRange(built.selectStart, built.selectEnd);
 }
 
-function createAppletIframe(applet) {
+// `full: true` builds the copy shown by the Full screen button: sized for the whole screen
+// instead of the chat area, scrolling inside its frame, and returned bare (no button row).
+function createAppletIframe(applet, { full = false } = {}) {
   let html = applet.html;
 
   // Validate: html type applets are always valid; others need <script>, <svg>, <canvas>, or <img>
@@ -1029,12 +1085,19 @@ function createAppletIframe(applet) {
   // width. SVGs and images get a max-height; Chart.js gets a plugin that wraps an oversized
   // chart in a fixed-height box before its first resize.
   const fit = window.AppletFit;
-  const fitCap = fit ? fit.capFor(document.getElementById('response-area')?.clientHeight) : 0;
+  // Full screen: the cap comes from the screen (92% of its height), not from the chat area
+  const fitCap = !fit ? 0
+    : full ? Math.max(240, Math.round((window.screen?.height || window.innerHeight) * 0.92))
+    : fit.capFor(document.getElementById('response-area')?.clientHeight);
   const fitStyle = fitCap ? fit.styleFor(fitCap) : '';
   const fitScript = fitCap && html.includes('/lib/chart.min.js') ? fit.chartScriptFor(fitCap) : '';
 
-  // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + '</style>' + APPLET_DIAG_SCRIPT + fitScript;
+  // Inject style reset to prevent scrollbars inside iframe. In the chat the frame grows to its
+  // content and the chat scrolls; full screen the frame is the screen, so it scrolls inside.
+  const fullStyle = full
+    ? 'html,body{overflow-y:auto!important}body{padding:16px;box-sizing:border-box}' + (applet.type === 'svg' ? 'body{text-align:center}' : '')
+    : '';
+  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + fullStyle + '</style>' + APPLET_DIAG_SCRIPT + fitScript;
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -1058,9 +1121,15 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   }
 
   const iframe = document.createElement('iframe');
-  iframe.className = 'applet-iframe';
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
+  if (full) {
+    // Not '.applet-iframe': the resize listener must leave this frame at the screen's height
+    iframe.className = 'applet-iframe-full';
+    iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+    return iframe;
+  }
+  iframe.className = 'applet-iframe';
   iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:hidden;display:block';
   iframe.addEventListener('load', () => {
     try {
@@ -1117,11 +1186,114 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   fixBtn.title = 'Fill the prompt with a fix request: the errors the browser saw in this applet, and an instruction to read its code back. Describe what is wrong, then send.';
   fixBtn.addEventListener('click', () => troubleshootApplet(iframe));
 
+  // Full screen: a fresh copy of the applet, alone on the screen
+  const fullBtn = document.createElement('button');
+  fullBtn.className = 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-xs font-bold px-3 py-1 rounded mt-1 ml-2 transition-colors';
+  fullBtn.textContent = 'Full screen';
+  fullBtn.title = 'Show this applet alone on the whole screen. It is loaded again, so it fetches fresh data. Esc returns to the chat.';
+  fullBtn.addEventListener('click', () => openAppletFullscreen(applet));
+
   wrapper.appendChild(iframe);
   wrapper.appendChild(saveBtn);
   wrapper.appendChild(fixBtn);
+  wrapper.appendChild(fullBtn);
   return wrapper;
 }
+
+// Full screen button: the applet alone on the screen, nothing of the app around it.
+// The chat copy is sized for the chat (frame as tall as its content, charts capped to the chat
+// area), so stretching it would show one screenful with no scrolling and a small chart. A second
+// copy is built for the screen instead — it starts over and re-fetches its data — inside an
+// overlay that is put into the browser's fullscreen mode. If the browser refuses fullscreen the
+// overlay still covers the whole page. Esc, or the ✕, closes it; the chat copy is untouched.
+function openAppletFullscreen(applet) {
+  closeAppletFullscreen();
+  const overlay = document.createElement('div');
+  overlay.id = 'applet-fullscreen';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:200;background:#18181b';
+  const frame = createAppletIframe(applet, { full: true });
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.title = 'Back to the chat (Esc)';
+  closeBtn.setAttribute('aria-label', 'Close full screen');
+  closeBtn.style.cssText = 'position:absolute;top:10px;right:14px;z-index:1;width:32px;height:32px;border-radius:8px;'
+    + 'background:rgba(39,39,42,.7);color:#d4d4d8;font-size:16px;line-height:1;cursor:pointer;opacity:.35;transition:opacity .15s';
+  closeBtn.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; });
+  closeBtn.addEventListener('mouseleave', () => { closeBtn.style.opacity = '.35'; });
+  closeBtn.addEventListener('click', closeAppletFullscreen);
+  overlay.appendChild(frame);
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+  // Keyboard focus is inside the frame once the user clicks it; in real fullscreen the browser
+  // handles Esc itself, this covers the fill-the-window fallback
+  frame.addEventListener('load', () => {
+    try { frame.contentWindow.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAppletFullscreen(); }); } catch {}
+    // Twice: once for what is there at load, once after scripts have drawn and fullscreen settled
+    setTimeout(() => fitAppletToScreen(frame), 150);
+    setTimeout(() => fitAppletToScreen(frame), 900);
+  });
+  if (overlay.requestFullscreen) {
+    overlay.requestFullscreen().then(() => { overlay.dataset.native = '1'; }).catch(() => {});
+  }
+}
+
+// A small fixed-size applet (a clock, a gauge, one card) would sit in the top corner of the
+// screen. When everything the applet draws is narrower AND shorter than the screen it is
+// enlarged to fill it (at most 4×) and centred vertically. Content that already spans the width
+// — responsive charts, dashboards — is left at its own size and scrolls if it is taller.
+function fitAppletToScreen(frame) {
+  try {
+    const doc = frame.contentDocument;
+    const body = doc?.body;
+    if (!body || !frame.isConnected) return;
+    body.style.zoom = '';
+    body.style.paddingTop = '';
+    const vw = frame.clientWidth, vh = frame.clientHeight;
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+    for (const el of body.children) {
+      if (/^(SCRIPT|STYLE|LINK|TEMPLATE)$/.test(el.tagName)) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      left = Math.min(left, r.left); right = Math.max(right, r.right);
+      top = Math.min(top, r.top); bottom = Math.max(bottom, r.bottom);
+    }
+    const w = right - left, h = bottom - top;
+    if (!(w > 0 && h > 0) || h >= vh - 32) return;            // taller than the screen: scrolls as is
+    // The body's 16px padding is zoomed with it, hence w + 34 / h + 34
+    let zoom = w < vw * 0.9 ? Math.min(vw / (w + 34), vh / (h + 34), 4) : 1;
+    const root = doc.documentElement;
+    for (let i = 0; i < 6; i++) {
+      const z = zoom > 1.05 ? Math.round(zoom * 100) / 100 : 1;
+      body.style.zoom = z > 1 ? String(z) : '';
+      // padding is inside the zoomed body, so it is scaled too
+      body.style.setProperty('padding-top', Math.round(Math.max(16, (vh - h * z) / 2 / z)) + 'px', 'important');
+      // Enlarging narrows the layout (screen width / zoom); if the content re-wrapped and now
+      // overflows the screen, back off and try again
+      if (z === 1 || (root.scrollHeight <= vh + 2 && root.scrollWidth <= vw + 2)) break;
+      zoom *= 0.88;
+    }
+  } catch { /* cross-origin or gone: leave it as rendered */ }
+}
+
+function closeAppletFullscreen() {
+  const overlay = document.getElementById('applet-fullscreen');
+  if (!overlay) return;
+  const native = document.fullscreenElement === overlay;
+  overlay.remove();
+  if (native && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+// Leaving the browser's fullscreen mode (Esc, F11, switching window) closes the view
+document.addEventListener('fullscreenchange', () => {
+  const overlay = document.getElementById('applet-fullscreen');
+  if (!overlay) return;
+  if (overlay.dataset.native && !document.fullscreenElement) { overlay.remove(); return; }
+  // Entered fullscreen: the frame just changed size
+  const frame = overlay.querySelector('iframe');
+  if (frame) setTimeout(() => fitAppletToScreen(frame), 200);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('applet-fullscreen')) { e.preventDefault(); closeAppletFullscreen(); }
+});
 
 // Poll a saved template until its LLM review leaves 'pending' (a local model can take a few
 // minutes on a long template). Resolves to the review object, or null when polling gave up.
