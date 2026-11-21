@@ -244,6 +244,8 @@
           aria-label="Filter conversations by title"
           class="flex-1 min-w-0 bg-transparent text-xs text-zinc-300 placeholder-zinc-600 outline-none">
         <button id="conv-search-clear" class="hidden text-zinc-600 hover:text-zinc-300 text-xs px-1 cursor-pointer" title="Clear (Esc)" aria-label="Clear title filter">✕</button>
+        <!-- Pin filter: all → pinned only → not pinned → all; icon and tooltip set by renderPinFilter() in app.js -->
+        <button id="conv-pin-filter" class="shrink-0 px-1 cursor-pointer" style="line-height:0;position:relative" aria-label="Filter conversations by pinned"></button>
       </div>
       <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
       </div>
@@ -451,6 +453,6 @@
 <script src="/lib/flatpickr.min.js"></script>
 <script src="/js/applet-fit.js?v=1"></script>
 <script src="/js/troubleshoot.js?v=2"></script>
-<script src="/js/app.js?v=15"></script>
-<script src="/js/llama-dashboard.js?v=1"></script>
+<script src="/js/app.js?v=16"></script>
+<script src="/js/llama-dashboard.js?v=2"></script>
 </html>

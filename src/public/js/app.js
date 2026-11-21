@@ -18,6 +18,7 @@ const state = {
   retainEnabled: localStorage.getItem('retainEnabled') === 'true', // send the model's reasoning back as context (default off)
   citeEnabled: localStorage.getItem('citeEnabled') !== 'false', // default true — code-citation discipline for doc writes and wiki indexing
   sidebarFilter: localStorage.getItem('sidebarFilter') || 'all', // sidebar color filter: 'all' | session color
+  sidebarPin: ['all', 'pinned', 'unpinned'].includes(localStorage.getItem('sidebarPin')) ? localStorage.getItem('sidebarPin') : 'all', // sidebar pin filter; composes with color and title
   sidebarQuery: '', // sidebar title filter (keyword, case-insensitive); composes with the color filter, not persisted
   sessionTitles: {}, // session color → saved prompt title (for filter chip tooltips)
   obsidianEnabled: false, // Obsidian Export plugin on → sidebar rows get a "Save to Obsidian" button
@@ -522,6 +523,33 @@ convSearchInput.addEventListener('keydown', (e) => {
 });
 convSearchClear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
 
+// Pin filter button at the end of the title-filter row: all → pinned only → not pinned → all.
+// Composes with the color chips and the title box; persisted like the color filter.
+const convPinFilter = document.getElementById('conv-pin-filter');
+const PIN_FILTER_NEXT = { all: 'pinned', pinned: 'unpinned', unpinned: 'all' };
+const PIN_PATH = 'M16 2L20.5 6.5L18 9L19 16L14 11L8 17V19H6V17L12 11L7 6L14 7L16.5 4.5Z';
+function renderPinFilter() {
+  const mode = state.sidebarPin;
+  const filled = mode === 'pinned';
+  convPinFilter.innerHTML =
+    `<svg width="14" height="14" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${filled ? 1 : 2}" aria-hidden="true"><path d="${PIN_PATH}"/>`
+    + (mode === 'unpinned' ? '<path d="M3 3L21 21" stroke-width="2.5" stroke-linecap="round"/>' : '') + '</svg>';
+  convPinFilter.style.color = mode === 'all' ? '#52525b' : '#fbbf24';
+  convPinFilter.title = mode === 'pinned' ? 'Showing pinned conversations only — click for not pinned'
+    : mode === 'unpinned' ? 'Showing conversations that are not pinned — click for all'
+    : 'Showing all conversations — click for pinned only';
+  convPinFilter.setAttribute('aria-pressed', mode === 'all' ? 'false' : 'true');
+}
+function setSidebarPin(mode) {
+  state.sidebarPin = mode;
+  localStorage.setItem('sidebarPin', mode);
+  renderSidebar();
+}
+convPinFilter.addEventListener('click', () => setSidebarPin(PIN_FILTER_NEXT[state.sidebarPin] || 'all'));
+function sidebarPinMatches(conv) {
+  return state.sidebarPin === 'all' || (state.sidebarPin === 'pinned') === !!conv.pinned;
+}
+
 function sidebarQueryMatches(conv) {
   const q = state.sidebarQuery.trim().toLowerCase();
   return !q || String(conv.title || '').toLowerCase().includes(q);
@@ -607,13 +635,16 @@ function renderSidebar() {
     ? state.conversations
     : state.conversations.filter(c => state.sessionColors[c.id] === state.sidebarFilter);
   const query = state.sidebarQuery.trim();
-  const visible = query ? byColor.filter(sidebarQueryMatches) : byColor;
+  const pinMode = state.sidebarPin;
+  renderPinFilter();
+  const visible = byColor.filter(c => sidebarPinMatches(c) && (!query || sidebarQueryMatches(c)));
 
   sidebar.innerHTML = '';
-  if (!visible.length && (state.sidebarFilter !== 'all' || query)) {
+  if (!visible.length && (state.sidebarFilter !== 'all' || query || pinMode !== 'all')) {
     const empty = document.createElement('div');
     empty.className = 'px-3 py-4 text-xs text-zinc-500';
-    const colorPart = state.sidebarFilter !== 'all' ? `${state.sidebarFilter} ` : '';
+    const pinPart = pinMode === 'pinned' ? 'pinned ' : pinMode === 'unpinned' ? 'unpinned ' : '';
+    const colorPart = pinPart + (state.sidebarFilter !== 'all' ? `${state.sidebarFilter} ` : '');
     empty.textContent = query
       ? `No ${colorPart}conversations with “${query}” in the title. `
       : `No ${colorPart}conversations. `;
@@ -622,6 +653,9 @@ function renderSidebar() {
     if (query) {
       clear.textContent = 'Clear search';
       clear.addEventListener('click', () => { setSidebarQuery(''); convSearchInput.focus(); });
+    } else if (pinMode !== 'all') {
+      clear.textContent = state.sidebarFilter !== 'all' ? 'Show pinned and unpinned' : 'Show all';
+      clear.addEventListener('click', () => setSidebarPin('all'));
     } else {
       clear.textContent = 'Show all';
       clear.addEventListener('click', () => setSidebarFilter('all'));
@@ -2834,6 +2868,9 @@ function applySessionColor(type) {
   if (state.currentConversationId && type) {
     state.sessionColors[state.currentConversationId] = type;
     localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
+    // A new chat is not pinned: don't let it vanish behind "pinned only"
+    const current = state.conversations.find(c => c.id === state.currentConversationId);
+    if (state.sidebarPin === 'pinned' && !current?.pinned) { state.sidebarPin = 'all'; localStorage.setItem('sidebarPin', 'all'); }
     // Don't let a new chat vanish behind an unrelated color filter
     if (state.sidebarFilter !== 'all' && state.sidebarFilter !== type) {
       state.sidebarFilter = type;
