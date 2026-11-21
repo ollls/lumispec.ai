@@ -43,3 +43,23 @@ need to that origin:
 **Wording corrected 2026-11-14.** The README's Safety defaults and the Security note in
 `CLAUDE.md` now say applets run with the app's origin and are not isolated. The last checkbox above
 is for rewriting those lines again once the fix lands.
+
+## First request after an app start re-reads the whole prompt
+
+Added 2026-11-21.
+
+**Seen.** In a freshly started app, the second turn of the first conversation reused nothing from
+llama-server's KV cache: 7,287 of 7,287 prompt tokens were read again (`cacheN: 0` in the Llama
+Dashboard's speed record). The next conversation's turns each re-read 81 to 90 tokens, and the
+same three-turn pattern sent straight to llama-server reuses the cache normally, so the server is
+not the cause.
+
+**Likely cause, not confirmed.** The system prompt differs between the first and the second
+request after a start. Several plugins build their prompt section from a cache and refresh it in
+the background (`cachedResearchLimits()` in the web plugins, the Books and Tab Fetch caches), so
+the first build can use defaults and the second the saved values.
+
+**Cost.** About two seconds, once per app start, on a 7K-token prompt.
+
+- [ ] Diff the system prompt of the first and second request after a start.
+- [ ] If it differs: warm those caches in `loadPlugins()` before the server starts listening.
