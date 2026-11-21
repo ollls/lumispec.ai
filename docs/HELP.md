@@ -114,6 +114,8 @@ Diffs are always shown — even with Autorun enabled — so you can see exactly 
 ### Charts & Dashboards
 With Applets enabled, ask for visualizations. Example: "Create a pie chart of my monthly expenses" or "Build a weather dashboard for my location"
 
+Under every chart or dashboard, **Full screen** shows it alone on the whole screen. It is loaded again, so it fetches fresh data; a small one such as a clock is enlarged to fill the screen. Press Esc or click the ✕ to return to the chat.
+
 ### Checking & Correcting an Answer (Troubleshoot)
 **The AI can read its own earlier output back and correct it — you don't have to run the original prompt again.**
 
