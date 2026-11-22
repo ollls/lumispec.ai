@@ -81,3 +81,25 @@ Only if someone asks for more:
       checkout for Updates without `LLAMA_CPP_DIR`.
 - [ ] Windows: the same through PowerShell (`Get-CimInstance Win32_Process`), and `nvidia-smi`
       for the GPU card. Needs someone who can run it.
+
+## Notes editor for templates
+
+Added 2026-11-22.
+
+**Problem.** A template's notes (the author's instructions to the assistant: which files to build,
+which symbols to fetch, what never to change) can only be created by putting an HTML comment at the
+top of the markup before saving, or by calling `PATCH /api/templates/:id` by hand. The Templates
+menu shows them (☰ with a tooltip, `renderTemplates` area of `src/public/js/app.js`) but cannot
+add or change them, and the only user-facing mention is one line in the README's v1.5.4 summary.
+Of the 10 saved templates one has notes (CHPY), the one written on purpose.
+
+**Fix.** The route already accepts `notes` (an empty string clears them), so this is frontend plus
+docs:
+
+- [ ] Show ☰ on every template row (dimmed when there are no notes) and open a small editor on
+      click: a textarea with the current notes, Save and Cancel, Escape cancels.
+- [ ] Save through `PATCH /api/templates/:id` with `{ notes }` and refresh the row.
+- [ ] Say in the editor what notes are for in one line: instructions the assistant reads with the
+      template and does not copy into the applet.
+- [ ] Describe notes in the user docs (README's Templates section), including the leading-comment
+      convention and `template_save` writing them back.
