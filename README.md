@@ -37,6 +37,10 @@ launch scripts are under [Choosing & running your model](#-choosing--running-you
 
 ---
 
+## 🦁 v1.6.5 — Brave search works again
+
+- **Brave search in Browser Search.** Brave began hiding the address of every result on 2026-11-22 and searches fell back to HTTP search. The extension now reads the addresses in the results page, without contacting the result sites. **Reload the extension** (v0.8.0) at `chrome://extensions`. See [`releases/1.6.5.md`](releases/1.6.5.md).
+
 ## ⛶ v1.6.4 — Applets on the whole screen
 
 - **Full screen for applets.** A button under every chart or dashboard shows it alone on the whole screen, sized for the screen and loaded again with fresh data; a small applet such as a clock is enlarged to fill it. Esc returns to the chat.
@@ -146,7 +150,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.6.4.md`](releases/1.6.4.md) (latest) · [`releases/1.6.3.md`](releases/1.6.3.md) · [`releases/1.6.2.md`](releases/1.6.2.md) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.6.5.md`](releases/1.6.5.md) (latest) · [`releases/1.6.4.md`](releases/1.6.4.md) · [`releases/1.6.3.md`](releases/1.6.3.md) · [`releases/1.6.2.md`](releases/1.6.2.md) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -567,7 +571,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/SERVICE_LIBRARY.md`](docs/SERVICE_LIBRARY.md) | Service library proposal — per-plugin saved data calls, card list, applet endpoint (not started) |
 | [`docs/BOOKS.md`](docs/BOOKS.md) | **Books** — add a folder, file or PDF as a book, open it, chat against it; Book only, sections, limits |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | **Memories** — facts kept across conversations: saving, approval, colors, list size, files |
-| [`releases/1.6.4.md`](releases/1.6.4.md) | v1.6.4 release notes (latest) — Full screen for applets, rename a conversation in the sidebar |
+| [`releases/1.6.5.md`](releases/1.6.5.md) | v1.6.5 release notes (latest) — Brave search works again (Browser Search extension v0.8.0, reload required) |
+| [`releases/1.6.4.md`](releases/1.6.4.md) | v1.6.4 release notes — Full screen for applets, rename a conversation in the sidebar |
 | [`releases/1.6.3.md`](releases/1.6.3.md) | v1.6.3 release notes — pinned / not pinned filter in the sidebar, Llama Dashboard leaves out empty cards |
 | [`releases/1.6.2.md`](releases/1.6.2.md) | v1.6.2 release notes — Llama Dashboard, tokens per second in the top bar |
 | [`releases/1.6.1.md`](releases/1.6.1.md) | v1.6.1 release notes — Memories plugin, slot layouts, route log records tool-call patches |

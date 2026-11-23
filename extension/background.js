@@ -8,14 +8,17 @@
 // requires reloading this extension.
 //
 // Protocol (JSON text frames over one WebSocket):
-//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read'], ua }
-//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId? }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read', 'resolve'], ua }
+//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId?, resolveLinks? }
 //   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms, openTabs?, tab?, reused? }
 //     html is the live DOM minus script/style/noscript/template/svg (the server discards those
 //     anyway, and on Gmail / NYT they were 75-100% of the bytes); htmlChars is the raw size.
 //     text is document.body.innerText — the page as laid out on screen, hidden elements excluded,
 //     one line per visual row — which backs web_fetch's view: "text" (web apps such as mail or
 //     dashboards, whose markup is mostly machinery and hidden labels).
+//     resolveLinks: { selector, limit? } — before the DOM is serialized, find out where each
+//     matching same-site link leads and write it on the link as data-resolved-href (see
+//     resolveLinks() below); the page then carries links: { asked, resolved, ms }.
 //   srv → ext  { type: 'tabs', id }
 //   ext → srv  { type: 'result', id, tabs: [{ id, windowId, active, current, title, url, lastAccessed, discarded }] }
 //   srv → ext  { type: 'read', id, tabId, maxChars? }
@@ -51,6 +54,8 @@ const FETCH_STABLE_MIN_GROWTH = 40;         // chars; smaller changes (clocks, c
 const FETCH_MIN_VISIBLE_SHARE = 0.1;        // below this share of DOM text on screen, the page is still painting
 const FETCH_MAX_CHARS_DEFAULT = 4_000_000;  // applies to the stripped HTML, so only content can hit it
 const FETCH_TEXT_MAX_CHARS = 400_000;       // cap on the rendered innerText sent alongside
+const RESOLVE_LINKS_MAX = 20;                // links resolved per page, whatever the server asks
+const RESOLVE_LINKS_TIMEOUT_MS = 5000;      // per page, all links in parallel (0.14 s measured for 8)
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
@@ -277,15 +282,88 @@ function extractPage(maxChars, textMaxChars) {
 }
 
 /**
+ * Runs INSIDE the loaded page, in the page's own world. Some sites replace a link's address with
+ * a same-site redirect page that works the destination out in script and then navigates to it
+ * (Brave Search since 2026-11-22: every result is /go/v1#<encrypted token>, the address is nowhere
+ * in the DOM). For each link matching `selector` whose href is on the page's own origin, this
+ * loads the href in an off-screen iframe, waits for the frame to start navigating to another
+ * origin, records that address, CANCELS the navigation (the destination site is never contacted)
+ * and writes the address on the link as data-resolved-href. Links that already point off-site are
+ * left alone. Generic: which links to resolve is the server's choice.
+ *
+ * Relies on the frame's `load` event (not timers, which Chrome throttles to 1/s in an inactive
+ * tab) and on the Navigation API (Chrome 102+). Measured on Brave: 8 links in ~140 ms, 24 of 24.
+ */
+function resolveLinks(selector, limit, timeoutMs) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let links = [];
+    try {
+      links = [...document.querySelectorAll(selector)].filter((a) => {
+        try { return new URL(a.href, location.href).origin === location.origin; } catch { return false; }
+      }).slice(0, limit);
+    } catch (e) {
+      return resolve({ asked: 0, resolved: 0, ms: 0, error: `bad selector: ${(e && e.message) || e}` });
+    }
+    if (links.length === 0) return resolve({ asked: 0, resolved: 0, ms: 0 });
+    let pending = links.length;
+    let resolved = 0;
+    const frames = [];
+    let finished = false;
+    const finishAll = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      for (const f of frames) f.remove();
+      resolve({ asked: links.length, resolved, ms: Date.now() - started });
+    };
+    const timer = setTimeout(finishAll, timeoutMs);
+    for (const a of links) {
+      const f = document.createElement('iframe');
+      f.setAttribute('aria-hidden', 'true');
+      f.style.cssText = 'position:fixed;left:-9999px;top:0;width:10px;height:10px;visibility:hidden;border:0';
+      let done = false;
+      const settle = (url) => {
+        if (done) return;
+        done = true;
+        if (url) { a.setAttribute('data-resolved-href', url); resolved++; }
+        f.remove();
+        if (--pending === 0) finishAll();
+      };
+      f.addEventListener('load', () => {
+        try {
+          const w = f.contentWindow;
+          if (!w || w.location.href === 'about:blank') return;
+          if (!w.navigation) return settle(null);
+          w.navigation.addEventListener('navigate', (e) => {
+            let dest;
+            try { dest = new URL(e.destination.url); } catch { return; }
+            if (dest.origin === location.origin || !/^https?:$/.test(dest.protocol)) return;
+            try { e.preventDefault(); } catch {}
+            settle(dest.href);
+          });
+        } catch {
+          settle(null); // the frame left for another origin before it could be watched
+        }
+      });
+      frames.push(f);
+      f.src = a.href;
+      document.body.appendChild(f);
+    }
+  });
+}
+
+/**
  * Open `url` in an inactive tab, wait for load + settleMs, then:
  *   - while the page is thin (under FETCH_MIN_TEXT_CHARS of text) or a bot wall, wait each delay
  *     in retryDelays and probe again (same tab — no second load);
  *   - once it has real text, probe every FETCH_STABLE_PROBE_MS until the visible text stops
  *     growing (or FETCH_STABLE_MAX_MS passes), so progressively rendered apps are read after
  *     their content arrives, not after their chrome;
+ *   - with `resolveLinks`, resolve the redirect links the server named (see resolveLinks());
  *   - then serialize the DOM once. Returns the last read even if never accepted.
  */
-function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SETTLE_MS, retryDelays = FETCH_RETRY_DELAYS_MS } = {}) {
+function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SETTLE_MS, retryDelays = FETCH_RETRY_DELAYS_MS, resolveLinks: resolveSpec = null } = {}) {
   return serialized(async () => {
     if (!/^https?:\/\//i.test(url || '')) throw new Error(`Invalid URL: ${url}`);
     const started = Date.now();
@@ -326,8 +404,24 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
         probe = next;
         if (settled) break;
       }
+      let links = null;
+      if (resolveSpec && !probe.wall) {
+        // Page world: the frames' Navigation API objects are the page's own. A failure here costs
+        // the resolved addresses, never the page.
+        try {
+          const limit = Math.max(1, Math.min(RESOLVE_LINKS_MAX, Number(resolveSpec.limit) || RESOLVE_LINKS_MAX));
+          const [{ result } = {}] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id }, world: 'MAIN', func: resolveLinks,
+            args: [resolveSpec.selector, limit, RESOLVE_LINKS_TIMEOUT_MS],
+          });
+          links = result || { asked: 0, resolved: 0, ms: 0, error: 'link resolver returned nothing' };
+        } catch (e) {
+          links = { asked: 0, resolved: 0, ms: 0, error: e.message };
+        }
+      }
       const page = await run(extractPage, maxChars, FETCH_TEXT_MAX_CHARS);
       page.reads = reads;
+      if (links) page.links = links;
       return { page, ms: Date.now() - started };
     } finally {
       ownTabs.delete(tab.id);
@@ -468,7 +562,7 @@ async function connect() {
     send({
       type: 'hello',
       version: chrome.runtime.getManifest().version,
-      capabilities: ['fetch', 'tabs', 'read'],
+      capabilities: ['fetch', 'tabs', 'read', 'resolve'],
       ua: navigator.userAgent,
     });
   };
@@ -508,6 +602,7 @@ async function handleServerMessage(raw) {
         if (Number.isFinite(msg.maxChars)) opts.maxChars = msg.maxChars;
         if (Number.isFinite(msg.settleMs)) opts.settleMs = msg.settleMs;
         if (Array.isArray(msg.retryDelays)) opts.retryDelays = msg.retryDelays;
+        if (msg.resolveLinks && typeof msg.resolveLinks.selector === 'string' && msg.resolveLinks.selector) opts.resolveLinks = msg.resolveLinks;
         if (Number.isFinite(msg.reuseTabId)) {
           // The server found the address already open in a user tab: read it in place.
           const { page, tab, ms } = await readTab(msg.reuseTabId, opts);

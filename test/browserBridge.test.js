@@ -35,6 +35,7 @@ const connectFakeExtension = (capabilities) => new Promise((resolve, reject) => 
     if (msg.type === 'fetch') {
       if (Number.isFinite(msg.reuseTabId)) return ws.send(JSON.stringify({ type: 'result', id: msg.id, page: PAGE, ms: 5, tab: TABS[0], reused: true }));
       const reply = { type: 'result', id: msg.id, page: PAGE, ms: 7 };
+      if (msg.resolveLinks) reply.page = { ...PAGE, links: { asked: 8, resolved: 8, ms: 140 } };
       if (msg.openTabs === true) reply.openTabs = TABS.filter(t => new URL(t.url).hostname === new URL(msg.url).hostname);
       return ws.send(JSON.stringify(reply));
     }
@@ -101,4 +102,13 @@ after(() => {
   try { ext?.close(); } catch {}
   bridge.close();
   server?.close();
+});
+
+test('resolveLinks travels to the extension and its report comes back on the page', async () => {
+  received = [];
+  const spec = { selector: '.snippet a.l1', limit: 12 };
+  const page = await bridge.fetchPage('https://search.example.com/search?q=x', { resolveLinks: spec });
+  assert.deepEqual(received.find(m => m.type === 'fetch').resolveLinks, spec);
+  assert.deepEqual(page.links, { asked: 8, resolved: 8, ms: 140 });
+  assert.equal(bridge.hasCapability('resolve'), false); // the fake extension here is a 0.7.0
 });

@@ -412,6 +412,12 @@ export const ENGINES = {
       if (/are you a robot|verify you are human|unusual traffic/i.test(t)) return 'Brave Search showed a bot challenge page';
       return null;
     },
+    // Since 2026-11-22 every result link is a cloaked redirect, /go/v1#<encrypted token>: the
+    // address is nowhere in the page, a script on /go/v1 decrypts it and navigates. The extension
+    // (0.8.0+, capability 'resolve') follows these links in hidden frames, cancels the navigation
+    // and writes the destination on the link as data-resolved-href. A few more than RESULT_LIMIT
+    // are resolved because duplicates and brave.com links are dropped below.
+    resolveLinks: { selector: '.snippet[data-type="web"] a.l1', limit: 12 },
     // Live markup (saved 2026-10-25): <div class="snippet" data-type="web"> > .result-body >
     // .result-wrapper > .result-content > a.l1[href] > (.site-name-wrapper, .title.search-snippet-title)
     // and a sibling .generic-snippet > .content whose text starts with a "<n> days ago -" span.
@@ -422,9 +428,9 @@ export const ENGINES = {
       const seen = new Set();
       const blocks = document.querySelectorAll('.snippet[data-type="web"], #results .snippet:not([data-type])');
       for (const el of blocks) {
-        const a = el.querySelector('a.l1[href^="http"], .result-content a[href^="http"], a[href^="http"]:not(.thumbnail)');
+        const a = el.querySelector('a[data-resolved-href], a.l1[href^="http"], .result-content a[href^="http"], a[href^="http"]:not(.thumbnail)');
         if (!a) continue;
-        const url = absolute(a.getAttribute('href'), page.url);
+        const url = absolute(a.getAttribute('data-resolved-href') || a.getAttribute('href'), page.url);
         if (!isHttp(url) || hostIs(url, 'brave.com') || seen.has(url)) continue;
         seen.add(url);
         const titleEl = el.querySelector('.title, .search-snippet-title, .snippet-title');
@@ -548,15 +554,37 @@ async function fetchWithRetry(url, opts) {
   }
 }
 
+/**
+ * Why an engine with redirect links produced no results, when the cause is the link resolution
+ * rather than the selectors: an extension too old to resolve, or a resolver that found the links
+ * and could not follow them. Null when neither applies (then the page is saved for selector repair).
+ */
+export function unresolvedLinksReason(def, page, canResolve) {
+  if (!def.resolveLinks) return null;
+  if (!canResolve) {
+    return `${def.label} hides result addresses behind redirect links, which needs Browser Search extension 0.8.0 or later — reload the extension at chrome://extensions`;
+  }
+  const l = page.links;
+  if (l?.error) return `${def.label}: result links could not be resolved (${l.error})`;
+  if (l && l.asked > 0 && l.resolved === 0) return `${def.label}: none of ${l.asked} result links could be resolved in the browser (the redirect page may have changed)`;
+  return null;
+}
+
 /** Run one engine end to end: load, block check, parse. Throws with a reason on failure. */
 async function searchEngine(id, query) {
   const def = ENGINES[id];
-  const page = await fetchWithRetry(def.url(query), { settleMs: def.settleMs, retryDelays: def.retryDelays });
+  const opts = { settleMs: def.settleMs, retryDelays: def.retryDelays };
+  // Engines whose result links are redirects need the extension to resolve them (0.8.0+).
+  const canResolve = bridge.hasCapability('resolve');
+  if (def.resolveLinks && canResolve) opts.resolveLinks = def.resolveLinks;
+  const page = await fetchWithRetry(def.url(query), opts);
   const blocked = def.block(page) || detectWall(page);
   if (blocked) throw new Error(blocked);
   if (page.wall) throw new Error(`${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")`);
   const results = def.parse(page, RESULT_LIMIT);
   if (results.length === 0) {
+    const why = unresolvedLinksReason(def, page, canResolve);
+    if (why) throw new Error(why);
     const saved = dumpPage(id, page);
     throw new Error(`no results${saved ? ` (page saved to ${saved} for selector repair)` : ''}`);
   }
