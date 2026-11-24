@@ -459,6 +459,12 @@ export const ENGINES = {
       const { document } = parseHTML(page.html);
       return document.querySelector('#b_captcha, form[action*="captcha"]') ? 'Bing showed a CAPTCHA page' : null;
     },
+    // Bing's own "There are no results for …" page: a single li.b_no and no li.b_algo. An answer,
+    // not parser drift — three of these were saved "for selector repair" on 2026-11-24.
+    empty: (page) => {
+      const { document } = parseHTML(page.html);
+      return !!document.querySelector('#b_results > li.b_no') && !document.querySelector('#b_results > li.b_algo');
+    },
     parse: (page, limit) => {
       const { document } = parseHTML(page.html);
       // Bing wraps result links as /ck/a?...&u=a1<base64url(url)>; decode back to the real URL.
@@ -585,6 +591,8 @@ async function searchEngine(id, query) {
   if (results.length === 0) {
     const why = unresolvedLinksReason(def, page, canResolve);
     if (why) throw new Error(why);
+    // The engine itself said it found nothing: no dump, and a reason that says so.
+    if (def.empty?.(page)) throw new Error(`${def.label} found nothing for this query (its own "no results" page, not a blocked or unreadable one)`);
     const saved = dumpPage(id, page);
     throw new Error(`no results${saved ? ` (page saved to ${saved} for selector repair)` : ''}`);
   }
