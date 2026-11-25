@@ -523,10 +523,22 @@ bug in your setup, and it is designed to be cheap:
 - **The fix is one server-side table entry** in `src/tools/plugin-browser.js` (`ENGINES`), picked
   up by `npm run dev`'s watch restart. No extension change, no reload on the user's side.
 
-After pulling a new version, or whenever a search comes back with `fallback: "<engine>: no results"`,
-run one search per engine you use (DuckDuckGo, Brave, Bing, Google) and check that `sources` reads
-`Browser (<engine>, … ms)` with no `fallback` key. DuckDuckGo's HTML endpoint, Google's organic
-results and Bing's result list have been stable for years; Brave changes most often.
+After pulling a new version, before a release, or whenever a search comes back with
+`fallback: "<engine>: no results"`, check all four engines with one command (Chrome with the
+extension must be running; the app need not be):
+
+```bash
+npm run check:engines              # one real query per engine, through the extension
+npm run check:engines -- brave     # only one engine
+npm run check:engines -- --save    # after a parser fix: refresh the saved pages the tests read
+```
+
+Each engine is reported as read correctly, **format changed** (the page loaded and the parser could
+not read it; exit code 1) or **not checked** (CAPTCHA, consent page, no extension; exit code 2).
+`npm test` covers the other half: it runs every parser against a real results page saved in
+`test/fixtures/engines/`, which catches a code change that breaks a parser but cannot see an engine
+changing its page. DuckDuckGo's HTML endpoint, Google's organic results and Bing's result list have
+been stable for years; Brave changes most often.
 
 ### Add E\*TRADE (optional)
 

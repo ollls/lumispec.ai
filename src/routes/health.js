@@ -78,4 +78,20 @@ router.post('/llm', (req, res) => {
   res.json({ backend, label: LLM_BACKENDS[backend].label });
 });
 
+// Live check of the Browser Search engines: one real query per engine through the extension,
+// judged by checkEngine() in plugin-browser.js. POST because it opens hidden tabs in the user's
+// Chrome. Body: { engines?: string[], query?: string, pages?: boolean } — `pages` returns each
+// loaded page (scripts/check-engines.mjs --save refreshes the test fixtures from them).
+router.post('/browser-engines', async (req, res) => {
+  try {
+    const { checkEngines } = await import('../tools/plugin-browser.js');
+    const body = req.body || {};
+    const engines = Array.isArray(body.engines) ? body.engines.filter(e => typeof e === 'string').slice(0, 10) : undefined;
+    const query = typeof body.query === 'string' && body.query.trim() ? body.query.trim().slice(0, 200) : undefined;
+    res.json({ engines: await checkEngines({ engines, query, keepPage: body.pages === true }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -1,0 +1,44 @@
+{
+  "engine": "google",
+  "query": "svelte stores tutorial",
+  "url": "https://www.google.com/search?q=svelte%20stores%20tutorial&hl=en&num=10",
+  "title": "svelte stores tutorial - Google Search",
+  "savedAt": "2026-11-25",
+  "results": [
+    {
+      "title": "Advanced reactivity / Stores • Svelte Tutorial",
+      "url": "https://svelte.dev/tutorial/svelte/stores",
+      "description": "Prior to the introduction of runes in Svelte 5, stores were the idiomatic way to handle reactive state outside components. create your own custom stores"
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://svelte.dev/docs/svelte/stores",
+      "description": "The svelte/store module contains a minimal store implementation which fulfil the store contract. It provides methods for creating stores that you can update ...Read more"
+    },
+    {
+      "title": "Svelte Stores at Scale: A Complete Guide",
+      "url": "https://medium.com/@vasanthank29/managing-svelte-stores-in-large-applications-a-complete-beginner-friendly-guide-eda0755a28ca",
+      "description": "Learn how to manage Svelte stores in large applications with custom stores, derived state, async patterns, and performance tips for scaling ..."
+    },
+    {
+      "title": "A Beginner's Guide to Svelte Stores (Writable, Readable, ...",
+      "url": "https://dev.to/a1guy/state-management-in-svelte-stores-context-and-async-data-5c6f",
+      "description": "Sep 8, 2025 — Step 1: Define our stores · todos is a writable store. Any component can both read ( $todos ) and update it. · completedCount is a derived store ...Read more"
+    },
+    {
+      "title": "A Guide to Svelte Stores",
+      "url": "https://coderpad.io/blog/development/a-guide-to-svelte-stores/",
+      "description": "Feb 23, 2023 — A Svelte store is a JavaScript object that holds data similar to a variable. However, unlike a variable, Svelte stores can be observed, meaning ...Read more"
+    },
+    {
+      "title": "Svelte stores: the curious parts",
+      "url": "https://thoughtspile.github.io/2023/04/22/svelte-stores/",
+      "description": "Apr 22, 2023 — The official svelte tutorial section on custom stores says: as long as an object correctly implements the subscribe method, it's a store.Read more"
+    },
+    {
+      "title": "Svelte Store State Management the Svelte Way | by Kevin",
+      "url": "https://medium.com/codetodeploy/svelte-store-state-management-the-svelte-way-014035605464",
+      "description": "Svelte Store is Svelte's built-in state management tool, rooted in reactive programming. Unlike React's useState or Redux, Stores are standalone ...Read more"
+    }
+  ]
+}

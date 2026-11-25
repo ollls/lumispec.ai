@@ -1,0 +1,49 @@
+{
+  "engine": "brave",
+  "query": "svelte stores tutorial",
+  "url": "https://search.brave.com/search?q=svelte%20stores%20tutorial&source=web",
+  "title": "svelte stores tutorial - Brave Search",
+  "savedAt": "2026-11-25",
+  "results": [
+    {
+      "title": "Advanced reactivity / Stores • Svelte Tutorial",
+      "url": "https://svelte.dev/tutorial/svelte/stores",
+      "description": "To reference the value of the store, we prefix it with a $ symbol. In Counter.svelte, update the text inside the <button> so that it no longer says [object Object]:"
+    },
+    {
+      "title": "Mastering Svelte Custom Stores - DEV Community",
+      "url": "https://dev.to/a1guy/mastering-svelte-custom-stores-5c1g",
+      "description": "The $ shortcut only works inside .svelte components. If you need a store’s value inside plain .js/.ts files, use .subscribe() or get(store) helper patterns instead."
+    },
+    {
+      "title": "Svelte Stores | Writable Readable Derived | Global State | Chapter 10",
+      "url": "https://geekyscript.com/tutorial/svelte-fundamentals/svelte-svelte-stores",
+      "description": "Master Svelte Stores for global state management. Learn writable, readable, and derived stores, auto-subscriptions with $, and build a shopping cart store."
+    },
+    {
+      "title": "Svelte.js 3 Stores & State Management Tutorial | KoderHQ",
+      "url": "https://www.koderhq.com/tutorial/svelte/store-state-management/",
+      "description": "In this Svelte tutorial we learn about larger scale state management and Svelte stores."
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://learn.svelte.dev/tutorial/derived-stores",
+      "description": "Derived value store by synchronizing one or more readable stores and applying an aggregation function over its input values. } from 'svelte/store'; const delayedconst delayed: Readable<number> = derived(alias) derived<Writable<number>, number>(stores: Writable<number>, fn: (values: number, set: (value: number) => void, update: (fn: Updater<number>) => void) => Unsubscriber | void, initial_value?: number | undefined): Readable<number> (+1 overload) import derived"
+    },
+    {
+      "title": "A Beginner’s Guide to Svelte Stores (Writable, Readable, and Derived) - DEV Community",
+      "url": "https://dev.to/a1guy/state-management-in-svelte-stores-context-and-async-data-5c6f",
+      "description": "Since $count is reactive, you can also assign to it directly, just like a rune variable. Svelte turns $count = ... into a store update under the hood."
+    },
+    {
+      "title": "The Unwritten Svelte Stores Guide - DEV Community",
+      "url": "https://dev.to/jdgamble555/the-unwritten-svelte-stores-guide-47la",
+      "description": "If you store this in an outside .js or .ts file, you can import it anywhere to share your state. ... import { get } from 'svelte/store'; import my_store from './store.ts'; ..."
+    },
+    {
+      "title": "A Guide to Svelte Stores | CoderPad",
+      "url": "https://coderpad.io/blog/development/a-guide-to-svelte-stores/",
+      "description": "It detaches and manages it in an entirely different place so components can’t become bloated with unnecessary data. This makes Svelte Stores ideal for managing state in Svelte applications, as we can use them to store application data and allow components to reflect changes in the store."
+    }
+  ]
+}
