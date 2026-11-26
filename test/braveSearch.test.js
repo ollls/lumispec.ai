@@ -66,3 +66,10 @@ test('unresolvedLinksReason names the cause of an empty result', () => {
   assert.equal(unresolvedLinksReason(brave, { links: { asked: 0, resolved: 0, ms: 0 } }, true), null);
   assert.equal(unresolvedLinksReason(ENGINES.duckduckgo, {}, false), null);
 });
+
+test('Brave parser drops a result whose own link is unresolved instead of taking a sitelink', () => {
+  // Real pages carry direct "sitelinks" inside a result block. With the main link still cloaked
+  // the parser used to return the result's title over the first sitelink's address.
+  const withSitelink = page([ROWS[2]]).html.replace('<div class="generic-snippet', '<a href="https://unresolved.example/docs" class="sitelink">Docs</a><div class="generic-snippet');
+  assert.deepEqual(ENGINES.brave.parse({ url: 'https://search.brave.com/search?q=x', html: withSitelink }, 8), []);
+});

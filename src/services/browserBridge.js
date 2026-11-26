@@ -11,8 +11,8 @@
 // rendered HTML. Search-engine URLs and result parsing live in tools/plugin-browser.js.
 //
 // Protocol (JSON text frames):
-//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read', 'resolve'], ua }
-//   srv → ext  { type: 'fetch',  id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId?, resolveLinks? }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read', 'resolve', 'act'], ua }
+//   srv → ext  { type: 'fetch',  id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId?, resolveLinks?, actions? }
 //   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms, openTabs?, tab?, reused? }
 //   srv → ext  { type: 'tabs',   id }                      → { type: 'result', id, tabs: [...] }
 //   srv → ext  { type: 'read',   id, tabId, maxChars? }    → { type: 'result', id, page, tab, ms }
@@ -23,6 +23,10 @@
 // `resolveLinks: { selector, limit? }` (capability 'resolve', 0.8.0+): the extension follows the
 // matching same-site redirect links in hidden frames, cancels each navigation and writes the
 // destination on the link as data-resolved-href; the page carries `links: { asked, resolved, ms }`.
+// `actions: [{ require } | { select, value } | { click }]` (capability 'act', 0.9.0+): steps the
+// extension performs on the page in its own hidden tab before reading it; the page carries
+// `actions: { asked, done, error? }`. The extension refuses them together with reuseTabId — nothing
+// is clicked in a tab the user opened. tools/plugin-amazon.js is the only caller.
 // Liveness uses WebSocket protocol-level ping/pong (browsers answer automatically).
 
 import { WebSocketServer } from 'ws';
@@ -180,7 +184,7 @@ class BrowserBridge {
     });
   }
 
-  /** Whether the connected extension advertised a capability ('fetch' | 'tabs' | 'read' | 'resolve'). */
+  /** Whether the connected extension advertised a capability ('fetch' | 'tabs' | 'read' | 'resolve' | 'act'). */
   hasCapability(name) {
     return this.connected && Array.isArray(this.#hello?.capabilities) && this.#hello.capabilities.includes(name);
   }
@@ -193,11 +197,15 @@ class BrowserBridge {
    *   retryDelays: extra waits while the page is still a bot wall / thin ([] = read once);
    *   openTabs: also report the user's open tabs on the same host (`openTabs` on the result);
    *   reuseTabId: read that user tab in place instead of opening a hidden one (`tab`, `reused` on the result);
-   *   resolveLinks: { selector, limit? } — resolve redirect links before the page is read (`links` on the result).
+   *   resolveLinks: { selector, limit? } — resolve redirect links before the page is read (`links` on the result);
+   *   actions: steps performed on the page before it is read (`actions` on the result; needs capability 'act');
+   *   timeoutMs: wait this long instead of BROWSER_SEARCH_TIMEOUT_MS (a page with actions loads twice).
    * @returns {Promise<{ title: string, url: string, html: string, text?: string, textChars: number, domChars?: number, wall: boolean, wallText?: string, ms: number, openTabs?: object[], tab?: object, reused?: boolean }>}
    */
   async fetchPage(url, opts = {}) {
-    const msg = await this.#request({ type: 'fetch', url, ...opts }, config.browserSearch.timeoutMs);
+    const { timeoutMs, ...rest } = opts;
+    if (rest.actions?.length && !this.hasCapability('act')) throw new Error(this.connected ? 'The connected extension cannot act on pages — reload it at chrome://extensions (0.9.0 or later)' : 'Browser extension not connected');
+    const msg = await this.#request({ type: 'fetch', url, ...rest }, Number.isFinite(timeoutMs) ? timeoutMs : config.browserSearch.timeoutMs);
     if (!msg.page || typeof msg.page.html !== 'string') throw new Error('Extension returned no page content');
     const out = { ...msg.page, ms: msg.ms };
     if (Array.isArray(msg.openTabs)) out.openTabs = msg.openTabs;

@@ -382,6 +382,21 @@ function unregisterPlugin(groupName) {
   console.log(`[tools] Unloaded plugin "${groupName}"`);
 }
 
+/**
+ * A plugin with `sessionOnly: true` is on only until the app restarts: its saved `enabled` is
+ * turned off at every startup (its other settings are kept), so the user switches it on again
+ * each time they want it. Edits `cfg` in place and returns the groups it turned off.
+ */
+export function turnOffSessionOnly(cfg, modules = pluginModules) {
+  const off = [];
+  for (const [group, mod] of Object.entries(modules)) {
+    if (!mod?.plugin?.sessionOnly || !cfg[group] || cfg[group].enabled === false) continue;
+    cfg[group] = { ...cfg[group], enabled: false };
+    off.push(group);
+  }
+  return off;
+}
+
 export async function loadPlugins() {
   const files = await readdir(__dirname);
   const pluginFiles = files.filter(f => f.startsWith('plugin-') && f.endsWith('.js')).sort();
@@ -406,6 +421,13 @@ export async function loadPlugins() {
       if (!pluginModules[s]) console.warn(`[plugins] "${group}" supersedes unknown plugin "${s}"`);
       else if (ALWAYS_ON_GROUPS.has(s)) console.warn(`[plugins] "${group}" cannot supersede always-on plugin "${s}" — ignored`);
     }
+  }
+
+  // Session-only plugins (Amazon Cart) never come back on by themselves after a restart.
+  const sessionOff = turnOffSessionOnly(cfg);
+  if (sessionOff.length) {
+    await writePluginConfig(cfg);
+    console.log(`[plugins] off until enabled again (session-only): ${sessionOff.join(', ')}`);
   }
 
   // Pass 3: compute the closure of enabled groups by cascading dependencies,
@@ -485,6 +507,8 @@ export async function listPluginGroups() {
         label: plugin.label || group.charAt(0).toUpperCase() + group.slice(1),
         description: plugin.description || '',
         enabled: !!toolGroups[group],
+        experimental: !!plugin.experimental,
+        sessionOnly: !!plugin.sessionOnly,
         dependencies: visibleDeps,
         dependents: visibleDependents,
         // Saved on/off state, independent of whether the group is actually registered
@@ -968,6 +992,9 @@ Project directory files (CSVs, data files) are served at \`/files/FILENAME\` —
 IMPORTANT: \`/files/\` is an HTTP URL for reading, NOT a filesystem path. To WRITE files, use the current working directory (e.g. \`open('data.json', 'w')\` in run_python) — they are automatically served at \`/files/data.json\`.
 To display local images from anywhere on the filesystem, use the file proxy: \`/api/file?path=ABSOLUTE_PATH\`
 Example: \`<img src="/api/file?path=/home/ols/Pictures/screenshot.png">\`
+
+## Printing
+The user has a Print button under every answer and under every applet. Asked to print something you already wrote, say that in one line — never rebuild it as an applet, a print button or a file. A markdown file saved in the project directory prints at \`/print.html?file=FILENAME&print=1\`: when you save one for the user, give that address as a markdown link.
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 

@@ -9,7 +9,8 @@
     "css:build": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css",
     "css:watch": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css --watch",
     "build": "npm run css:build",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "check:engines": "node scripts/check-engines.mjs"
   },
   "keywords": [
     "llm",

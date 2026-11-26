@@ -1097,7 +1097,7 @@ function createAppletIframe(applet, { full = false } = {}) {
   const fullStyle = full
     ? 'html,body{overflow-y:auto!important}body{padding:16px;box-sizing:border-box}' + (applet.type === 'svg' ? 'body{text-align:center}' : '')
     : '';
-  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}' + fitStyle + fullStyle + '</style>' + APPLET_DIAG_SCRIPT + fitScript;
+  const iframeReset = '<style>html,body{margin:0;height:auto!important;min-height:0!important;max-height:none!important;overflow-x:auto;overflow-y:hidden}img,svg{max-width:100%;height:auto}@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}' + fitStyle + fullStyle + '</style>' + APPLET_DIAG_SCRIPT + fitScript;
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -1121,7 +1121,9 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   }
 
   const iframe = document.createElement('iframe');
-  iframe.sandbox = 'allow-scripts allow-same-origin';
+  // allow-modals: without it window.print() inside the frame does nothing and reports nothing —
+  // the applet's Print button below, and any print button the model writes, rely on it.
+  iframe.sandbox = 'allow-scripts allow-same-origin allow-modals';
   iframe.srcdoc = html;
   if (full) {
     // Not '.applet-iframe': the resize listener must leave this frame at the screen's height
@@ -1193,10 +1195,20 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   fullBtn.title = 'Show this applet alone on the whole screen. It is loaded again, so it fetches fresh data. Esc returns to the chat.';
   fullBtn.addEventListener('click', () => openAppletFullscreen(applet));
 
+  // Print: the applet as it is on screen now (its own colors kept), nothing of the chat around it
+  const printBtn = document.createElement('button');
+  printBtn.className = 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-xs font-bold px-3 py-1 rounded mt-1 ml-2 transition-colors';
+  printBtn.textContent = 'Print';
+  printBtn.title = 'Print this applet (or save it as PDF) as it looks now, without the chat around it.';
+  printBtn.addEventListener('click', () => {
+    try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch { /* frame not loaded yet */ }
+  });
+
   wrapper.appendChild(iframe);
   wrapper.appendChild(saveBtn);
   wrapper.appendChild(fixBtn);
   wrapper.appendChild(fullBtn);
+  wrapper.appendChild(printBtn);
   return wrapper;
 }
 
@@ -1842,6 +1854,19 @@ function appendMessage(role, text, images, meta = {}) {
     const turn = { text: text || '', toolUses: meta.toolUses, taskRun: meta.taskRun, reasoning: meta.reasoning };
     const row = document.createElement('div');
     row.className = 'flex justify-end mt-1';
+    // Print: this answer alone, rendered again from its markdown as a black-on-white document
+    // (print.js). Applets are left out — each has its own Print button.
+    if (window.Printer && window.Printer.hasPrintableText(text)) {
+      const printBtn = document.createElement('button');
+      printBtn.className = 'opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-200 transition-opacity text-xs leading-none p-1 mr-2';
+      printBtn.textContent = 'Print';
+      printBtn.title = 'Print this answer (or save it as PDF) as a clean document: text, tables and pictures, without the chat around it.';
+      printBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try { window.Printer.printMarkdown(text); } catch (err) { showToast?.(err.message); }
+      });
+      row.appendChild(printBtn);
+    }
     const tsBtn = document.createElement('button');
     tsBtn.className = (window.Troubleshoot.turnFailed(turn) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')
       + ' text-red-400 transition-opacity text-xs leading-none p-1';
@@ -1861,6 +1886,16 @@ function appendMessage(role, text, images, meta = {}) {
   responseArea.scrollTop = responseArea.scrollHeight;
   return bubble;
 }
+
+// A link to the markdown printer (/print.html?file=…) opens in its own tab: followed in place it
+// would replace the app and stop every running turn.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('#response-area a[href]');
+  if (!a || !/^\/print\.html(\?|$)/.test(a.getAttribute('href') || '')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  window.open(a.getAttribute('href'), '_blank', 'noopener');
+}, true);
 
 // ── Streaming ─────────────────────────────────────────
 async function sendMessage(content, images, { sessionInit = false } = {}) {
@@ -4373,6 +4408,12 @@ function renderPluginConfig(plugins) {
     label.className = 'text-sm font-medium truncate';
     label.style.color = p.enabled ? '#e4e4e7' : '#71717a';
     label.textContent = p.label;
+    if (p.experimental) {
+      const exp = document.createElement('span');
+      exp.style.cssText = 'color:#ef4444;font-weight:600;margin-left:8px';
+      exp.textContent = 'Experimental';
+      label.appendChild(exp);
+    }
 
     const desc = document.createElement('span');
     desc.className = 'text-xs';
@@ -4381,6 +4422,13 @@ function renderPluginConfig(plugins) {
 
     info.appendChild(label);
     if (p.description) info.appendChild(desc);
+    if (p.sessionOnly) {
+      const once = document.createElement('span');
+      once.className = 'text-xs';
+      once.style.color = '#71717a';
+      once.textContent = 'Turns off whenever the app restarts — enable it again each time you want it.';
+      info.appendChild(once);
+    }
 
     // Dependency lines
     if (p.dependencies && p.dependencies.length > 0) {

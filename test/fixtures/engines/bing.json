@@ -1,0 +1,49 @@
+{
+  "engine": "bing",
+  "query": "svelte stores tutorial",
+  "url": "https://www.bing.com/search?q=svelte%20stores%20tutorial&setlang=en",
+  "title": "svelte stores tutorial - Search",
+  "savedAt": "2026-11-25",
+  "results": [
+    {
+      "title": "Advanced reactivity / Stores • Svelte Tutorial",
+      "url": "https://svelte.dev/tutorial/svelte/introducing-stores",
+      "description": "Prior to the introduction of runes in Svelte 5, stores were the idiomatic way to handle reactive state outside components. That’s no …Read more"
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://svelte.dev/docs/svelte/stores",
+      "description": "It provides methods for creating stores that you can update from the outside, stores you can only update from the inside, and for …Read more"
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://next.svelte.dev/docs/svelte/stores",
+      "description": "It provides methods for creating stores that you can update from the outside, stores you can only update from the inside, and for …Read more"
+    },
+    {
+      "title": "A Beginner’s Guide to Svelte Stores (Writable, Readable, and Derived)",
+      "url": "https://dev.to/a1guy/state-management-in-svelte-stores-context-and-async-data-5c6f",
+      "description": "Sep 8, 2025 · Stores are the glue that keeps state consistent across your Svelte app. Next up, we’ll look at context — another way to …Read more"
+    },
+    {
+      "title": "Svelte Stores | Writable Readable Derived | Global State | Chapter 10",
+      "url": "https://geekyscript.com/tutorial/svelte-fundamentals/svelte-svelte-stores",
+      "description": "May 18, 2026 · Master Svelte Stores for global state management. Learn writable, readable, and derived stores, auto-subscriptions …Read more"
+    },
+    {
+      "title": "Svelte Tutorial — Reactivity, Stores, Transitions & SvelteKit",
+      "url": "https://geekyscript.com/tutorial/svelte-fundamentals",
+      "description": "Learn Svelte from scratch: components and reactivity, event handling, props, stores for state, lifecycle functions, transitions, slots, …Read more"
+    },
+    {
+      "title": "The Unwritten Svelte Stores Guide - DEV Community",
+      "url": "https://dev.to/jdgamble555/the-unwritten-svelte-stores-guide-47la",
+      "description": "Feb 20, 2022 · Svelte stores are not that difficult to understand. However, when you're first learning and you google \"svelte stores,\" …Read more"
+    },
+    {
+      "title": "Mastering Svelte Stores: The Ultimate Guide to State Management",
+      "url": "https://webdevfundamentals.com/mastering-svelte-stores-the-ultimate-guide-to-state-management/",
+      "description": "Apr 4, 2026 · Whether you are a beginner looking to understand the basics or an intermediate developer wanting to build complex …Read more"
+    }
+  ]
+}

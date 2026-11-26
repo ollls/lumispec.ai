@@ -1,0 +1,49 @@
+{
+  "engine": "duckduckgo",
+  "query": "svelte stores tutorial",
+  "url": "https://html.duckduckgo.com/html/?q=svelte%20stores%20tutorial",
+  "title": "svelte stores tutorial at DuckDuckGo",
+  "savedAt": "2026-11-25",
+  "results": [
+    {
+      "title": "Advanced reactivity / Stores • Svelte Tutorial",
+      "url": "https://svelte.dev/tutorial/svelte/introducing-stores",
+      "description": "Prior to the introduction of runes in Svelte 5, stores were the idiomatic way to handle reactive state outside components. That's no longer the case, but you'll still encounter stores in existing codebases and libraries, so it's worth knowing how to use them. We won't cover how to create your own custom stores — for that, consult the documentation. Let's revisit the example from ..."
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://svelte.dev/docs/svelte/stores",
+      "description": "A store is an object that allows reactive access to a value via a simple store contract. The svelte/store module contains minimal store implementations which fulfil this contract. Any time you have a reference to a store, you can access its value inside a component by prefixing it with the $ character. This causes Svelte to declare the prefixed variable, subscribe to the store at component ..."
+    },
+    {
+      "title": "Stores • Svelte Docs",
+      "url": "https://next.svelte.dev/docs/svelte/stores",
+      "description": "Stores are still a good solution when you have complex asynchronous data streams or it's important to have more manual control over updating values or listening to changes. If you're familiar with RxJs and want to reuse that knowledge, the $ also comes in handy for you. svelte/store The svelte/store module contains a minimal store implementation which fulfil the store contract. It provides ..."
+    },
+    {
+      "title": "Svelte Stores | Writable Readable Derived | Global State | Chapter 10",
+      "url": "https://geekyscript.com/tutorial/svelte-fundamentals/svelte-svelte-stores",
+      "description": "Master Svelte Stores for global state management. Learn writable, readable, and derived stores, auto-subscriptions with $, and build a shopping cart store."
+    },
+    {
+      "title": "A Beginner's Guide to Svelte Stores (Writable, Readable, and Derived)",
+      "url": "https://dev.to/a1guy/state-management-in-svelte-stores-context-and-async-data-5c6f",
+      "description": "The Value Proposition & Svelte vs React & Vue ... 15 more parts... 3 Getting Started with SvelteKit: Setup, Project Structure & First App 4 Svelte Crash Course on Reactivity: How Your UI Updates Automatically 5 Svelte Components Explained: Props & Composition Made Simple 6 Svelte Events & Bindings Tutorial: Master Parent-Child Communication 7 ..."
+    },
+    {
+      "title": "Svelte Tutorial — Reactivity, Stores, Transitions & SvelteKit",
+      "url": "https://geekyscript.com/tutorial/svelte-fundamentals",
+      "description": "Learn Svelte from scratch: components and reactivity, event handling, props, stores for state, lifecycle functions, transitions, slots, and SvelteKit routing and APIs."
+    },
+    {
+      "title": "The Unwritten Svelte Stores Guide - DEV Community",
+      "url": "https://dev.to/jdgamble555/the-unwritten-svelte-stores-guide-47la",
+      "description": "Svelte stores are not that difficult to understand. However, when you're first learning and you google \"svelte stores,\" all you see is a whole bunch of counter examples. I believe they are misunderstood, easier than you think, and need to be explained better. At heart, a svelte store is a way to store data outside of components. The store object returns subscribe, set, and update methods ..."
+    },
+    {
+      "title": "Svelte Tutorial",
+      "url": "https://www.tutorialspoint.com/svelte/index.htm",
+      "description": "Svelte is an open-source Javascript framework designed to build user interfaces, mainly for web applications. Its component-based architecture has a set of reusable components. In this tutorial, we will learn Svelte and its effective utility. Why Svelte? Unlike React or Vue, which do most of their work in the browser, Svelte does this work during the build process when you create your ..."
+    }
+  ]
+}

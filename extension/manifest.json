@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Lumispec Browser Search",
-  "version": "0.8.0",
-  "description": "Loads pages in a hidden tab of this browser and returns their rendered HTML to the Lumispec assistant (web search and fetch).",
+  "version": "0.9.0",
+  "description": "Loads pages in a hidden tab of this browser and returns their rendered HTML to the Lumispec assistant (web search and fetch). Can click a button the server names in such a hidden tab (Amazon Cart), never in a tab you opened.",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

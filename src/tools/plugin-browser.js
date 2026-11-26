@@ -25,6 +25,7 @@ import { parseHTML } from 'linkedom';
 import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
+import { webFetchRedirect } from './plugin-amazon.js';
 import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField, getResearchLimits, cachedResearchLimits, researchLimitLine, researchLimitFields, visibleText, renderedText } from './plugin-web.js';
 export { visibleText } from './plugin-web.js'; // kept for callers/tests that import it from here
 
@@ -336,6 +337,10 @@ const WALL_PATTERNS = [
     'site showed an "enable JavaScript" shell instead of content'],
 ];
 
+// A refusal that names an AI agent / automated client outright. Unlike a CAPTCHA it is not a wall
+// to get around: the fetch stops there, with no HTTP fallback.
+export const AGENT_REFUSAL_RE = /unauthorized AI agent|access by an? (?:AI|automated) agent/i;
+
 // Challenge pages that render inside a cross-origin iframe leave the main document with no text
 // at all, so the phrase list never sees them: Reuters answered the hidden tab with a DataDome
 // CAPTCHA iframe (2026-10-31), textChars 0, and the fetch was reported as "11 chars of content".
@@ -428,7 +433,13 @@ export const ENGINES = {
       const seen = new Set();
       const blocks = document.querySelectorAll('.snippet[data-type="web"], #results .snippet:not([data-type])');
       for (const el of blocks) {
-        const a = el.querySelector('a[data-resolved-href], a.l1[href^="http"], .result-content a[href^="http"], a[href^="http"]:not(.thumbnail)');
+        // The result's own link is a.l1. When it is there but still cloaked (not resolved), the
+        // result is dropped: the next http link in the block is a sitelink, and the result would
+        // carry its own title over another page's address (found on the first real fixture, 2026-11-25).
+        const main = el.querySelector('a.l1');
+        const a = main
+          ? (main.hasAttribute('data-resolved-href') || isHttp(main.getAttribute('href') || '') ? main : null)
+          : el.querySelector('a[data-resolved-href], .result-content a[href^="http"], a[href^="http"]:not(.thumbnail)');
         if (!a) continue;
         const url = absolute(a.getAttribute('data-resolved-href') || a.getAttribute('href'), page.url);
         if (!isHttp(url) || hostIs(url, 'brave.com') || seen.has(url)) continue;
@@ -458,6 +469,12 @@ export const ENGINES = {
       if (/\/turing\//.test(page.url || '')) return 'Bing showed a CAPTCHA page';
       const { document } = parseHTML(page.html);
       return document.querySelector('#b_captcha, form[action*="captcha"]') ? 'Bing showed a CAPTCHA page' : null;
+    },
+    // Bing's own "There are no results for …" page: a single li.b_no and no li.b_algo. An answer,
+    // not parser drift — three of these were saved "for selector repair" on 2026-11-24.
+    empty: (page) => {
+      const { document } = parseHTML(page.html);
+      return !!document.querySelector('#b_results > li.b_no') && !document.querySelector('#b_results > li.b_algo');
     },
     parse: (page, limit) => {
       const { document } = parseHTML(page.html);
@@ -570,14 +587,20 @@ export function unresolvedLinksReason(def, page, canResolve) {
   return null;
 }
 
+/** Load an engine's results page for a query through the extension. */
+async function loadEnginePage(def, query, deps = {}) {
+  const opts = { settleMs: def.settleMs, retryDelays: def.retryDelays };
+  // Engines whose result links are redirects need the extension to resolve them (0.8.0+).
+  const canResolve = deps.canResolve ?? bridge.hasCapability('resolve');
+  if (def.resolveLinks && canResolve) opts.resolveLinks = def.resolveLinks;
+  const page = await (deps.fetchPage || fetchWithRetry)(def.url(query), opts);
+  return { page, canResolve };
+}
+
 /** Run one engine end to end: load, block check, parse. Throws with a reason on failure. */
 async function searchEngine(id, query) {
   const def = ENGINES[id];
-  const opts = { settleMs: def.settleMs, retryDelays: def.retryDelays };
-  // Engines whose result links are redirects need the extension to resolve them (0.8.0+).
-  const canResolve = bridge.hasCapability('resolve');
-  if (def.resolveLinks && canResolve) opts.resolveLinks = def.resolveLinks;
-  const page = await fetchWithRetry(def.url(query), opts);
+  const { page, canResolve } = await loadEnginePage(def, query);
   const blocked = def.block(page) || detectWall(page);
   if (blocked) throw new Error(blocked);
   if (page.wall) throw new Error(`${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")`);
@@ -585,10 +608,100 @@ async function searchEngine(id, query) {
   if (results.length === 0) {
     const why = unresolvedLinksReason(def, page, canResolve);
     if (why) throw new Error(why);
+    // The engine itself said it found nothing: no dump, and a reason that says so.
+    if (def.empty?.(page)) throw new Error(`${def.label} found nothing for this query (its own "no results" page, not a blocked or unreadable one)`);
     const saved = dumpPage(id, page);
     throw new Error(`no results${saved ? ` (page saved to ${saved} for selector repair)` : ''}`);
   }
   return { results, ms: page.ms };
+}
+
+// ── Engine check ────────────────────────────────────────────────────────────────────────────
+// Each parser depends on markup the engine changes without notice (Brave cloaked every result
+// link on 2026-11-22 and the parser returned nothing for a page showing 20 results). The unit
+// tests read saved pages, so they only prove a parser still reads the markup of the day the page
+// was saved. This runs one real query per engine through the extension and judges what the parser
+// made of it: `npm run check:engines` (scripts/check-engines.mjs), POST /api/health/browser-engines.
+
+/** A query every engine answers with a full page of ordinary web results, nothing personal or local. */
+export const ENGINE_CHECK_QUERY = 'svelte stores tutorial';
+export const ENGINE_CHECK_MIN_RESULTS = 5;
+
+/** The engine's own site ("search.brave.com" → "brave.com"); a result pointing there is not a result. */
+export function engineSite(def) {
+  try { return new URL(def.url('x')).hostname.split('.').slice(-2).join('.'); } catch { return ''; }
+}
+
+/**
+ * What is wrong with a parser's output for a query known to have plenty of results. Pure.
+ * @returns {string[]} problems, empty when the output looks like a real result list
+ */
+export function assessEngineResults(def, results, min = ENGINE_CHECK_MIN_RESULTS) {
+  const problems = [];
+  const list = Array.isArray(results) ? results : [];
+  if (list.length < min) problems.push(`${list.length} result${list.length === 1 ? '' : 's'}, expected at least ${min}`);
+  const site = engineSite(def);
+  const count = (fn) => list.filter(fn).length;
+  const badUrl = count(r => !isHttp(r.url || '') || (site && hostIs(r.url, site)));
+  if (badUrl) problems.push(`${badUrl} of ${list.length} without a usable address (not http, or the engine's own site)`);
+  const noTitle = count(r => !(r.title || '').trim());
+  if (noTitle) problems.push(`${noTitle} of ${list.length} without a title`);
+  const noDesc = count(r => !(r.description || '').trim());
+  if (list.length && noDesc * 2 > list.length) problems.push(`${noDesc} of ${list.length} without a description`);
+  if (new Set(list.map(r => r.url)).size < list.length) problems.push('duplicate addresses');
+  return problems;
+}
+
+/**
+ * Run one engine's real results page through its parser and say how it went.
+ * status: 'ok' | 'drift' (the page loaded and the parser could not read it properly — fix the
+ * selectors) | 'blocked' (CAPTCHA / consent / refusal: nothing learned about the format) |
+ * 'empty' (the engine's own "no results" page) | 'unreachable' (no extension, timeout).
+ * @param {{ keepPage?: boolean, dump?: boolean, deps?: { fetchPage?: Function, canResolve?: boolean } }} [opts]
+ */
+export async function checkEngine(id, query = ENGINE_CHECK_QUERY, { keepPage = false, dump = true, deps = {} } = {}) {
+  const def = ENGINES[id];
+  if (!def) return { engine: id, status: 'unreachable', detail: `unknown engine (known: ${Object.keys(ENGINES).join(', ')})` };
+  const row = { engine: id, label: def.label, query, url: def.url(query) };
+  let page, canResolve;
+  try {
+    ({ page, canResolve } = await loadEnginePage(def, query, deps));
+  } catch (err) {
+    return { ...row, status: 'unreachable', detail: err.message };
+  }
+  row.ms = page.ms ?? null;
+  row.htmlChars = (page.html || '').length;
+  if (page.links) row.links = page.links;
+  if (keepPage) row.page = { url: page.url, title: page.title, html: page.html };
+  const blocked = def.block(page) || detectWall(page) || (page.wall ? `${def.label} showed a bot wall ("${(page.wallText || '').slice(0, 80)}")` : null);
+  if (blocked) return { ...row, status: 'blocked', detail: blocked };
+  let results;
+  try {
+    results = def.parse(page, RESULT_LIMIT);
+  } catch (err) {
+    return { ...row, status: 'drift', detail: `parser threw: ${err.message}`, saved: dump ? dumpPage(id, page) : null };
+  }
+  row.results = results;
+  if (results.length === 0 && def.empty?.(page)) {
+    return { ...row, status: 'empty', detail: `${def.label} answered with its own "no results" page` };
+  }
+  const problems = assessEngineResults(def, results);
+  if (problems.length === 0) return { ...row, status: 'ok', detail: `${results.length} results` };
+  const why = unresolvedLinksReason(def, page, canResolve);
+  return { ...row, status: 'drift', detail: why || problems.join('; '), saved: dump ? dumpPage(id, page) : null };
+}
+
+/** Check several engines, one after the other (the extension drives one hidden tab at a time). */
+export async function checkEngines({ engines, query, keepPage, pauseMs = 1500, deps } = {}) {
+  const ids = (Array.isArray(engines) && engines.length ? engines : Object.keys(ENGINES));
+  const offline = deps?.fetchPage ? null : offlineReason();
+  const rows = [];
+  for (const [i, id] of ids.entries()) {
+    if (offline) { rows.push({ engine: id, label: ENGINES[id]?.label, status: 'unreachable', detail: offline }); continue; }
+    if (i > 0 && pauseMs) await new Promise(r => setTimeout(r, pauseMs));
+    rows.push(await checkEngine(id, query || ENGINE_CHECK_QUERY, { keepPage, deps }));
+  }
+  return rows;
 }
 
 async function fallbackSearch(query, reason) {
@@ -720,6 +833,9 @@ export default {
         const wantsTab = tab !== undefined && tab !== null && tab !== '' && tab !== false;
         if (wantsTab) return readUserTab({ spec: tab === true ? (url || 'active') : tab, url, view, context });
         if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
+        // While Amazon Cart is on, Amazon pages go through its paced tool only (docs/AMAZON_CART.md).
+        const amazon = webFetchRedirect(url);
+        if (amazon) return amazon;
         const offline = offlineReason();
         if (offline) return fallbackFetch(url, offline, null, view);
 
@@ -761,6 +877,13 @@ export default {
           if (page.wall) {
             const snippet = (page.wallText || '').slice(0, 80);
             return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${secs}s ("${snippet}")`, page, view);
+          }
+          // A site that names automated access as the reason is not asked again over plain HTTP:
+          // the second request is what such a notice warns about (Amazon, 2026-11-25).
+          if ((page.textChars ?? 0) < 1500 && AGENT_REFUSAL_RE.test(pageText(page))) {
+            const reason = 'the site refused automated access ("unauthorized AI agent")';
+            logToolCall('web_fetch', 'agent_refused', { args: { url }, rawResult: reason });
+            return { url, error: `Not loaded: ${reason}. Not retried over HTTP. Tell the user; do not try to reach this site another way.`, refused: true };
           }
           const walled = detectWall(page);
           if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page, view);

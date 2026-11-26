@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print markdown</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+<script src="/js/print.js?v=1"></script>
+<style>
+  /* The page around the sheet; none of it is printed. */
+  #bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: #27272a; color: #e4e4e7; font: 13px/1.3 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  #bar input[type=text] { flex: 1; min-width: 180px; padding: 6px 8px; border: 1px solid #52525b; border-radius: 4px; background: #18181b; color: inherit; font: inherit; }
+  #bar button, #bar label.btn { padding: 6px 12px; border: 0; border-radius: 4px; background: #3f3f46; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+  #bar button.primary { background: #2563eb; }
+  #bar button:disabled { opacity: .5; cursor: default; }
+  #status { flex-basis: 100%; color: #fbbf24; min-height: 1em; }
+  #paste { display: none; width: 100%; height: 160px; margin-top: 6px; padding: 8px; border: 1px solid #52525b; border-radius: 4px; background: #18181b; color: #e4e4e7; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  #sheet { max-width: 800px; margin: 24px auto; padding: 32px 40px; min-height: 60vh; }
+  @media screen { html { background: #52525b !important; } body { background: transparent !important; } #sheet { background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.4); } }
+  @media print { #bar { display: none; } #sheet { max-width: none; margin: 0; padding: 0; box-shadow: none; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <input type="text" id="name" placeholder="File in the project directory, e.g. notes.md" spellcheck="false">
+  <button id="load">Load</button>
+  <label class="btn">Open a file…<input type="file" id="pick" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden></label>
+  <button id="pasteBtn">Paste text</button>
+  <button id="print" class="primary" disabled>Print</button>
+  <div id="status"></div>
+  <textarea id="paste" placeholder="Paste markdown here"></textarea>
+</div>
+<div id="sheet"></div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var style = document.createElement('style');
+  style.textContent = window.Printer.CSS;
+  document.head.insertBefore(style, document.head.querySelector('style'));
+
+  function show(md, name) {
+    try {
+      $('sheet').innerHTML = window.Printer.renderMarkdown(md);
+    } catch (err) { $('status').textContent = err.message; return false; }
+    document.title = window.Printer.titleOf(md, name || 'Markdown');
+    $('print').disabled = !md.trim();
+    $('status').textContent = md.trim() ? '' : 'Nothing to print.';
+    return !!md.trim();
+  }
+
+  // A file of the project directory, the same ones the app serves at /files/.
+  function loadFile(name, thenPrint) {
+    name = String(name || '').trim().replace(/^\/?files\//, '').replace(/^\/+/, '');
+    if (!name) return;
+    $('status').textContent = 'Loading ' + name + '…';
+    fetch('/files/' + name.split('/').map(encodeURIComponent).join('/'))
+      .then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'No file named "' + name + '" in the project directory.' : 'Could not load "' + name + '" (' + r.status + ').'); return r.text(); })
+      .then(function (md) { if (show(md, name) && thenPrint) setTimeout(function () { window.print(); }, 400); })
+      .catch(function (err) { $('status').textContent = err.message; });
+  }
+
+  $('load').addEventListener('click', function () { loadFile($('name').value); });
+  $('name').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadFile($('name').value); });
+  $('pick').addEventListener('change', function () {
+    var f = this.files[0];
+    if (!f) return;
+    f.text().then(function (md) { $('name').value = ''; show(md, f.name.replace(/\.[^.]+$/, '')); });
+  });
+  $('pasteBtn').addEventListener('click', function () {
+    var box = $('paste');
+    box.style.display = box.style.display === 'block' ? 'none' : 'block';
+    if (box.style.display === 'block') box.focus();
+  });
+  $('paste').addEventListener('input', function () { show(this.value, 'Markdown'); });
+  $('print').addEventListener('click', function () { window.print(); });
+
+  // /print.html?file=notes.md shows the file; &print=1 opens the print dialog as well.
+  var q = new URLSearchParams(location.search);
+  if (q.get('file')) { $('name').value = q.get('file'); loadFile(q.get('file'), q.get('print') === '1'); }
+})();
+</script>
+</body>
+</html>
