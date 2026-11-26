@@ -25,6 +25,7 @@ import { parseHTML } from 'linkedom';
 import config from '../config.js';
 import bridge from '../services/browserBridge.js';
 import { readPluginConfig, logToolCall } from './index.js';
+import { webFetchRedirect } from './plugin-amazon.js';
 import { runWebSearch, runWebFetch, htmlToMarkdown, parseDdgHtml, FETCH_MAX_CHARS, getFetchMaxChars, fetchMaxCharsField, getResearchLimits, cachedResearchLimits, researchLimitLine, researchLimitFields, visibleText, renderedText } from './plugin-web.js';
 export { visibleText } from './plugin-web.js'; // kept for callers/tests that import it from here
 
@@ -335,6 +336,10 @@ const WALL_PATTERNS = [
   [/enable javascript|enable js\b|disable any ad ?blocker/i,
     'site showed an "enable JavaScript" shell instead of content'],
 ];
+
+// A refusal that names an AI agent / automated client outright. Unlike a CAPTCHA it is not a wall
+// to get around: the fetch stops there, with no HTTP fallback.
+export const AGENT_REFUSAL_RE = /unauthorized AI agent|access by an? (?:AI|automated) agent/i;
 
 // Challenge pages that render inside a cross-origin iframe leave the main document with no text
 // at all, so the phrase list never sees them: Reuters answered the hidden tab with a DataDome
@@ -828,6 +833,9 @@ export default {
         const wantsTab = tab !== undefined && tab !== null && tab !== '' && tab !== false;
         if (wantsTab) return readUserTab({ spec: tab === true ? (url || 'active') : tab, url, view, context });
         if (!isHttp(url || '')) return { error: `Invalid URL: ${url}` };
+        // While Amazon Cart is on, Amazon pages go through its paced tool only (docs/AMAZON_CART.md).
+        const amazon = webFetchRedirect(url);
+        if (amazon) return amazon;
         const offline = offlineReason();
         if (offline) return fallbackFetch(url, offline, null, view);
 
@@ -869,6 +877,13 @@ export default {
           if (page.wall) {
             const snippet = (page.wallText || '').slice(0, 80);
             return fallbackFetch(url, `site showed a bot/JS challenge wall that did not clear in ${secs}s ("${snippet}")`, page, view);
+          }
+          // A site that names automated access as the reason is not asked again over plain HTTP:
+          // the second request is what such a notice warns about (Amazon, 2026-11-25).
+          if ((page.textChars ?? 0) < 1500 && AGENT_REFUSAL_RE.test(pageText(page))) {
+            const reason = 'the site refused automated access ("unauthorized AI agent")';
+            logToolCall('web_fetch', 'agent_refused', { args: { url }, rawResult: reason });
+            return { url, error: `Not loaded: ${reason}. Not retried over HTTP. Tell the user; do not try to reach this site another way.`, refused: true };
           }
           const walled = detectWall(page);
           if (walled) return fallbackFetch(url, `${walled} (after ${secs}s)`, page, view);

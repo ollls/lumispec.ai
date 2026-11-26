@@ -8,8 +8,8 @@
 // requires reloading this extension.
 //
 // Protocol (JSON text frames over one WebSocket):
-//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read', 'resolve'], ua }
-//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId?, resolveLinks? }
+//   ext → srv  { type: 'hello', version, capabilities: ['fetch', 'tabs', 'read', 'resolve', 'act'], ua }
+//   srv → ext  { type: 'fetch', id, url, maxChars?, settleMs?, retryDelays?, openTabs?, reuseTabId?, resolveLinks?, actions? }
 //   ext → srv  { type: 'result', id, page: { title, url, html, htmlChars, text, textSource, textChars, domChars, wall, wallText?, truncated, reads }, ms, openTabs?, tab?, reused? }
 //     html is the live DOM minus script/style/noscript/template/svg (the server discards those
 //     anyway, and on Gmail / NYT they were 75-100% of the bytes); htmlChars is the raw size.
@@ -19,6 +19,11 @@
 //     resolveLinks: { selector, limit? } — before the DOM is serialized, find out where each
 //     matching same-site link leads and write it on the link as data-resolved-href (see
 //     resolveLinks() below); the page then carries links: { asked, resolved, ms }.
+//     actions: [{ require: selector } | { select: selector, value } | { click: selector }] — steps
+//     the server wants performed on the page it asked for, in the extension's OWN hidden tab, once
+//     it has rendered (see runActions() below). The page returned is the one on screen afterwards
+//     and carries actions: { asked, done, error? }. Never accepted together with reuseTabId:
+//     nothing is ever clicked or changed in a tab the user opened.
 //   srv → ext  { type: 'tabs', id }
 //   ext → srv  { type: 'result', id, tabs: [{ id, windowId, active, current, title, url, lastAccessed, discarded }] }
 //   srv → ext  { type: 'read', id, tabId, maxChars? }
@@ -56,6 +61,8 @@ const FETCH_MAX_CHARS_DEFAULT = 4_000_000;  // applies to the stripped HTML, so 
 const FETCH_TEXT_MAX_CHARS = 400_000;       // cap on the rendered innerText sent alongside
 const RESOLVE_LINKS_MAX = 20;                // links resolved per page, whatever the server asks
 const RESOLVE_LINKS_TIMEOUT_MS = 5000;      // per page, all links in parallel (0.14 s measured for 8)
+const ACTIONS_MAX = 6;                       // steps per page, whatever the server asks
+const ACTION_EFFECT_MS = 700;               // after the steps: time for a click to start a navigation
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
@@ -354,6 +361,40 @@ function resolveLinks(selector, limit, timeoutMs) {
 }
 
 /**
+ * Runs INSIDE the loaded page. Performs the steps the server listed, in order, and stops at the
+ * first one that cannot be done — a missing element is an error, never a guess:
+ *   { require: selector }        the element must exist
+ *   { select: selector, value }  choose that option of a <select> (it must exist) and fire change
+ *   { click: selector }          click the element (it must exist and not be disabled)
+ * Selectors come from the server's own tables (the model never writes one), and this only ever
+ * runs in a hidden tab this extension opened.
+ */
+function runActions(steps) {
+  const out = { asked: steps.length, done: 0 };
+  try {
+    for (const step of steps) {
+      const selector = step.require || step.select || step.click;
+      const el = typeof selector === 'string' && selector ? document.querySelector(selector) : null;
+      if (!el) { out.error = `step ${out.done + 1}: nothing matches ${selector}`; return out; }
+      if (step.select) {
+        const value = String(step.value);
+        if (el.tagName !== 'SELECT' || ![...el.options].some(o => o.value === value)) { out.error = `step ${out.done + 1}: ${selector} has no option "${value}"`; return out; }
+        el.value = value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (step.click) {
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') { out.error = `step ${out.done + 1}: ${selector} is disabled`; return out; }
+        el.click();
+      }
+      out.done++;
+    }
+    return out;
+  } catch (e) {
+    out.error = `step ${out.done + 1} failed: ${(e && e.message) || e}`;
+    return out;
+  }
+}
+
+/**
  * Open `url` in an inactive tab, wait for load + settleMs, then:
  *   - while the page is thin (under FETCH_MIN_TEXT_CHARS of text) or a bot wall, wait each delay
  *     in retryDelays and probe again (same tab — no second load);
@@ -361,9 +402,11 @@ function resolveLinks(selector, limit, timeoutMs) {
  *     growing (or FETCH_STABLE_MAX_MS passes), so progressively rendered apps are read after
  *     their content arrives, not after their chrome;
  *   - with `resolveLinks`, resolve the redirect links the server named (see resolveLinks());
+ *   - with `actions`, perform the server's steps (see runActions()), then wait for the navigation
+ *     or in-page update a click caused;
  *   - then serialize the DOM once. Returns the last read even if never accepted.
  */
-function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SETTLE_MS, retryDelays = FETCH_RETRY_DELAYS_MS, resolveLinks: resolveSpec = null } = {}) {
+function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SETTLE_MS, retryDelays = FETCH_RETRY_DELAYS_MS, resolveLinks: resolveSpec = null, actions = null } = {}) {
   return serialized(async () => {
     if (!/^https?:\/\//i.test(url || '')) throw new Error(`Invalid URL: ${url}`);
     const started = Date.now();
@@ -419,9 +462,32 @@ function runFetch(url, { maxChars = FETCH_MAX_CHARS_DEFAULT, settleMs = FETCH_SE
           links = { asked: 0, resolved: 0, ms: 0, error: e.message };
         }
       }
+      let acted = null;
+      if (actions && actions.length) {
+        if (probe.wall) {
+          acted = { asked: actions.length, done: 0, error: 'the page is a bot check, nothing was clicked' };
+        } else {
+          try {
+            const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: runActions, args: [actions.slice(0, ACTIONS_MAX)] });
+            acted = result || { asked: actions.length, done: null, error: 'the page left before the steps reported back' };
+          } catch (e) {
+            // A click that navigates at once can take the frame away under the script.
+            acted = { asked: actions.length, done: null, error: `the steps did not report back (${e.message})` };
+          }
+          // A click either navigates (form submit) or updates the page in place. Give it a moment
+          // to start, wait for a navigation to finish, then let the result paint.
+          await sleep(ACTION_EFFECT_MS);
+          try {
+            const now = await chrome.tabs.get(tab.id);
+            if (now.status === 'loading') await waitForTabLoad(tab.id, PAGE_LOAD_TIMEOUT_MS, FETCH_MIN_TEXT_CHARS);
+          } catch { /* read whatever the tab holds */ }
+          await sleep(Math.max(settleMs, 800));
+        }
+      }
       const page = await run(extractPage, maxChars, FETCH_TEXT_MAX_CHARS);
       page.reads = reads;
       if (links) page.links = links;
+      if (acted) page.actions = acted;
       return { page, ms: Date.now() - started };
     } finally {
       ownTabs.delete(tab.id);
@@ -562,7 +628,7 @@ async function connect() {
     send({
       type: 'hello',
       version: chrome.runtime.getManifest().version,
-      capabilities: ['fetch', 'tabs', 'read', 'resolve'],
+      capabilities: ['fetch', 'tabs', 'read', 'resolve', 'act'],
       ua: navigator.userAgent,
     });
   };
@@ -603,6 +669,12 @@ async function handleServerMessage(raw) {
         if (Number.isFinite(msg.settleMs)) opts.settleMs = msg.settleMs;
         if (Array.isArray(msg.retryDelays)) opts.retryDelays = msg.retryDelays;
         if (msg.resolveLinks && typeof msg.resolveLinks.selector === 'string' && msg.resolveLinks.selector) opts.resolveLinks = msg.resolveLinks;
+        const actions = Array.isArray(msg.actions) ? msg.actions.filter(a => a && typeof a === 'object') : [];
+        if (actions.length) {
+          // Steps run only in a hidden tab of our own — never in one the user opened.
+          if (Number.isFinite(msg.reuseTabId)) throw new Error('Actions are never performed in a tab you opened');
+          opts.actions = actions;
+        }
         if (Number.isFinite(msg.reuseTabId)) {
           // The server found the address already open in a user tab: read it in place.
           const { page, tab, ms } = await readTab(msg.reuseTabId, opts);

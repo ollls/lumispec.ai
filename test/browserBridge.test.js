@@ -36,6 +36,7 @@ const connectFakeExtension = (capabilities) => new Promise((resolve, reject) => 
       if (Number.isFinite(msg.reuseTabId)) return ws.send(JSON.stringify({ type: 'result', id: msg.id, page: PAGE, ms: 5, tab: TABS[0], reused: true }));
       const reply = { type: 'result', id: msg.id, page: PAGE, ms: 7 };
       if (msg.resolveLinks) reply.page = { ...PAGE, links: { asked: 8, resolved: 8, ms: 140 } };
+      if (msg.actions) reply.page = { ...PAGE, actions: { asked: msg.actions.length, done: msg.actions.length } };
       if (msg.openTabs === true) reply.openTabs = TABS.filter(t => new URL(t.url).hostname === new URL(msg.url).hostname);
       return ws.send(JSON.stringify(reply));
     }
@@ -111,4 +112,20 @@ test('resolveLinks travels to the extension and its report comes back on the pag
   assert.deepEqual(received.find(m => m.type === 'fetch').resolveLinks, spec);
   assert.deepEqual(page.links, { asked: 8, resolved: 8, ms: 140 });
   assert.equal(bridge.hasCapability('resolve'), false); // the fake extension here is a 0.7.0
+});
+
+test('actions need the act capability, travel to the extension, and their report comes back', async () => {
+  const steps = [{ require: 'form#addToCart #add-to-cart-button' }, { click: 'form#addToCart #add-to-cart-button' }];
+  // the 0.7.0 fake above does not advertise 'act': nothing is sent
+  received = [];
+  await assert.rejects(bridge.fetchPage('https://shop.example.com/dp/X', { actions: steps }), /cannot act on pages/);
+  assert.equal(received.length, 0);
+  ext.close();
+  await new Promise(r => setTimeout(r, 30));
+  ext = await connectFakeExtension(['fetch', 'act']);
+  const page = await bridge.fetchPage('https://shop.example.com/dp/X', { actions: steps, timeoutMs: 45000 });
+  const sent = received.find(m => m.type === 'fetch');
+  assert.deepEqual(sent.actions, steps);
+  assert.equal('timeoutMs' in sent, false); // a server-side wait, not part of the protocol
+  assert.deepEqual(page.actions, { asked: 2, done: 2 });
 });

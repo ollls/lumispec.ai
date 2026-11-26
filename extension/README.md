@@ -18,6 +18,7 @@ Chrome Web Store and nothing is installed system-wide; removing it is one click.
 |---|---|
 | `manifest.json` | Manifest V3. Permissions: `tabs`, `scripting`, `storage`, `alarms`; host access `<all_urls>` (any page the assistant asks for, including search result pages). |
 | `background.js` | Service worker. Keeps a WebSocket to the server; on a `fetch` request opens the URL in an **inactive** tab, waits for it to render (re-reading while the page is still a bot wall or nearly empty), returns the live DOM HTML plus text length and wall hints, closes the tab. One hidden tab at a time. |
+| `background.js` (actions, 0.9.0) | A `fetch` request may carry `actions` — `require` / `select` / `click` steps with selectors chosen by the server. They run only in the hidden tab the extension opened for that request, never in a tab you opened. Used by the Amazon Cart plugin to click **Add to Cart** after you approve the item in Lumispec; see `docs/AMAZON_CART.md`. |
 | `popup.html` / `popup.js` | Toolbar popup: connection state and version, server URL + token, enable toggle, a **Test** box that loads any URL in a hidden tab and reports title, size, and wall status, and **List my tabs** / **Read current tab** for Tab Fetch — all work without the server. |
 
 The search engine (DuckDuckGo, Brave, Bing or Google) is chosen on the Browser Search card
