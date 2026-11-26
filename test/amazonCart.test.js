@@ -421,3 +421,15 @@ test('experimental and session-only: off after every restart, other settings kep
   assert.deepEqual(turnOffSessionOnly(cfg, modules), []);          // already off: nothing to write
   assert.deepEqual(turnOffSessionOnly({}, modules), []);           // never configured: the default (off) stands
 });
+
+test('a refusal stops the calls already waiting their turn, not only later ones', async () => {
+  clearCoolDown(); clearSearchMemory();
+  let loads = 0;
+  const refused = page('<h4>Access restricted</h4><p>Continued access by an unauthorized AI agent violates Amazon\'s Conditions of Use.</p>');
+  const deps = { connected: true, site: SITE, fetchPage: async () => { loads++; await new Promise(r => setTimeout(r, 5)); return refused; } };
+  const out = await Promise.all(['rtx 5090', 'rtx pro 6000', 'rtx 4090'].map(query => runAmazonCart({ action: 'search', query }, {}, deps)));
+  assert.equal(loads, 1);                                   // was 3 on 2026-11-26
+  assert.match(out[0].error, /refused automated access/);
+  assert.deepEqual(out.slice(1).map(o => o.refused), [true, true]);
+  clearCoolDown();
+});

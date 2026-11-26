@@ -457,7 +457,17 @@ export async function runAmazonCart(args = {}, context = {}, deps = {}) {
   const rawFetch = deps.fetchPage || ((url, opts) => bridge.fetchPage(url, opts));
   // Every Amazon page load is paced; tests that bring their own pages are not, unless they bring a pacer.
   const pace = deps.pacer || (deps.fetchPage ? null : pacer);
-  const fetchPage = async (url, opts) => { if (pace) await pace.wait(); return rawFetch(url, opts); };
+  // The pause is checked again right before every load, not only when the call arrives: calls
+  // made in one round are all accepted before the first of them has loaded anything.
+  // 2026-11-26: the first of three searches drew a refusal and the other two, already waiting
+  // their turn, loaded Amazon 6 and 15 seconds into the pause.
+  const stopIfPaused = () => { if (coolDownLeft(now())) throw Object.assign(new Error(refusalMessage(coolDownLeft(now()))), { refused: true }); };
+  const fetchPage = async (url, opts) => {
+    stopIfPaused();
+    if (pace) await pace.wait();
+    stopIfPaused();
+    return rawFetch(url, opts);
+  };
 
   const load = async (url, opts) => {
     const page = await fetchPage(url, opts);
@@ -580,6 +590,7 @@ export async function runAmazonCart(args = {}, context = {}, deps = {}) {
     return { error: `Unknown action "${action}". Use search, product, view or add. There is no remove, checkout or buy action — the user does those on Amazon.` };
   } catch (err) {
     if (err.paced) return { error: err.message, paced: true };
+    if (err.refused) return { error: err.message, refused: true };
     return { error: `Amazon could not be reached through the browser: ${err.message}` };
   }
 }
