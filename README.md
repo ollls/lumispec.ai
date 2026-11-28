@@ -37,6 +37,10 @@ launch scripts are under [Choosing & running your model](#-choosing--running-you
 
 ---
 
+## 🔗 v1.6.5.b — Amazon results you can click
+
+- **Amazon Cart** *(experimental)*: every product title in a search or cart table is a link to its page on Amazon; before, only the item number was shown. Links in an answer open in a new tab instead of replacing the app, and pictures in a table stay thumbnail-sized. A refusal from Amazon now also stops the searches already waiting. See [`releases/1.6.5.b.md`](releases/1.6.5.b.md).
+
 ## 🖨 v1.6.5.a — Print, and an experimental Amazon Cart
 
 - **Print.** A Print button on every answer and under every applet. An answer prints as a clean black-on-white document without the chat around it, and `/print.html?file=NAME` prints a saved markdown file.
@@ -155,7 +159,7 @@ Everything else is as in v1.4.0:
 - 📌 **Pinned conversations** — survive server restarts; long sessions can be LLM-compacted into a structured summary.
 - 🔒 **100% local** — your data never leaves the machine. Optional Claude API backend if you want it.
 
-Full release notes: [`releases/1.6.5.a.md`](releases/1.6.5.a.md) (latest) · [`releases/1.6.5.md`](releases/1.6.5.md) · [`releases/1.6.4.md`](releases/1.6.4.md) · [`releases/1.6.3.md`](releases/1.6.3.md) · [`releases/1.6.2.md`](releases/1.6.2.md) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
+Full release notes: [`releases/1.6.5.b.md`](releases/1.6.5.b.md) (latest) · [`releases/1.6.5.a.md`](releases/1.6.5.a.md) · [`releases/1.6.5.md`](releases/1.6.5.md) · [`releases/1.6.4.md`](releases/1.6.4.md) · [`releases/1.6.3.md`](releases/1.6.3.md) · [`releases/1.6.2.md`](releases/1.6.2.md) · [`releases/1.6.1.md`](releases/1.6.1.md) · [`releases/1.6.0.md`](releases/1.6.0.md) · [`releases/1.5.8.md`](releases/1.5.8.md) · [`releases/1.5.7.md`](releases/1.5.7.md) · [`releases/1.5.6.md`](releases/1.5.6.md) · [`releases/1.5.5.md`](releases/1.5.5.md) · [`releases/1.5.4.md`](releases/1.5.4.md) · [`releases/1.5.3.md`](releases/1.5.3.md) · [`releases/1.5.2.md`](releases/1.5.2.md) · [`releases/1.5.1.md`](releases/1.5.1.md) · [`releases/1.5.0.md`](releases/1.5.0.md) · [`releases/1.4.2.md`](releases/1.4.2.md) · [`releases/1.4.1.md`](releases/1.4.1.md) · [`releases/1.4.0.md`](releases/1.4.0.md) · [`releases/1.3.0.md`](releases/1.3.0.md) · [`releases/1.2.0.md`](releases/1.2.0.md) · [`releases/1.1.0.md`](releases/1.1.0.md) · [`releases/1.0.0.md`](releases/1.0.0.md)
 
 ---
 
@@ -589,7 +593,8 @@ The README is a launchpad. Detailed docs live under [`docs/`](docs/) and are mir
 | [`docs/BOOKS.md`](docs/BOOKS.md) | **Books** — add a folder, file or PDF as a book, open it, chat against it; Book only, sections, limits |
 | [`docs/MEMORY.md`](docs/MEMORY.md) | **Memories** — facts kept across conversations: saving, approval, colors, list size, files |
 | [`docs/AMAZON_CART.md`](docs/AMAZON_CART.md) | **Amazon Cart** *(experimental)* — search, product, cart and add in your own Chrome; approvals, pacing, what it cannot do |
-| [`releases/1.6.5.a.md`](releases/1.6.5.a.md) | v1.6.5.a release notes (latest) — Print for answers, applets and markdown files; experimental Amazon Cart (extension v0.9.0, reload required) |
+| [`releases/1.6.5.b.md`](releases/1.6.5.b.md) | v1.6.5.b release notes (latest) — Amazon Cart: product links, links open in a new tab, thumbnail-sized pictures in tables, a refusal stops waiting searches |
+| [`releases/1.6.5.a.md`](releases/1.6.5.a.md) | v1.6.5.a release notes — Print for answers, applets and markdown files; experimental Amazon Cart (extension v0.9.0, reload required) |
 | [`releases/1.6.5.md`](releases/1.6.5.md) | v1.6.5 release notes — Brave search works again (Browser Search extension v0.8.0, reload required) |
 | [`releases/1.6.4.md`](releases/1.6.4.md) | v1.6.4 release notes — Full screen for applets, rename a conversation in the sidebar |
 | [`releases/1.6.3.md`](releases/1.6.3.md) | v1.6.3 release notes — pinned / not pinned filter in the sidebar, Llama Dashboard leaves out empty cards |
