@@ -89,6 +89,15 @@
   padding: 0.375rem 0.625rem;
   text-align: left;
 }
+/* A picture in a table cell is a thumbnail. Without a fixed bound its size follows whatever width
+   the other columns leave over, so the same 500px product picture came out small beside long
+   titles and full size beside short ones. */
+.markdown-body td img {
+  max-width: 140px;
+  max-height: 140px;
+  width: auto;
+  height: auto;
+}
 .markdown-body th {
   background: #27272a;
   color: #e4e4e7;

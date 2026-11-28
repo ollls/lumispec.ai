@@ -236,7 +236,7 @@ test('product: one page, pictures and features, nothing about the cart', async (
   assert.equal('cartCount' in r.product, false);
   assert.match(r._markdown, /!\[\]\(https:\/\/m\.media-amazon\.com\/images\/I\/61abcDEF\+hL\._SL200_\.jpg\)/);
   const s = await runAmazonCart({ action: 'search', query: 'usb' }, {}, { ...b.deps, fetchPage: async () => page('<div data-component-type="s-search-result" data-asin="B088NRLMPV"><img class="s-image" src="https://m.media-amazon.com/images/I/71x1x2x3x4._AC_UL320_.jpg"><h2>Anker Cable</h2></div>') });
-  assert.match(s._markdown, /\| !\[Anker Cable\]\(https:\/\/m\.media-amazon\.com\/images\/I\/71x1x2x3x4\._SL120_\.jpg\) \| Anker Cable/);
+  assert.match(s._markdown, /\| !\[Anker Cable\]\(https:\/\/m\.media-amazon\.com\/images\/I\/71x1x2x3x4\._SL120_\.jpg\) \| \[Anker Cable\]\(https:\/\/www\.amazon\.com\/dp\/B088NRLMPV\) \|/);
 });
 
 test('web_fetch is turned away from Amazon pages while the plugin is on, and only then', () => {
@@ -420,4 +420,16 @@ test('experimental and session-only: off after every restart, other settings kep
   assert.deepEqual(cfg, { amazon: { enabled: false, site: 'www.amazon.de', minDelaySec: 7 }, books: { enabled: true } });
   assert.deepEqual(turnOffSessionOnly(cfg, modules), []);          // already off: nothing to write
   assert.deepEqual(turnOffSessionOnly({}, modules), []);           // never configured: the default (off) stands
+});
+
+test('a refusal stops the calls already waiting their turn, not only later ones', async () => {
+  clearCoolDown(); clearSearchMemory();
+  let loads = 0;
+  const refused = page('<h4>Access restricted</h4><p>Continued access by an unauthorized AI agent violates Amazon\'s Conditions of Use.</p>');
+  const deps = { connected: true, site: SITE, fetchPage: async () => { loads++; await new Promise(r => setTimeout(r, 5)); return refused; } };
+  const out = await Promise.all(['rtx 5090', 'rtx pro 6000', 'rtx 4090'].map(query => runAmazonCart({ action: 'search', query }, {}, deps)));
+  assert.equal(loads, 1);                                   // was 3 on 2026-11-26
+  assert.match(out[0].error, /refused automated access/);
+  assert.deepEqual(out.slice(1).map(o => o.refused), [true, true]);
+  clearCoolDown();
 });
