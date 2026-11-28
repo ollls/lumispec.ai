@@ -12,7 +12,8 @@ Browser Search on with it). Needs extension 0.9.0 or later: after updating, relo
 ## What you can ask
 
 - "Find a 6 ft USB-C cable on Amazon" → `amazon_cart` `search`: picture, title, price, rating,
-  delivery, ASIN; sponsored results are marked. The pictures show in the tool result itself.
+  delivery, ASIN; sponsored results are marked. The pictures show in the tool result itself, and
+  each title there is a link to the product page on Amazon (it opens in a new tab).
 - "Tell me more about the Anker one" / "show its pictures" → `product`: price, seller,
   availability, rating, feature list and up to six gallery pictures, from one page load.
 - "What is in my Amazon cart?" → `view`: the active cart with quantities and subtotal (Saved for
@@ -65,6 +66,17 @@ model is told to put the picture in the first column of every product table with
 (markdown image, or `<img>` in an applet for a larger view); it is told never to guess a
 picture address from an ASIN and never to download pictures to check them. Nothing extra is loaded
 from Amazon's site for a picture.
+
+Each result and `product` also carries `url`, the product page (`https://<site>/dp/<ASIN>`). The
+plugin's own search and cart tables link every title to it, and the model is told to write titles
+as `[title](url)`. Until 2026-11-27 only the ASIN was shown, which nobody can click.
+
+Both rules are prompt text, not enforced. On 2026-11-27 the model answered "provide amazon links"
+with its own table — a link column, no pictures — although all five searches had returned a
+picture for every product. The plugin's tables under "Used amazon_cart" always have both.
+
+A picture inside a table cell of an answer is shown at most 140 px wide and tall (`.markdown-body
+td img`). Without a bound the 500 px picture took whatever width the other columns left over.
 
 ## Staying within what Amazon tolerates
 

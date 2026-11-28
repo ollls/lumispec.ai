@@ -236,7 +236,7 @@ test('product: one page, pictures and features, nothing about the cart', async (
   assert.equal('cartCount' in r.product, false);
   assert.match(r._markdown, /!\[\]\(https:\/\/m\.media-amazon\.com\/images\/I\/61abcDEF\+hL\._SL200_\.jpg\)/);
   const s = await runAmazonCart({ action: 'search', query: 'usb' }, {}, { ...b.deps, fetchPage: async () => page('<div data-component-type="s-search-result" data-asin="B088NRLMPV"><img class="s-image" src="https://m.media-amazon.com/images/I/71x1x2x3x4._AC_UL320_.jpg"><h2>Anker Cable</h2></div>') });
-  assert.match(s._markdown, /\| !\[Anker Cable\]\(https:\/\/m\.media-amazon\.com\/images\/I\/71x1x2x3x4\._SL120_\.jpg\) \| Anker Cable/);
+  assert.match(s._markdown, /\| !\[Anker Cable\]\(https:\/\/m\.media-amazon\.com\/images\/I\/71x1x2x3x4\._SL120_\.jpg\) \| \[Anker Cable\]\(https:\/\/www\.amazon\.com\/dp\/B088NRLMPV\) \|/);
 });
 
 test('web_fetch is turned away from Amazon pages while the plugin is on, and only then', () => {

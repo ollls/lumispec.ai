@@ -1887,11 +1887,12 @@ function appendMessage(role, text, images, meta = {}) {
   return bubble;
 }
 
-// A link to the markdown printer (/print.html?file=…) opens in its own tab: followed in place it
-// would replace the app and stop every running turn.
+// A link to the markdown printer (/print.html?file=…) or to another site (an Amazon product page, a
+// search result) opens in its own tab: followed in place it would replace the app and stop every
+// running turn.
 document.addEventListener('click', (e) => {
   const a = e.target.closest && e.target.closest('#response-area a[href]');
-  if (!a || !/^\/print\.html(\?|$)/.test(a.getAttribute('href') || '')) return;
+  if (!a || !/^(\/print\.html(\?|$)|https?:\/\/)/i.test(a.getAttribute('href') || '')) return;
   e.preventDefault();
   e.stopPropagation();
   window.open(a.getAttribute('href'), '_blank', 'noopener');
